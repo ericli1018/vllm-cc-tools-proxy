@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.3 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.4 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
 
-## V0.2.3 architecture
+## V0.2.4 architecture
 
 ```text
 Claude Code
@@ -160,7 +160,7 @@ Fixed limits:
 
 ## Streaming progress
 
-Long media work immediately opens Anthropic SSE and continues sending `ping` events. Verified visible phases include:
+Managed streaming requests open Anthropic SSE immediately so the connection remains alive, but the proxy does not create a visible progress text block for every request. Invisible `ping` events continue while work is active. A visible progress block is created only when the request is actually queued or a managed phase remains active beyond the configured visibility delay. Fast managed requests proceed directly to the model result without showing a proxy progress heading or a completion-only message. Verified visible phases include:
 
 ```text
 正在解析 PDF…
@@ -171,7 +171,7 @@ Long media work immediately opens Anthropic SSE and continues sending `ping` eve
 文件與圖片內容已就緒；正在交給模型分析…
 ```
 
-Proxy progress is emitted as a dedicated first text block headed `VLLM-CC-TOOLS-PROXY 進度：`. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy V0.2.2 sentinel-wrapped history is also cleaned for backward compatibility.
+When progress becomes visible, it is emitted as a dedicated first text block headed `VLLM-CC-TOOLS-PROXY 進度：`. The final transition message is appended only when that block already exists; it never creates a progress block by itself. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy V0.2.2 sentinel-wrapped history is also cleaned for backward compatibility.
 
 After PDF/image preprocessing finishes, the managed slot is released and the final base-vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted as Anthropic SSE after the bounded loop completes.
 
@@ -253,7 +253,7 @@ The default visual PDF batch size is four pages.
 
 The suite covers transparent bypass, raw-body preservation, FIFO admission, queue full/timeout/cancellation, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and Anthropic SSE.
 
-## V0.2.3 limits
+## V0.2.4 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and its vLLM tool-call parser/template.

@@ -144,7 +144,7 @@ export class ProgressStream {
   async closeProgress(finalMessage = '') {
     if (this.progressClosed) return;
     this.progressClosed = true;
-    if (finalMessage) await this.update(finalMessage, { force: true });
+    if (finalMessage && this.visible) await this.update(finalMessage);
     await this.#enqueue(async () => {
       if (this.visible) {
         await writeChunk(this.res, event('content_block_delta', {

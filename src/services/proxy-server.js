@@ -142,7 +142,7 @@ export function createProxyServer(config, dependencies = {}) {
         const state = admission.health();
         completed = true;
         return sendJson(res, 200, {
-          status: 'ok', service: 'proxy', version: '0.2.3', revision: config.gitRevision,
+          status: 'ok', service: 'proxy', version: '0.2.4', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
         });

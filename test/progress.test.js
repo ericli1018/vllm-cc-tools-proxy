@@ -88,3 +88,17 @@ test('stripProgressHistory preserves ordinary assistant text', () => {
   assert.deepEqual(stripProgressHistory(messages), messages);
   assert.equal(hasProgressHistory(messages), false);
 });
+
+test('closeProgress does not create a progress block when no progress became visible', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { visibleAfterMs: 60_000, pingIntervalMs: 60_000 });
+  await progress.open();
+  await progress.closeProgress('處理完成；正在回傳模型結果…');
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.equal(progress.visible, false);
+  assert.doesNotMatch(stream, new RegExp(PROGRESS_BLOCK_HEADER));
+  assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
+  assert.doesNotMatch(stream, /event: content_block_start/);
+});

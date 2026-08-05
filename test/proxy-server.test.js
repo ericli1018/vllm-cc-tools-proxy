@@ -20,13 +20,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.3 and admission state', async (t) => {
+test('proxy health endpoint reports V0.2.4 and admission state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.3', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.4', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
   });
@@ -337,4 +337,38 @@ test('client cancellation removes a queued request', async (t) => {
   assert.equal(health.managed.queued, 0);
   releaseSearch();
   await first;
+});
+
+test('quick managed stream does not show a progress block only to announce completion', async (t) => {
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.stream, false);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'quick', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'QUICK_FINAL' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    searxngUrl: 'http://127.0.0.1:9',
+    progressVisibleAfterMs: 60_000,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'answer without searching' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /QUICK_FINAL/);
+  assert.doesNotMatch(stream, /VLLM-CC-TOOLS-PROXY 進度/);
+  assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
 });

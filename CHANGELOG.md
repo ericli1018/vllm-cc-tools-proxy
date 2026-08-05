@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4 - 2026-08-05
+
+- Fixed completion-only progress blocks appearing on fast managed requests.
+- Changed `closeProgress()` so a final transition message is appended only when progress is already visible.
+- Preserved immediate SSE `message_start` and invisible `ping` keepalive events without creating Claude Code-visible text.
+- Preserved visible queue status and long-running media/WebSearch/WebFetch progress.
+- Added unit and end-to-end regression tests proving quick managed requests show only the model result.
+
 ## 0.2.3 - 2026-08-05
 
 - Removed hidden request-scoped `VLLMCCP:v1:*` nonce sentinels from Claude Code-visible SSE.
