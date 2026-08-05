@@ -1,6 +1,7 @@
 import { HttpError } from '../lib/http.js';
 import { fetchJson } from '../lib/media.js';
 import { cropToolError, asCropHttpError, recoverableCropToolError } from './crop-errors.js';
+import { scanControlTags } from '../proxy/protocol-sanitizer.js';
 
 const CROP_TOOL = Object.freeze({
   type: 'function',
@@ -19,7 +20,7 @@ const CROP_TOOL = Object.freeze({
   },
 });
 
-const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with structured Markdown.';
+const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Return Markdown only. Do not emit XML, HTML, reasoning delimiters, tool-call wrappers, function-result wrappers, chat-template tokens, or meta closing tags. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with evidence-focused Markdown.';
 
 function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.toString('base64')}`; }
 
@@ -118,6 +119,7 @@ export async function analyzeVisualAssets(assets, {
   cropImage,
   signal,
   onProgress = () => {},
+  onDiagnostic = () => {},
   maxCropRounds = 2,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
@@ -141,6 +143,11 @@ export async function analyzeVisualAssets(assets, {
     }, { errorCode: 'vision_service_error' });
     const message = responseMessage(payload, provider);
     if (!message) throw new HttpError(502, 'Visual service returned no message.', { code: 'vision_invalid_response', retryable: true });
+    const controlTags = scanControlTags(message.content || '');
+    if (controlTags.length > 0) {
+      const tags = [...new Set(controlTags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))];
+      await onDiagnostic('visual_control_tags_detected', { tagCount: controlTags.length, tags });
+    }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
     if (calls.length === 0 || !toolsEnabled) {

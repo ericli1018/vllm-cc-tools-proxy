@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.7 - 2026-08-05
+
+- Replaced generic unescaped XML-like media wrappers with a non-XML `VCC_PROXY_EVIDENCE` envelope.
+- Added HTML-entity escaping for all PDF-native-text and visual-model source content before it reaches the base vLLM.
+- Added a neutral-evidence invariant that rejects any normalized block still containing active known reasoning, tool-call or ChatML control syntax.
+- Added the idempotent `VCC_PROXY_EVIDENCE_CONTRACT_V1` system contract only to transformed media requests.
+- Added safe sanitation of malformed control tags inside structured assistant thinking history while preserving user-visible text and byte-transparent clean bypass.
+- Added Visual, normalized-source and base-generation tag diagnostics that log tag names/counts only and never rewrite base-model output.
+- Strengthened the Visual worker prompt to prohibit reasoning delimiters, XML/HTML wrappers, function-result tags and chat-template tokens in Markdown evidence.
+- Advanced media cache contracts to `media-v5`, `visual-v4` and `evidence-v1`, invalidating all V0.2.6 normalized media entries.
+- Added regression coverage for `</function_result>`, `</thinking>`, `<tool_call>`, split SSE tags and poisoned PDF/Visual source text.
+
 ## 0.2.6 - 2026-08-05
 
 - Renamed the visible managed progress heading to `目前處理進度：` while retaining cleanup compatibility for V0.2.2–V0.2.5 history.

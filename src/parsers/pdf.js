@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { HttpError } from '../lib/http.js';
-import { boundedText, detectMediaType, xmlAttribute } from '../lib/media.js';
+import { boundedText, detectMediaType } from '../lib/media.js';
 import { runCommand } from '../lib/process.js';
 import { normalizeImage, cropImage as defaultCropImage } from './image.js';
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
@@ -115,10 +115,18 @@ export async function parsePdf(buffer, options) {
 
     const parts = [];
     for (const page of pages) {
-      parts.push(`<page index="${page.page}" native_text_chars="${page.nativeText.length}">\n<native_text>\n${page.nativeText}\n</native_text>\n</page>`);
+      parts.push([
+        `[VCC_PDF_PAGE_BEGIN index=${page.page} native_text_chars=${page.nativeText.length}]`,
+        page.nativeText,
+        '[VCC_PDF_PAGE_END]',
+      ].join('\n'));
     }
     for (const batch of visualBatches) {
-      parts.push(`<visual_batch pages="${batch.pages.join(',')}" crop_count="${batch.cropCount}">\n${batch.markdown}\n</visual_batch>`);
+      parts.push([
+        `[VCC_PDF_VISUAL_BATCH_BEGIN pages=${batch.pages.join(',')} crop_count=${batch.cropCount}]`,
+        batch.markdown,
+        '[VCC_PDF_VISUAL_BATCH_END]',
+      ].join('\n'));
     }
     const bounded = boundedText(parts.join('\n\n'), limits.maxOutputChars);
     if (bounded.truncated) warnings.push('output_char_limit');

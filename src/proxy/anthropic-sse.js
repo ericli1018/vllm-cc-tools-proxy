@@ -1,4 +1,5 @@
 import { formatSseEvent } from './progress.js';
+import { findControlTags } from './protocol-sanitizer.js';
 
 async function emitTextBlock(progress, index, block) {
   await progress.writeRaw(formatSseEvent('content_block_start', {
@@ -106,7 +107,7 @@ function shiftEventIndex(payload, offset) {
   return payload;
 }
 
-export async function pipeAnthropicUpstreamStream(progress, upstream) {
+export async function pipeAnthropicUpstreamStream(progress, upstream, { onDiagnostic = () => {} } = {}) {
   await progress.closeProgress('文件與圖片處理完成；正在串流主模型結果…');
   const offset = progress.visible ? 1 : 0;
   if (!upstream.body) {
@@ -118,6 +119,23 @@ export async function pipeAnthropicUpstreamStream(progress, upstream) {
 
   const decoder = new TextDecoder();
   let buffer = '';
+  let diagnosticTail = '';
+  let diagnosticTagCount = 0;
+  const diagnosticTags = new Set();
+  const diagnosticChannels = new Set();
+  const observeControlTags = (value, channel) => {
+    const current = String(value || '');
+    if (!current) return;
+    const combined = diagnosticTail + current;
+    for (const match of findControlTags(combined)) {
+      const end = match.index + match.raw.length;
+      if (end <= diagnosticTail.length) continue;
+      diagnosticTagCount += 1;
+      diagnosticTags.add(match.name);
+      diagnosticChannels.add(channel);
+    }
+    diagnosticTail = combined.slice(-256);
+  };
   const processBlock = async (block) => {
     if (!block.trim()) return;
     const parsed = parseSseBlock(block);
@@ -125,7 +143,14 @@ export async function pipeAnthropicUpstreamStream(progress, upstream) {
     if (parsed.name === 'message_stop') progress.stopKeepalive();
     let data = parsed.data;
     if (data) {
-      try { data = JSON.stringify(shiftEventIndex(JSON.parse(data), offset)); } catch {}
+      try {
+        const payload = JSON.parse(data);
+        if (payload?.type === 'content_block_delta') {
+          if (payload.delta?.type === 'thinking_delta') observeControlTags(payload.delta.thinking, 'thinking');
+          if (payload.delta?.type === 'text_delta') observeControlTags(payload.delta.text, 'text');
+        }
+        data = JSON.stringify(shiftEventIndex(payload, offset));
+      } catch {}
     }
     await progress.writeRaw(`${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`);
   };
@@ -142,6 +167,13 @@ export async function pipeAnthropicUpstreamStream(progress, upstream) {
   }
   buffer += decoder.decode();
   if (buffer.trim()) await processBlock(buffer);
+  if (diagnosticTagCount > 0) {
+    await onDiagnostic('base_generation_control_tags_detected', {
+      tagCount: diagnosticTagCount,
+      tags: [...diagnosticTags],
+      channels: [...diagnosticChannels],
+    });
+  }
   progress.stopKeepalive();
   await progress.stop();
   progress.res.end();

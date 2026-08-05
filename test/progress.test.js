@@ -33,7 +33,7 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-test('ProgressStream emits the V0.2.6 progress header without a V0.2.2 nonce sentinel', async () => {
+test('ProgressStream emits the V0.2.7 progress header without a V0.2.2 nonce sentinel', async () => {
   assert.equal(PROGRESS_BLOCK_HEADER, '目前處理進度：');
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });

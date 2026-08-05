@@ -9,6 +9,8 @@ import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream }
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
+import { injectEvidenceContract } from '../proxy/evidence-contract.js';
+import { sanitizeProtocolHistory } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
@@ -67,7 +69,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function streamManagedBase(progress, request, config, incomingHeaders, signal) {
+async function streamManagedBase(progress, request, config, incomingHeaders, signal, onDiagnostic = () => {}) {
   const upstream = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal);
   if (!upstream.ok) {
     const text = await upstream.text();
@@ -81,7 +83,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
       code: 'vllm_invalid_stream', retryable: true, details: text.slice(0, 1000),
     });
   }
-  await pipeAnthropicUpstreamStream(progress, upstream);
+  await pipeAnthropicUpstreamStream(progress, upstream, { onDiagnostic });
 }
 
 async function streamTransformedBase(request, res, config, incomingHeaders, signal, path = '/v1/messages') {
@@ -184,7 +186,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.6', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.7', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -214,17 +216,43 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      let historyRewritten = false;
+      let cleanedMessages = original.messages;
+      if (hasProgressHistory(cleanedMessages)) {
+        cleanedMessages = stripProgressHistory(cleanedMessages);
+        historyRewritten = true;
+      }
+      const protocolHistory = sanitizeProtocolHistory(cleanedMessages);
+      if (protocolHistory.changed) {
+        cleanedMessages = protocolHistory.messages;
+        historyRewritten = true;
+        log(config, 'warn', 'protocol_history_sanitized', {
+          requestId,
+          tag_count: protocolHistory.tags.length,
+          tags: [...new Set(protocolHistory.tags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))],
+        });
+      }
+      if (historyRewritten) original = { ...original, messages: cleanedMessages };
+
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
         : classification.managed;
 
       if (!initiallyManaged) {
-        if (hasProgressHistory(original.messages)) {
-          original = { ...original, messages: stripProgressHistory(original.messages) };
-          rawBody = Buffer.from(JSON.stringify(original));
-        }
         releaseIngress(); releaseIngress = null;
+        if (historyRewritten) {
+          log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'history_sanitize', reason: 'malformed_protocol_history' });
+          if (messagesPath === '/v1/messages/count_tokens') {
+            const payload = await callUpstreamJson(original, config, req.headers, abortController.signal, messagesPath);
+            completed = true;
+            return sendJson(res, 200, payload);
+          }
+          if (original.stream === true) await streamTransformedBase(original, res, config, req.headers, abortController.signal);
+          else sendJson(res, 200, await callUpstreamJson(original, config, req.headers, abortController.signal));
+          completed = true;
+          return;
+        }
         log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'plain_anthropic_request' });
         await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
         completed = true;
@@ -232,7 +260,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       validateMessagesRequest(original);
-      let request = { ...original, messages: stripProgressHistory(original.messages) };
+      let request = { ...original, messages: cleanedMessages };
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
       const preloadedCache = new Map();
@@ -245,6 +273,7 @@ export function createProxyServer(config, dependencies = {}) {
           cacheKeyContext: {
             pipelineVersion: config.cache?.pipelineVersion,
             visualPromptVersion: config.cache?.visualPromptVersion,
+            evidenceContractVersion: config.cache?.evidenceContractVersion,
             visionModel: config.vllmVisionModel,
             visionProvider: config.vllmVisionProvider,
             visionApiProtocol: config.vllmVisionApiProtocol,
@@ -274,11 +303,13 @@ export function createProxyServer(config, dependencies = {}) {
         preloadedCache,
         ...(dependencies.mediaAdapterDependencies || {}),
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
+        onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
       };
 
       if (!needsManagedWork) {
         const adapters = createMediaAdapters(config, abortController.signal, () => {}, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
+        request = injectEvidenceContract(request);
         await preparedMedia?.cleanup(); preparedMedia = null;
         rawBody = null;
         original = null;
@@ -336,6 +367,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (hasMedia) {
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
+        request = injectEvidenceContract(request);
         await preparedMedia.cleanup(); preparedMedia = null;
         await onProgress('文件與圖片內容已就緒；正在交給模型分析…', { phase: 'media_ready' });
       }
@@ -361,8 +393,10 @@ export function createProxyServer(config, dependencies = {}) {
         else sendJson(res, 200, result);
       } else {
         releaseManaged(); releaseManaged = null;
-        if (request.stream === true) await streamManagedBase(progress, request, config, req.headers, abortController.signal);
-        else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
+        if (request.stream === true) {
+          await streamManagedBase(progress, request, config, req.headers, abortController.signal,
+            (event, fields) => log(config, 'warn', event, { requestId, ...fields }));
+        } else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
       }
 
       completed = true;

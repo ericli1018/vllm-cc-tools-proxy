@@ -49,12 +49,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.6', async () => {
+test('package version is V0.2.7', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.6');
-  assert.equal(lock.version, '0.2.6');
-  assert.equal(lock.packages[''].version, '0.2.6');
+  assert.equal(packageJson.version, '0.2.7');
+  assert.equal(lock.version, '0.2.7');
+  assert.equal(lock.packages[''].version, '0.2.7');
 });
 
 

@@ -178,3 +178,28 @@ test('unexpected proxy programming errors are not hidden as crop validation fail
     cropImage: async () => { throw new TypeError('programming defect'); },
   }), /programming defect/);
 });
+
+test('visual worker prompt forbids protocol markup and reports control tags without exposing content', async (t) => {
+  let observed;
+  const diagnostics = [];
+  const server = http.createServer(async (req, res) => {
+    observed = await read(req);
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'text </function_result> <tool_call>', tool_calls: [] } }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.match(observed.messages[0].content, /Return Markdown only/i);
+  assert.match(observed.messages[0].content, /Do not emit.*tool-call/i);
+  assert.equal(result.markdown, 'text </function_result> <tool_call>');
+  assert.deepEqual(diagnostics, [{
+    event: 'visual_control_tags_detected',
+    details: { tagCount: 2, tags: ['function_result', 'tool_call'] },
+  }]);
+});

@@ -1,10 +1,12 @@
 import fs from 'node:fs/promises';
 import { HttpError } from '../lib/http.js';
-import { boundedText, decodeBase64Media, detectMediaType, xmlAttribute } from '../lib/media.js';
+import { boundedText, decodeBase64Media, detectMediaType } from '../lib/media.js';
 import { parsePdf as defaultParsePdf } from '../parsers/pdf.js';
 import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage } from '../parsers/image.js';
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
+import { formatDocumentEvidence, formatImageEvidence } from './evidence-contract.js';
+import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
 export function createMediaAdapters(config, signal, onProgress = () => {}, dependencies = {}) {
   const parsePdf = dependencies.parsePdf || defaultParsePdf;
@@ -17,7 +19,17 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const analysisRegistry = dependencies.analysisRegistry || null;
   const preloadedCache = dependencies.preloadedCache || new Map();
   const onCacheEvent = dependencies.onCacheEvent || (() => {});
+  const onDiagnostic = dependencies.onDiagnostic || (() => {});
   const { maxDecodedBytes, maxOutputChars } = config.limits;
+
+  const diagnoseSourceControlTags = (value) => {
+    const controlTags = scanControlTags(value);
+    if (controlTags.length === 0) return;
+    onDiagnostic('evidence_source_control_tags_detected', {
+      tagCount: controlTags.length,
+      tags: [...new Set(controlTags.map(controlTagName))],
+    });
+  };
 
   const readSource = async (source, expectedMediaType) => {
     if (source?.type === 'base64') return decodeBase64Media(source.data, maxDecodedBytes, expectedMediaType);
@@ -35,7 +47,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const analyzeWithAdmission = async (assets, options) => {
     const release = await acquireVision({ signal: options?.signal || signal });
     try {
-      return await analyzeVisualAssets(assets, options);
+      return await analyzeVisualAssets(assets, { ...options, onDiagnostic });
     } finally {
       release();
     }
@@ -91,15 +103,22 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
         const warnings = [...(result.warnings || []), ...(bounded.truncated ? ['proxy_output_char_limit'] : [])];
-        const attributes = [
-          `filename="${xmlAttribute(filename)}"`, 'media_type="application/pdf"',
-          `source_sha256="${xmlAttribute(block.source.media_sha256 || '')}"`,
-          `parser="${xmlAttribute(result.parser || 'unknown')}"`, `pages="${xmlAttribute(result.page_count ?? '')}"`,
-          `processed_pages="${xmlAttribute(result.processed_pages ?? result.page_count ?? '')}"`,
-          `visual_batch_count="${xmlAttribute(result.visual_batch_count ?? 0)}"`,
-          `visual_used="${Boolean(result.visual_used)}"`, `truncated="${Boolean(result.truncated || bounded.truncated)}"`,
-        ].join(' ');
-        const normalizedBlock = { type: 'text', text: `<document ${attributes}>\n${bounded.text}${warnings.length ? `\n<warnings>${warnings.map(xmlAttribute).join(',')}</warnings>` : ''}\n</document>` };
+        diagnoseSourceControlTags(bounded.text);
+        const normalizedBlock = {
+          type: 'text',
+          text: formatDocumentEvidence({
+            filename,
+            sourceSha256: block.source.media_sha256 || '',
+            parser: result.parser || 'unknown',
+            pages: result.page_count ?? null,
+            processedPages: result.processed_pages ?? result.page_count ?? null,
+            visualBatchCount: result.visual_batch_count ?? 0,
+            visualUsed: Boolean(result.visual_used),
+            truncated: Boolean(result.truncated || bounded.truncated),
+            content: bounded.text,
+            warnings,
+          }),
+        };
         return {
           block: normalizedBlock,
           metadata: {
@@ -128,7 +147,22 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
         const warnings = [...(result.warnings || []), ...(bounded.truncated ? ['proxy_output_char_limit'] : [])];
-        const normalizedBlock = { type: 'text', text: `<visual_asset source_id="${asset.sourceId}" source_sha256="${xmlAttribute(block.source.media_sha256 || '')}" media_type="${xmlAttribute(normalized.mediaType)}" width="${normalized.width}" height="${normalized.height}" visual_model="${xmlAttribute(config.vllmVisionModel)}" crop_count="${result.cropCount}" truncated="${bounded.truncated}">\n<analysis>\n${bounded.text}\n</analysis>${warnings.length ? `\n<warnings>${warnings.map(xmlAttribute).join(',')}</warnings>` : ''}\n</visual_asset>` };
+        diagnoseSourceControlTags(bounded.text);
+        const normalizedBlock = {
+          type: 'text',
+          text: formatImageEvidence({
+            sourceId: asset.sourceId,
+            sourceSha256: block.source.media_sha256 || '',
+            mediaType: normalized.mediaType,
+            width: normalized.width,
+            height: normalized.height,
+            visualModel: config.vllmVisionModel,
+            cropCount: result.cropCount,
+            truncated: bounded.truncated,
+            content: bounded.text,
+            warnings,
+          }),
+        };
         return {
           block: normalizedBlock,
           metadata: {

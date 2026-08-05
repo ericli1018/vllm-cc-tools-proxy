@@ -11,6 +11,8 @@ test('parsePdf uses native Poppler text without requiring vision', async () => {
   assert.equal(result.page_count, 1);
   assert.equal(result.visual_used, false);
   assert.match(result.markdown, /Native PDF text page/);
+  assert.match(result.markdown, /\[VCC_PDF_PAGE_BEGIN index=1/);
+  assert.doesNotMatch(result.markdown, /<page|<native_text|<visual_batch/);
 });
 
 test('parsePdf sends scanned pages to visual analysis', async () => {
@@ -22,6 +24,8 @@ test('parsePdf sends scanned pages to visual analysis', async () => {
   });
   assert.equal(calls.length, 1);
   assert.match(result.markdown, /SCAN OCR CONTENT/);
+  assert.match(result.markdown, /\[VCC_PDF_VISUAL_BATCH_BEGIN pages=1/);
+  assert.doesNotMatch(result.markdown, /<page|<native_text|<visual_batch/);
   assert.equal(result.visual_used, true);
 });
 

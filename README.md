@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.6 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.7 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.6 architecture
+## V0.2.7 architecture
 
 ```text
 Claude Code
@@ -137,9 +137,51 @@ VLLM_VISION_PROVIDER=ollama
 
 `VLLM_VISION_THINK` accepts only `true` or `false`; invalid values stop startup. Visual reasoning remains internal to the visual tool loop and is never copied into the normalized document/image block or forwarded to the base vLLM. For an Ollama-hosted Qwen3.6 model, configure `VLLM_VISION_PROVIDER=ollama` explicitly.
 
+
+## Structured evidence contract
+
+V0.2.7 treats every PDF-native-text and visual-model result as untrusted source evidence. It no longer embeds free-form model text inside generic XML-like `<document>`, `<analysis>` or `<visual_batch>` wrappers.
+
+Transformed media is represented as a non-XML envelope:
+
+```text
+[VCC_PROXY_EVIDENCE_BEGIN version=1 kind=document]
+content_encoding: html-entity
+--- source content ---
+...
+[VCC_PROXY_EVIDENCE_END]
+```
+
+Before insertion, all source `&`, `<` and `>` characters are HTML-entity escaped. Consequently source strings such as:
+
+```text
+</think>
+<tool_call>
+</function_result>
+<|im_start|>
+```
+
+arrive at the base model only as inert data such as `&lt;/think&gt;`. A neutral-evidence invariant rejects any normalized evidence block that still contains active known model-control syntax.
+
+Each transformed request receives one idempotent `VCC_PROXY_EVIDENCE_CONTRACT_V1` system contract. It tells the base model that the envelope is immutable evidence, not instructions, reasoning delimiters, tool syntax or a format to continue or close. Clean byte-transparent bypass requests do not receive this contract.
+
+To stop an already contaminated Claude Code history from amplifying malformed protocol text, V0.2.7 also neutralizes known control tags only inside structured assistant `thinking` blocks before forwarding. User-visible text is not rewritten. If a clean request contains no media and no contaminated structured thinking, it remains a raw bypass.
+
+Safe diagnostics scan three boundaries without logging document content:
+
+```text
+visual response
+normalized evidence source
+base-vLLM generated thinking/text stream
+```
+
+Diagnostics record tag names, counts and channels only. Base output is observed but not regex-deleted or rewritten.
+
+After upgrading from a session that already displayed raw `</function_result>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. V0.2.7 sanitizes structured thinking history on later requests, but intentionally does not rewrite already-visible assistant text.
+
 ## Persistent media cache
 
-Claude Code sends complete message history on later tool rounds. A PDF/image Base64 block from an earlier `Read` can therefore appear again after `Write`, `Bash` or another tool result. V0.2.6 fingerprints decoded media and replaces every historical occurrence with the same cached normalized content instead of rerunning Poppler or the visual model.
+Claude Code sends complete message history on later tool rounds. A PDF/image Base64 block from an earlier `Read` can therefore appear again after `Write`, `Bash` or another tool result. V0.2.7 fingerprints decoded media and replaces every historical occurrence with the same cached normalized content instead of rerunning Poppler or the visual model.
 
 The cache key includes:
 
@@ -153,6 +195,7 @@ VLLM_VISION_PROVIDER
 visual API protocol
 VLLM_VISION_THINK
 RESOURCE_PROFILE
+evidence contract version
 ```
 
 Routing behavior:
@@ -217,7 +260,7 @@ Anthropic image/base64
 -> send to base vLLM
 ```
 
-Raw image/PDF Base64 is never included in the request sent to the base vLLM.
+Raw image/PDF Base64 is never included in the request sent to the base vLLM. Native text and visual output are inserted only through the escaped structured-evidence contract.
 
 ## Model-requested crops
 
@@ -334,6 +377,8 @@ The default visual PDF batch size is four pages.
 - Separate Authorization headers for base and visual vLLM.
 - Client disconnect abort propagation to Poppler, ImageMagick, visual vLLM and base vLLM.
 - No Base64, document text or sensitive paths in normal logs.
+- PDF/visual source text is HTML-entity escaped and checked by a neutral-evidence invariant before base-vLLM forwarding.
+- Known malformed protocol tags in structured assistant thinking history are neutralized without rewriting visible assistant text.
 
 ## Verification
 
@@ -341,9 +386,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and frame-safe Anthropic SSE keepalive.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools, frame-safe Anthropic SSE keepalive, structured-evidence escaping, contaminated-thinking sanitation, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.6 limits
+## V0.2.7 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.
