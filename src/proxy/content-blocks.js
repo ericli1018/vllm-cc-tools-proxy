@@ -5,15 +5,22 @@ function isBase64Source(block, expectedType) {
     && typeof block.source.data === 'string';
 }
 
+function isProxyFileSource(block, expectedType) {
+  return block?.type === expectedType
+    && block?.source?.type === 'proxy_file'
+    && typeof block.source.media_type === 'string'
+    && typeof block.source.path === 'string';
+}
+
 async function adaptBlock(block, adapters, context) {
   if (!block || typeof block !== 'object') return block;
 
-  if (isBase64Source(block, 'document') && block.source.media_type === 'application/pdf') {
+  if ((isBase64Source(block, 'document') || isProxyFileSource(block, 'document')) && block.source.media_type === 'application/pdf') {
     if (typeof adapters.adaptDocument !== 'function') return structuredClone(block);
     return adapters.adaptDocument(structuredClone(block), context);
   }
 
-  if (isBase64Source(block, 'image') && block.source.media_type.startsWith('image/')) {
+  if ((isBase64Source(block, 'image') || isProxyFileSource(block, 'image')) && block.source.media_type.startsWith('image/')) {
     if (typeof adapters.adaptImage !== 'function') return structuredClone(block);
     return adapters.adaptImage(structuredClone(block), context);
   }

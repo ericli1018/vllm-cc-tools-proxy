@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a Claude Code compatibility proxy for local vLLM. V0.2 converts unsupported Anthropic PDF/image Base64 blocks into bounded text before the request reaches the main model, while an optional visual vLLM performs OCR and visual interpretation.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.2 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
 
-## V0.2 architecture
+## V0.2.2 architecture
 
 ```text
 Claude Code
@@ -13,6 +13,21 @@ Claude Code
        ├─ SearXNG / awesome-web-fetch: managed WebSearch and WebFetch
        └─ base vLLM: final reasoning and Claude Code tool calling
 ```
+
+Routing is intentionally asymmetric:
+
+```text
+HEAD / and GET /health
+  -> handled locally
+
+PDF, image, WebSearch or WebFetch Messages requests
+  -> bounded managed workflow
+
+all other methods and endpoints
+  -> transparent bypass to VLLM_BASE_URL
+```
+
+Transparent bypass preserves the original method, path, query string, request bytes, response status, response headers and streaming body. Ordinary Claude Code native tools therefore remain native vLLM streams and do not enter the proxy queue.
 
 The deployment contains one official `node:22-bookworm-slim` service and does not use `bootstrap.sh` or a Dockerfile. The inline Compose command uses the fixed repository:
 
@@ -158,6 +173,53 @@ Long media work immediately opens Anthropic SSE and continues sending `ping` eve
 
 Proxy progress uses request-scoped markers and is stripped from subsequent conversation history before reaching vLLM.
 
+After PDF/image preprocessing finishes, the managed slot is released and the final base-vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted as Anthropic SSE after the bounded loop completes.
+
+## Concurrency and queue
+
+Only managed workflows enter the proxy queue. Plain text, Claude Code native tools and arbitrary bypass endpoints are not queued by the proxy and remain subject to the base vLLM scheduler.
+
+Default configuration:
+
+```env
+CONCURRENCY_PROFILE=default
+```
+
+Profiles:
+
+| Profile | Managed active | Managed waiting | Queue timeout | Vision active |
+|---|---:|---:|---:|---:|
+| `small` | 1 | 4 | 120 s | 1 |
+| `default` | 2 | 12 | 120 s | 1 |
+| `large` | 4 | 32 | 180 s | 2 |
+
+Advanced overrides are optional:
+
+```env
+MANAGED_MAX_CONCURRENCY=
+MANAGED_MAX_QUEUE=
+MANAGED_QUEUE_TIMEOUT_MS=
+VISION_MAX_CONCURRENCY=
+```
+
+Queue behavior:
+
+- FIFO admission with no priority insertion.
+- Full queue returns `429 proxy_queue_full` and `Retry-After: 10`.
+- Expired wait returns `503 proxy_queue_timeout` and `Retry-After: 10`.
+- Streaming callers receive SSE pings and visible queue-position updates.
+- Client disconnect removes a waiting job or aborts active Poppler, ImageMagick, visual vLLM, WebSearch/WebFetch and base-vLLM work.
+- Media is decoded into a request-scoped private temporary directory before queueing; Base64 is not retained by queued jobs.
+
+The health endpoint exposes only aggregate counters:
+
+```json
+{
+  "managed": { "active": 1, "limit": 2, "queued": 3, "queue_limit": 12 },
+  "vision": { "active": 1, "limit": 1 }
+}
+```
+
 ## Managed web tools
 
 - `WebSearch` and `web_search` call SearXNG.
@@ -189,10 +251,11 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and Anthropic SSE.
+The suite covers transparent bypass, raw-body preservation, FIFO admission, queue full/timeout/cancellation, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and Anthropic SSE.
 
-## V0.2 limits
+## V0.2.2 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and its vLLM tool-call parser/template.
+- Queue and semaphore state are process-local; multiple proxy replicas do not share admission state.
 - No persistent document handles, request coalescing or distributed cache.

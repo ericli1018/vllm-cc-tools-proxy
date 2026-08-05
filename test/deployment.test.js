@@ -32,4 +32,22 @@ test('ENV example preserves base and vision vLLM variables', () => {
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
     assert.doesNotMatch(envExample, new RegExp(`^${removed}=`, 'm'));
   }
+  assert.match(envExample, /^CONCURRENCY_PROFILE=default$/m);
+});
+
+test('Compose exposes the simple concurrency profile without adding queue services', () => {
+  assert.match(compose, /CONCURRENCY_PROFILE:\s*\$\{CONCURRENCY_PROFILE:-default\}/);
+  assert.match(compose, /MANAGED_MAX_CONCURRENCY:\s*\$\{MANAGED_MAX_CONCURRENCY:-\}/);
+  assert.match(compose, /MANAGED_MAX_QUEUE:\s*\$\{MANAGED_MAX_QUEUE:-\}/);
+  assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
+  assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
+  assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
+});
+
+test('package version is V0.2.2', async () => {
+  const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
+  assert.equal(packageJson.version, '0.2.2');
+  assert.equal(lock.version, '0.2.2');
+  assert.equal(lock.packages[''].version, '0.2.2');
 });

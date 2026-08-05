@@ -1,12 +1,15 @@
 import http from 'node:http';
-import { Readable } from 'node:stream';
-import { HttpError, readJsonBody, sendError, sendJson } from '../lib/http.js';
-import { countAdaptableMedia, adaptMessages } from '../proxy/content-blocks.js';
+import { HttpError, readBody, sendError, sendJson } from '../lib/http.js';
+import { adaptMessages } from '../proxy/content-blocks.js';
 import { stripProgressHistory, ProgressStream } from '../proxy/progress.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
-import { executeManagedTool, isManagedToolName } from '../proxy/web-tools.js';
+import { executeManagedTool } from '../proxy/web-tools.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
-import { emitFinalAnthropicResponse, emitSseError } from '../proxy/anthropic-sse.js';
+import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream } from '../proxy/anthropic-sse.js';
+import { classifyMessagesRequest } from '../proxy/managed-detector.js';
+import { forwardTransparent } from '../proxy/bypass.js';
+import { prepareMediaHandles } from '../proxy/media-preflight.js';
+import { AdmissionController } from '../concurrency/admission-controller.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -31,38 +34,10 @@ function upstreamHeaders(incomingHeaders, config) {
   return headers;
 }
 
-async function callUpstreamJson(request, config, incomingHeaders, signal, path = '/v1/messages') {
+async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages') {
   let response;
   try {
     response = await fetch(upstreamEndpoint(config.vllmBaseUrl, path), {
-      method: 'POST',
-      headers: upstreamHeaders(incomingHeaders, config),
-      body: JSON.stringify({ ...request, stream: false }),
-      signal,
-    });
-  } catch (error) {
-    if (error?.name === 'AbortError') throw error;
-    throw new HttpError(502, 'vLLM upstream is unavailable.', { code: 'vllm_unavailable', retryable: true });
-  }
-  const text = await response.text();
-  let payload;
-  try { payload = text ? JSON.parse(text) : {}; } catch {
-    throw new HttpError(502, 'vLLM returned invalid JSON.', { code: 'vllm_invalid_response', retryable: true });
-  }
-  if (!response.ok) {
-    throw new HttpError(response.status >= 500 ? 502 : response.status, payload?.error?.message || 'vLLM rejected the request.', {
-      code: payload?.error?.type || 'vllm_request_failed',
-      retryable: response.status >= 500,
-      details: payload?.error,
-    });
-  }
-  return payload;
-}
-
-async function passthroughStream(res, request, config, incomingHeaders, signal) {
-  let upstream;
-  try {
-    upstream = await fetch(upstreamEndpoint(config.vllmBaseUrl, '/v1/messages'), {
       method: 'POST',
       headers: upstreamHeaders(incomingHeaders, config),
       body: JSON.stringify(request),
@@ -72,30 +47,44 @@ async function passthroughStream(res, request, config, incomingHeaders, signal) 
     if (error?.name === 'AbortError') throw error;
     throw new HttpError(502, 'vLLM upstream is unavailable.', { code: 'vllm_unavailable', retryable: true });
   }
+  return response;
+}
+
+async function callUpstreamJson(request, config, incomingHeaders, signal, path = '/v1/messages') {
+  const response = await fetchUpstream({ ...request, stream: false }, config, incomingHeaders, signal, path);
+  const text = await response.text();
+  let payload;
+  try { payload = text ? JSON.parse(text) : {}; } catch {
+    throw new HttpError(502, 'vLLM returned invalid JSON.', { code: 'vllm_invalid_response', retryable: true });
+  }
+  if (!response.ok) {
+    throw new HttpError(response.status >= 500 ? 502 : response.status, payload?.error?.message || 'vLLM rejected the request.', {
+      code: payload?.error?.type || 'vllm_request_failed', retryable: response.status >= 500, details: payload?.error,
+    });
+  }
+  return payload;
+}
+
+async function streamManagedBase(progress, request, config, incomingHeaders, signal) {
+  const upstream = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal);
   if (!upstream.ok) {
     const text = await upstream.text();
     throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, text || 'vLLM rejected the request.', {
       code: 'vllm_request_failed', retryable: upstream.status >= 500,
     });
   }
-  res.writeHead(upstream.status, {
-    'content-type': upstream.headers.get('content-type') || 'text/event-stream; charset=utf-8',
-    'cache-control': 'no-cache, no-store',
-    connection: 'keep-alive',
-    'x-accel-buffering': 'no',
-  });
-  if (!upstream.body) return res.end();
-  await new Promise((resolve, reject) => {
-    const source = Readable.fromWeb(upstream.body);
-    source.on('error', reject);
-    res.on('error', reject);
-    res.on('finish', resolve);
-    source.pipe(res);
-  });
+  if (!(upstream.headers.get('content-type') || '').toLowerCase().includes('text/event-stream')) {
+    const text = await upstream.text();
+    throw new HttpError(502, 'vLLM did not return an Anthropic SSE stream.', {
+      code: 'vllm_invalid_stream', retryable: true, details: text.slice(0, 1000),
+    });
+  }
+  await pipeAnthropicUpstreamStream(progress, upstream);
 }
 
-function hasManagedDefinitions(request) {
-  return Array.isArray(request.tools) && request.tools.some((tool) => isManagedToolName(tool?.name));
+function parseJson(rawBody) {
+  if (!rawBody.length) return null;
+  try { return JSON.parse(rawBody.toString('utf8')); } catch { return null; }
 }
 
 function validateMessagesRequest(request) {
@@ -104,61 +93,113 @@ function validateMessagesRequest(request) {
   }
 }
 
+function hasProgressMarker(messages) {
+  try { return JSON.stringify(messages).includes('\u2063VLLMCCP:v1:'); } catch { return false; }
+}
+
+function canonicalMessagesPath(pathname) {
+  if (pathname === '/v1/messages' || pathname === '/v1/messages/') return '/v1/messages';
+  if (pathname === '/v1/messages/count_tokens' || pathname === '/v1/messages/count_tokens/') return '/v1/messages/count_tokens';
+  return '';
+}
+
 function log(config, level, event, fields = {}) {
   const ranks = { debug: 10, info: 20, warn: 30, error: 40 };
   if ((ranks[level] || 20) < (ranks[config.logLevel] || 20)) return;
-  const payload = { timestamp: new Date().toISOString(), level, event, ...fields };
-  process.stderr.write(`${JSON.stringify(payload)}\n`);
+  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), level, event, ...fields })}\n`);
 }
 
-export function createProxyServer(config) {
+function defaultConcurrency(config) {
+  return config.concurrency || { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 };
+}
+
+export function createProxyServer(config, dependencies = {}) {
+  const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
+
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
     const abortController = new AbortController();
     let progress = null;
     let completed = false;
+    let releaseManaged = null;
+    let releaseIngress = null;
+    let preparedMedia = null;
+    const url = new URL(req.url || '/', 'http://localhost');
+
     res.on('close', () => {
       if (!completed && !abortController.signal.aborted) {
-        abortController.abort(new Error('client disconnected'));
-        log(config, 'info', 'client_disconnect_detected', { requestId });
+        abortController.abort(new DOMException('Client disconnected.', 'AbortError'));
+        log(config, 'info', 'client_disconnect_detected', { requestId, method: req.method, path: url.pathname });
       }
     });
 
     try {
-      const url = new URL(req.url || '/', 'http://localhost');
+      if (req.method === 'HEAD' && url.pathname === '/') {
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        completed = true;
+        log(config, 'debug', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'local', reason: 'startup_probe' });
+        return;
+      }
+
       if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
+        const state = admission.health();
         completed = true;
-        return sendJson(res, 200, { status: 'ok', service: 'proxy', version: '0.2.1', revision: config.gitRevision });
-      }
-      if (req.method !== 'POST' || !['/v1/messages', '/v1/messages/count_tokens'].includes(url.pathname)) {
-        throw new HttpError(404, 'Endpoint not found.', { code: 'not_found' });
-      }
-
-      const original = await readJsonBody(req, config.limits.maxRequestBytes);
-      validateMessagesRequest(original);
-      const request = { ...original, messages: stripProgressHistory(original.messages) };
-      const mediaCount = countAdaptableMedia(request.messages);
-      const hasMedia = mediaCount.documents + mediaCount.images > 0;
-      const managed = hasManagedDefinitions(request);
-
-      if (url.pathname === '/v1/messages/count_tokens') {
-        const adapters = createMediaAdapters(config, abortController.signal);
-        request.messages = await adaptMessages(request.messages, adapters);
-        const payload = await callUpstreamJson(request, config, req.headers, abortController.signal, url.pathname);
-        completed = true;
-        return sendJson(res, 200, payload);
+        return sendJson(res, 200, {
+          status: 'ok', service: 'proxy', version: '0.2.2', revision: config.gitRevision,
+          managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
+          vision: { active: state.vision.active, limit: state.vision.limit },
+        });
       }
 
-      if (request.stream === true && !hasMedia && !managed) {
-        await passthroughStream(res, request, config, req.headers, abortController.signal);
+      const messagesPath = req.method === 'POST' ? canonicalMessagesPath(url.pathname) : '';
+      const isMessagesPath = Boolean(messagesPath);
+      if (!isMessagesPath) {
+        releaseIngress = await admission.acquireIngress({ signal: abortController.signal });
+        const rawBody = await readBody(req, config.limits.maxRequestBytes);
+        releaseIngress(); releaseIngress = null;
+        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'unmanaged_endpoint' });
+        await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
         completed = true;
         return;
       }
 
-      const onProgress = async (message, details = {}) => {
-        log(config, 'info', 'managed_task_progress', { requestId, message, ...details });
-        await progress?.update(message);
-      };
+      releaseIngress = await admission.acquireIngress({ signal: abortController.signal });
+      let rawBody = await readBody(req, config.limits.maxRequestBytes);
+      let original = parseJson(rawBody);
+      if (!original) {
+        releaseIngress(); releaseIngress = null;
+        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'invalid_json_passthrough' });
+        await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
+        completed = true;
+        return;
+      }
+
+      const classification = classifyMessagesRequest(original);
+      const managed = messagesPath === '/v1/messages/count_tokens'
+        ? classification.mediaCount.documents + classification.mediaCount.images > 0
+        : classification.managed;
+
+      if (!managed) {
+        if (hasProgressMarker(original.messages)) {
+          original = { ...original, messages: stripProgressHistory(original.messages) };
+          rawBody = Buffer.from(JSON.stringify(original));
+        }
+        releaseIngress(); releaseIngress = null;
+        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'plain_anthropic_request' });
+        await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
+        completed = true;
+        return;
+      }
+
+      validateMessagesRequest(original);
+      if (!admission.canAcceptManaged()) {
+        throw new HttpError(429, 'Proxy managed-task queue is full.', { code: 'proxy_queue_full', retryable: true });
+      }
+
+      let request = { ...original, messages: stripProgressHistory(original.messages) };
+      const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
+      const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
 
       if (request.stream === true) {
         progress = new ProgressStream(res, {
@@ -169,37 +210,85 @@ export function createProxyServer(config) {
         await progress.open();
       }
 
+      const onProgress = async (message, details = {}) => {
+        log(config, 'info', 'managed_task_progress', { requestId, message, ...details });
+        await progress?.update(message);
+      };
+
       if (hasMedia) {
-        const adapters = createMediaAdapters(config, abortController.signal, onProgress);
+        await onProgress('正在安全準備文件與圖片內容…', { phase: 'media_preflight' });
+        preparedMedia = await prepareMediaHandles(request.messages, config.limits, { signal: abortController.signal });
+        request.messages = preparedMedia.messages;
+      }
+      rawBody = null;
+      original = null;
+      releaseIngress(); releaseIngress = null;
+
+      const beforeAcquire = admission.health().managed;
+      const queuedAt = Date.now();
+      releaseManaged = await admission.acquireManaged({
+        requestId,
+        signal: abortController.signal,
+        onPosition: (position) => {
+          log(config, 'info', 'managed_job_enqueued', { requestId, position, queued: admission.health().managed.queued });
+          progress?.update(`任務正在排隊，目前前方有 ${position} 個任務…`, { force: true }).catch(() => {});
+        },
+      });
+      if (beforeAcquire.active >= beforeAcquire.limit) {
+        await progress?.update('任務已開始處理…', { force: true });
+      }
+      log(config, 'info', 'managed_job_admitted', { requestId, queue_wait_ms: Date.now() - queuedAt });
+
+      if (hasMedia) {
+        const adapters = createMediaAdapters(config, abortController.signal, onProgress, {
+          allowedMediaPaths: preparedMedia.allowedPaths,
+          acquireVision: (options) => admission.acquireVision(options),
+        });
         request.messages = await adaptMessages(request.messages, adapters);
+        await preparedMedia.cleanup(); preparedMedia = null;
         await onProgress('文件與圖片內容已就緒；正在交給模型分析…', { phase: 'media_ready' });
       }
 
+      if (messagesPath === '/v1/messages/count_tokens') {
+        releaseManaged(); releaseManaged = null;
+        const payload = await callUpstreamJson(request, config, req.headers, abortController.signal, messagesPath);
+        completed = true;
+        return sendJson(res, 200, payload);
+      }
+
       const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal);
-      const result = managed
-        ? await runManagedLoop(request, {
+      if (hasManagedTools) {
+        const result = await runManagedLoop(request, {
           upstream,
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal),
           maxRounds: config.maxToolRounds,
           onProgress,
           signal: abortController.signal,
-        })
-        : await upstream(request, abortController.signal);
-
-      if (request.stream === true) {
-        await emitFinalAnthropicResponse(progress, result);
+        });
+        releaseManaged(); releaseManaged = null;
+        if (request.stream === true) await emitFinalAnthropicResponse(progress, result);
+        else sendJson(res, 200, result);
       } else {
-        sendJson(res, 200, result);
+        releaseManaged(); releaseManaged = null;
+        if (request.stream === true) await streamManagedBase(progress, request, config, req.headers, abortController.signal);
+        else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
       }
+
       completed = true;
-      log(config, 'info', 'request_completed', { requestId, hasMedia, managed });
+      log(config, 'info', 'request_completed', { requestId, hasMedia, managed: hasManagedTools });
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
-      log(config, 'error', 'request_failed', { requestId, code: error.code || 'internal_error', message: error.message });
+      const failureLevel = ['proxy_queue_full', 'proxy_queue_timeout'].includes(error.code) ? 'warn' : 'error';
+      log(config, failureLevel, 'request_failed', { requestId, method: req.method, path: url.pathname, code: error.code || 'internal_error', message: error.message });
+      if (['proxy_queue_full', 'proxy_queue_timeout'].includes(error.code) && !res.headersSent) res.setHeader('retry-after', '10');
       if (progress) await emitSseError(progress, error);
       else if (!res.headersSent) sendError(res, error);
       else res.destroy(error);
       completed = true;
+    } finally {
+      releaseIngress?.();
+      releaseManaged?.();
+      await preparedMedia?.cleanup();
     }
   });
 }

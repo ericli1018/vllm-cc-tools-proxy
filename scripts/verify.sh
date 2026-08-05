@@ -21,6 +21,13 @@ grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY; do
   grep -q "^${name}=" .env.example
 done
+grep -q '^CONCURRENCY_PROFILE=default$' .env.example
+grep -Fq 'CONCURRENCY_PROFILE: ${CONCURRENCY_PROFILE:-default}' compose.yaml
+grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
+grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
+grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
+grep -Fq 'VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}' compose.yaml
+test "$(node -p "require('./package.json').version")" = '0.2.2'
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   docker compose --env-file .env.example config >/dev/null

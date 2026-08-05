@@ -6,6 +6,12 @@ const PROFILE_LIMITS = Object.freeze({
   large: { maxRequestBytes: 128 * MiB, maxDecodedBytes: 96 * MiB, maxPdfPages: 300, maxImagePixels: 80_000_000, maxOutputChars: 900_000, processTimeoutMs: 300_000 },
 });
 
+const CONCURRENCY_PROFILES = Object.freeze({
+  small: { managedLimit: 1, queueLimit: 4, queueTimeoutMs: 120_000, visionLimit: 1 },
+  default: { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120_000, visionLimit: 1 },
+  large: { managedLimit: 4, queueLimit: 32, queueTimeoutMs: 180_000, visionLimit: 2 },
+});
+
 function intValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value === undefined || value === '') return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -47,11 +53,23 @@ export function loadConfig(env = process.env) {
     maxVisualPagesPerBatch: intValue(env.MAX_VISUAL_PAGES_PER_BATCH, 4, 'MAX_VISUAL_PAGES_PER_BATCH', { min: 1, max: 8 }),
   });
 
+  const concurrencyProfileName = env.CONCURRENCY_PROFILE || 'default';
+  const concurrencyProfile = CONCURRENCY_PROFILES[concurrencyProfileName];
+  if (!concurrencyProfile) throw new Error(`Unsupported CONCURRENCY_PROFILE: ${concurrencyProfileName}`);
+  const concurrency = Object.freeze({
+    profile: concurrencyProfileName,
+    managedLimit: intValue(env.MANAGED_MAX_CONCURRENCY, concurrencyProfile.managedLimit, 'MANAGED_MAX_CONCURRENCY', { min: 1, max: 128 }),
+    queueLimit: intValue(env.MANAGED_MAX_QUEUE, concurrencyProfile.queueLimit, 'MANAGED_MAX_QUEUE', { min: 0, max: 10_000 }),
+    queueTimeoutMs: intValue(env.MANAGED_QUEUE_TIMEOUT_MS, concurrencyProfile.queueTimeoutMs, 'MANAGED_QUEUE_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
+    visionLimit: intValue(env.VISION_MAX_CONCURRENCY, concurrencyProfile.visionLimit, 'VISION_MAX_CONCURRENCY', { min: 1, max: 64 }),
+  });
+
   return Object.freeze({
     port: intValue(env.PORT || env.PROXY_PORT, 8080, 'PORT', { min: 1, max: 65535 }),
     host: env.HOST || '0.0.0.0',
     resourceProfile: profileName,
     limits,
+    concurrency,
     vllmBaseUrl: normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true }),
     vllmBaseApiKey: env.VLLM_BASE_API_KEY || '',
     vllmVisionUrl,

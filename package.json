@@ -1,9 +1,9 @@
 {
   "name": "vllm-cc-tools-proxy",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "private": true,
   "type": "module",
-  "description": "Single-container Claude Code media and tool compatibility proxy for base and visual vLLM endpoints",
+  "description": "Transparent Claude Code gateway with bounded media, visual and managed-tool compatibility workflows",
   "engines": {
     "node": ">=22.0.0"
   },

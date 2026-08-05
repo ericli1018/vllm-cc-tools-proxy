@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.2 - 2026-08-05
+
+- Changed routing to local health/startup-probe handling plus transparent default bypass to `VLLM_BASE_URL`.
+- Added raw request-body preservation for ordinary Anthropic Messages and arbitrary vLLM endpoints.
+- Added bounded FIFO managed-task queue with `small`, `default` and `large` concurrency profiles.
+- Added queue-full `429`, queue-timeout `503`, `Retry-After`, queue progress SSE and cancellation cleanup.
+- Added a separate vision semaphore so Poppler work may overlap while visual-model calls stay bounded.
+- Added request-scoped media spooling so queued jobs retain file handles instead of Base64 strings.
+- Changed media-only final answers to true base-vLLM SSE after preprocessing; only proxy-owned tool loops remain buffered.
+- Added `HEAD /` startup-probe support and queue state to `/health`.
+
 ## 0.2.1 - 2026-08-05
 
 - Added persistent `proxy-source`, `proxy-npm-cache` and `proxy-apt-cache` volumes.

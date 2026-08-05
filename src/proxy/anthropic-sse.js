@@ -84,3 +84,59 @@ export async function emitSseError(progress, error) {
     await progress.stop();
   }
 }
+
+function parseSseBlock(block) {
+  let name = 'message';
+  const data = [];
+  for (const line of block.split(/\r?\n/)) {
+    if (line.startsWith('event:')) name = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+  }
+  return { name, data: data.join('\n') };
+}
+
+function shiftEventIndex(payload, offset) {
+  if (!offset || !payload || typeof payload !== 'object') return payload;
+  if (['content_block_start', 'content_block_delta', 'content_block_stop'].includes(payload.type)
+      && Number.isInteger(payload.index)) {
+    return { ...payload, index: payload.index + offset };
+  }
+  return payload;
+}
+
+export async function pipeAnthropicUpstreamStream(progress, upstream) {
+  await progress.closeProgress('文件與圖片處理完成；正在串流主模型結果…');
+  const offset = progress.visible ? 1 : 0;
+  await progress.stop();
+  if (!upstream.body) {
+    progress.res.end();
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const processBlock = async (block) => {
+    if (!block.trim()) return;
+    const parsed = parseSseBlock(block);
+    if (parsed.name === 'message_start') return;
+    let data = parsed.data;
+    if (data) {
+      try { data = JSON.stringify(shiftEventIndex(JSON.parse(data), offset)); } catch {}
+    }
+    await writeChunk(progress.res, `${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`);
+  };
+
+  for await (const chunk of upstream.body) {
+    buffer += decoder.decode(chunk, { stream: true });
+    while (true) {
+      const match = buffer.match(/\r?\n\r?\n/);
+      if (!match || match.index === undefined) break;
+      const block = buffer.slice(0, match.index);
+      buffer = buffer.slice(match.index + match[0].length);
+      await processBlock(block);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) await processBlock(buffer);
+  progress.res.end();
+}
