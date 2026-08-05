@@ -27,7 +27,15 @@ grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
 grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
 grep -Fq 'VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}' compose.yaml
-test "$(node -p "require('./package.json').version")" = '0.2.2'
+
+grep -Fq "export const PROGRESS_BLOCK_HEADER = 'VLLM-CC-TOOLS-PROXY 進度：';" src/proxy/progress.js
+node - <<'NODE'
+const fs = require('node:fs');
+const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
+const runtime = source.slice(source.indexOf('export class ProgressStream'));
+if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
+NODE
+test "$(node -p "require('./package.json').version")" = '0.2.3'
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   docker compose --env-file .env.example config >/dev/null

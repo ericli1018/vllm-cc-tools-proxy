@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.2 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.3 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
 
-## V0.2.2 architecture
+## V0.2.3 architecture
 
 ```text
 Claude Code
@@ -171,7 +171,7 @@ Long media work immediately opens Anthropic SSE and continues sending `ping` eve
 文件與圖片內容已就緒；正在交給模型分析…
 ```
 
-Proxy progress uses request-scoped markers and is stripped from subsequent conversation history before reaching vLLM.
+Proxy progress is emitted as a dedicated first text block headed `VLLM-CC-TOOLS-PROXY 進度：`. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy V0.2.2 sentinel-wrapped history is also cleaned for backward compatibility.
 
 After PDF/image preprocessing finishes, the managed slot is released and the final base-vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted as Anthropic SSE after the bounded loop completes.
 
@@ -253,7 +253,7 @@ The default visual PDF batch size is four pages.
 
 The suite covers transparent bypass, raw-body preservation, FIFO admission, queue full/timeout/cancellation, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and Anthropic SSE.
 
-## V0.2.2 limits
+## V0.2.3 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and its vLLM tool-call parser/template.

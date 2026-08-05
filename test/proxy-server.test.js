@@ -20,13 +20,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.2 and admission state', async (t) => {
+test('proxy health endpoint reports V0.2.3 and admission state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.3', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
   });
@@ -97,7 +97,34 @@ test('streamed managed request emits progress and final Anthropic blocks', async
   const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'WebSearch',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
   const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'search'}]})});
-  const text=await response.text();assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.equal(call,2);
+  const text=await response.text();assert.match(text,/VLLM-CC-TOOLS-PROXY 進度/);assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
+});
+
+test('plain bypass strips the dedicated progress block before forwarding history to base vLLM', async (t) => {
+  let observed;
+  const upstream = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url }));
+  const proxyUrl = await listen(proxy); t.after(() => upstream.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      messages: [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: [
+          { type: 'text', text: 'VLLM-CC-TOOLS-PROXY 進度：\n正在解析 PDF…\n處理完成；正在回傳模型結果…' },
+          { type: 'text', text: '真正答案' },
+        ] },
+        { role: 'user', content: 'continue' },
+      ],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(observed.messages[1].content, [{ type: 'text', text: '真正答案' }]);
 });
 
 test('ordinary streaming request passes upstream SSE through', async (t) => {

@@ -1,23 +1,46 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
 
+export const PROGRESS_BLOCK_HEADER = 'VLLM-CC-TOOLS-PROXY 進度：';
+
 const INVISIBLE_SEPARATOR = '\u2063';
-const MARKER_PATTERN = new RegExp(
-  `${INVISIBLE_SEPARATOR}VLLMCCP:v1:([A-Za-z0-9_-]{6,128}):start${INVISIBLE_SEPARATOR}[\\s\\S]*?${INVISIBLE_SEPARATOR}VLLMCCP:v1:\\1:end${INVISIBLE_SEPARATOR}`,
+const LEGACY_NONCE = '([A-Za-z0-9_-]{6,128})';
+const LEGACY_INVISIBLE_PATTERN = new RegExp(
+  `${INVISIBLE_SEPARATOR}VLLMCCP:v1:${LEGACY_NONCE}:start${INVISIBLE_SEPARATOR}[\\s\\S]*?${INVISIBLE_SEPARATOR}VLLMCCP:v1:\\1:end${INVISIBLE_SEPARATOR}`,
+  'g',
+);
+const LEGACY_PLAIN_PATTERN = new RegExp(
+  `VLLMCCP:v1:${LEGACY_NONCE}:start[\\s\\S]*?VLLMCCP:v1:\\1:end`,
   'g',
 );
 
-export function createProgressMarkers(nonce = crypto.randomBytes(12).toString('base64url')) {
-  if (!/^[A-Za-z0-9_-]{6,128}$/.test(nonce)) throw new Error('Invalid progress nonce');
-  return {
-    nonce,
-    start: `${INVISIBLE_SEPARATOR}VLLMCCP:v1:${nonce}:start${INVISIBLE_SEPARATOR}`,
-    end: `${INVISIBLE_SEPARATOR}VLLMCCP:v1:${nonce}:end${INVISIBLE_SEPARATOR}`,
-  };
+function stripLegacyText(text) {
+  if (typeof text !== 'string') return text;
+  return text.replace(LEGACY_INVISIBLE_PATTERN, '').replace(LEGACY_PLAIN_PATTERN, '');
 }
 
-function stripText(text) {
-  return typeof text === 'string' ? text.replace(MARKER_PATTERN, '') : text;
+function isDedicatedProgressBlock(block) {
+  return block?.type === 'text'
+    && typeof block.text === 'string'
+    && block.text.startsWith(`${PROGRESS_BLOCK_HEADER}\n`);
+}
+
+function textHasLegacyProgress(text) {
+  if (typeof text !== 'string') return false;
+  LEGACY_INVISIBLE_PATTERN.lastIndex = 0;
+  LEGACY_PLAIN_PATTERN.lastIndex = 0;
+  return LEGACY_INVISIBLE_PATTERN.test(text) || LEGACY_PLAIN_PATTERN.test(text);
+}
+
+export function hasProgressHistory(messages) {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((message) => {
+    if (message?.role !== 'assistant') return false;
+    if (typeof message.content === 'string') return textHasLegacyProgress(message.content);
+    if (!Array.isArray(message.content)) return false;
+    if (isDedicatedProgressBlock(message.content[0])) return true;
+    return message.content.some((block) => block?.type === 'text' && textHasLegacyProgress(block.text));
+  });
 }
 
 export function stripProgressHistory(messages) {
@@ -26,13 +49,17 @@ export function stripProgressHistory(messages) {
     if (message?.role !== 'assistant') return structuredClone(message);
     const clone = { ...message };
     if (typeof message.content === 'string') {
-      clone.content = stripText(message.content);
-    } else if (Array.isArray(message.content)) {
-      clone.content = message.content.map((block) => {
-        if (block?.type !== 'text') return structuredClone(block);
-        return { ...block, text: stripText(block.text) };
-      });
+      clone.content = stripLegacyText(message.content);
+      return clone;
     }
+    if (!Array.isArray(message.content)) return clone;
+
+    let blocks = message.content.map((block) => {
+      if (block?.type !== 'text') return structuredClone(block);
+      return { ...block, text: stripLegacyText(block.text) };
+    });
+    if (isDedicatedProgressBlock(blocks[0])) blocks = blocks.slice(1);
+    clone.content = blocks;
     return clone;
   });
 }
@@ -46,7 +73,6 @@ export class ProgressStream {
     this.res = res;
     this.model = model;
     this.messageId = messageId || `msg_proxy_${crypto.randomUUID().replaceAll('-', '')}`;
-    this.markers = createProgressMarkers();
     this.visibleAfterMs = visibleAfterMs;
     this.startedAt = Date.now();
     this.visible = false;
@@ -103,7 +129,7 @@ export class ProgressStream {
         await writeChunk(this.res, event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${this.markers.start}${message}` },
+          delta: { type: 'text_delta', text: `${PROGRESS_BLOCK_HEADER}\n${message}` },
         }));
       } else {
         await writeChunk(this.res, event('content_block_delta', {
@@ -124,7 +150,7 @@ export class ProgressStream {
         await writeChunk(this.res, event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${this.markers.end}\n\n` },
+          delta: { type: 'text_delta', text: '\n\n' },
         }));
         await writeChunk(this.res, event('content_block_stop', { type: 'content_block_stop', index: 0 }));
       }

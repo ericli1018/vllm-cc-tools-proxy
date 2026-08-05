@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.3 - 2026-08-05
+
+- Removed hidden request-scoped `VLLMCCP:v1:*` nonce sentinels from Claude Code-visible SSE.
+- Added a readable dedicated `VLLM-CC-TOOLS-PROXY 進度：` text block for managed-task progress.
+- Added structural removal of the dedicated progress block before later requests reach the base vLLM.
+- Preserved cleanup of V0.2.2 invisible and normalized sentinel history for backward compatibility.
+- Preserved managed SSE pings, progress updates, content-block index shifting and true base-vLLM final streaming.
+
 ## 0.2.2 - 2026-08-05
 
 - Changed routing to local health/startup-probe handling plus transparent default bypass to `VLLM_BASE_URL`.

@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { HttpError, readBody, sendError, sendJson } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
-import { stripProgressHistory, ProgressStream } from '../proxy/progress.js';
+import { hasProgressHistory, stripProgressHistory, ProgressStream } from '../proxy/progress.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
@@ -93,10 +93,6 @@ function validateMessagesRequest(request) {
   }
 }
 
-function hasProgressMarker(messages) {
-  try { return JSON.stringify(messages).includes('\u2063VLLMCCP:v1:'); } catch { return false; }
-}
-
 function canonicalMessagesPath(pathname) {
   if (pathname === '/v1/messages' || pathname === '/v1/messages/') return '/v1/messages';
   if (pathname === '/v1/messages/count_tokens' || pathname === '/v1/messages/count_tokens/') return '/v1/messages/count_tokens';
@@ -146,7 +142,7 @@ export function createProxyServer(config, dependencies = {}) {
         const state = admission.health();
         completed = true;
         return sendJson(res, 200, {
-          status: 'ok', service: 'proxy', version: '0.2.2', revision: config.gitRevision,
+          status: 'ok', service: 'proxy', version: '0.2.3', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
         });
@@ -181,7 +177,7 @@ export function createProxyServer(config, dependencies = {}) {
         : classification.managed;
 
       if (!managed) {
-        if (hasProgressMarker(original.messages)) {
+        if (hasProgressHistory(original.messages)) {
           original = { ...original, messages: stripProgressHistory(original.messages) };
           rawBody = Buffer.from(JSON.stringify(original));
         }
