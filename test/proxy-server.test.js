@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.5, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.6, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.5', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.6', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -166,7 +166,7 @@ test('streamed managed request emits progress and final Anthropic blocks', async
   const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'WebSearch',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
   const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'search'}]})});
-  const text=await response.text();assert.match(text,/VLLM-CC-TOOLS-PROXY 進度/);assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
+  const text=await response.text();assert.match(text,/目前處理進度/);assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
 });
 
 test('plain bypass strips the dedicated progress block before forwarding history to base vLLM', async (t) => {
@@ -440,4 +440,61 @@ test('quick managed stream does not show a progress block only to announce compl
   assert.match(stream, /QUICK_FINAL/);
   assert.doesNotMatch(stream, /VLLM-CC-TOOLS-PROXY 進度/);
   assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
+});
+
+test('invalid visual crop is recovered internally and never becomes a Claude Code API error', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const visionRequests = [];
+  const vision = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    visionRequests.push(payload);
+    const message = visionRequests.length === 1
+      ? {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'tiny-crop',
+            type: 'function',
+            function: {
+              name: 'request_image_crop',
+              arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100, 100, 101, 101], purpose: 'too small' }),
+            },
+          }],
+        }
+      : { role: 'assistant', content: 'RECOVERED VISUAL ANALYSIS', tool_calls: [] };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.match(JSON.stringify(payload), /RECOVERED VISUAL ANALYSIS/);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: vision.url,
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm',
+    vllmVisionThink: false,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close());
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm',
+      stream: false,
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }] }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'OK');
+  assert.equal(visionRequests.length, 2);
+  const toolResult = visionRequests[1].messages.find((message) => message.role === 'tool');
+  assert.equal(JSON.parse(toolResult.content).error.code, 'crop_region_too_small');
 });

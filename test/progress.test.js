@@ -33,7 +33,8 @@ class FakeResponse extends EventEmitter {
   }
 }
 
-test('ProgressStream emits a readable progress block without a V0.2.2 nonce sentinel', async () => {
+test('ProgressStream emits the V0.2.6 progress header without a V0.2.2 nonce sentinel', async () => {
+  assert.equal(PROGRESS_BLOCK_HEADER, '目前處理進度：');
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
   await progress.open();
@@ -69,6 +70,19 @@ test('hasProgressHistory detects the dedicated V0.2.3 progress block', () => {
   assert.equal(hasProgressHistory(messages), true);
 });
 
+
+
+test('stripProgressHistory removes the V0.2.5 legacy readable progress header', () => {
+  const messages = [{
+    role: 'assistant',
+    content: [
+      { type: 'text', text: 'VLLM-CC-TOOLS-PROXY 進度：\n正在解析 PDF…\n處理完成；正在回傳模型結果…' },
+      { type: 'text', text: '真正答案' },
+    ],
+  }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});
 test('stripProgressHistory removes V0.2.2 invisible sentinel region for backward compatibility', () => {
   const start = '\u2063VLLMCCP:v1:abc123:start\u2063';
   const end = '\u2063VLLMCCP:v1:abc123:end\u2063';

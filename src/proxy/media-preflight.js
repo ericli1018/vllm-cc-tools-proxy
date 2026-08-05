@@ -54,6 +54,9 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
         pipelineVersion: cacheKeyContext.pipelineVersion || 'media-v3',
         visualPromptVersion: cacheKeyContext.visualPromptVersion || 'visual-v2',
         visionModel: cacheKeyContext.visionModel || '',
+        visionProvider: cacheKeyContext.visionProvider || 'vllm',
+        visionApiProtocol: cacheKeyContext.visionApiProtocol || 'openai-chat',
+        visionThink: Boolean(cacheKeyContext.visionThink),
         resourceProfile: cacheKeyContext.resourceProfile || 'default',
       });
       let filePath = pathByKey.get(fingerprint.key);

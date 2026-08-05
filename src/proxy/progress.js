@@ -1,7 +1,14 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
 
-export const PROGRESS_BLOCK_HEADER = 'VLLM-CC-TOOLS-PROXY 進度：';
+export const PROGRESS_BLOCK_HEADER = '目前處理進度：';
+const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
+  'VLLM-CC-TOOLS-PROXY 進度：',
+]);
+const ALL_PROGRESS_BLOCK_HEADERS = Object.freeze([
+  PROGRESS_BLOCK_HEADER,
+  ...LEGACY_PROGRESS_BLOCK_HEADERS,
+]);
 
 const INVISIBLE_SEPARATOR = '\u2063';
 const LEGACY_NONCE = '([A-Za-z0-9_-]{6,128})';
@@ -19,10 +26,13 @@ function stripLegacyText(text) {
   return text.replace(LEGACY_INVISIBLE_PATTERN, '').replace(LEGACY_PLAIN_PATTERN, '');
 }
 
+function isDedicatedProgressText(text) {
+  return typeof text === 'string'
+    && ALL_PROGRESS_BLOCK_HEADERS.some((header) => text.startsWith(`${header}\n`));
+}
+
 function isDedicatedProgressBlock(block) {
-  return block?.type === 'text'
-    && typeof block.text === 'string'
-    && block.text.startsWith(`${PROGRESS_BLOCK_HEADER}\n`);
+  return block?.type === 'text' && isDedicatedProgressText(block.text);
 }
 
 function textHasLegacyProgress(text) {
@@ -36,7 +46,9 @@ export function hasProgressHistory(messages) {
   if (!Array.isArray(messages)) return false;
   return messages.some((message) => {
     if (message?.role !== 'assistant') return false;
-    if (typeof message.content === 'string') return textHasLegacyProgress(message.content);
+    if (typeof message.content === 'string') {
+      return isDedicatedProgressText(message.content) || textHasLegacyProgress(message.content);
+    }
     if (!Array.isArray(message.content)) return false;
     if (isDedicatedProgressBlock(message.content[0])) return true;
     return message.content.some((block) => block?.type === 'text' && textHasLegacyProgress(block.text));
@@ -49,7 +61,7 @@ export function stripProgressHistory(messages) {
     if (message?.role !== 'assistant') return structuredClone(message);
     const clone = { ...message };
     if (typeof message.content === 'string') {
-      clone.content = stripLegacyText(message.content);
+      clone.content = isDedicatedProgressText(message.content) ? '' : stripLegacyText(message.content);
       return clone;
     }
     if (!Array.isArray(message.content)) return clone;

@@ -10,6 +10,9 @@ export function buildMediaCacheKey({
   pipelineVersion,
   visualPromptVersion,
   visionModel = '',
+  visionProvider = 'vllm',
+  visionApiProtocol = 'openai-chat',
+  visionThink = false,
   resourceProfile = 'default',
 }) {
   if (!Buffer.isBuffer(buffer)) throw new TypeError('buffer must be a Buffer');
@@ -20,6 +23,9 @@ export function buildMediaCacheKey({
     pipelineVersion,
     visualPromptVersion,
     visionModel,
+    visionProvider,
+    visionApiProtocol,
+    visionThink: Boolean(visionThink),
     resourceProfile,
   });
   return { key: sha256(contract), mediaSha256 };

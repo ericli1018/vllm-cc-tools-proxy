@@ -27,16 +27,22 @@ export class VisualAssetRegistry {
   authorizeCrop(sourceId, bbox, round) {
     const asset = this.get(sourceId);
     if (!Number.isInteger(round) || round < 1 || round > this.maxCropRounds) {
-      throw new HttpError(422, 'Visual crop round limit exceeded.', { code: 'visual_crop_limit' });
+      throw new HttpError(422, 'Visual crop round limit exceeded.', { code: 'visual_crop_round_limit' });
     }
     if (!Array.isArray(bbox) || bbox.length !== 4 || bbox.some((v) => !Number.isInteger(v) || v < 0 || v > 1000)) {
-      throw new HttpError(422, 'Invalid crop coordinates.', { code: 'invalid_visual_crop' });
+      throw new HttpError(422, 'Invalid crop coordinates.', { code: 'invalid_visual_crop_coordinates' });
     }
     const [leftN, topN, rightN, bottomN] = bbox;
-    if (rightN <= leftN || bottomN <= topN) throw new HttpError(422, 'Invalid crop rectangle.', { code: 'invalid_visual_crop' });
+    if (rightN <= leftN || bottomN <= topN) {
+      throw new HttpError(422, 'Invalid crop rectangle.', { code: 'invalid_visual_crop_rectangle' });
+    }
     const areaRatio = ((rightN - leftN) * (bottomN - topN)) / 1_000_000;
-    if (areaRatio < 0.01) throw new HttpError(422, 'Invalid crop: region is too small.', { code: 'invalid_visual_crop' });
-    if (asset.cropCount >= this.maxCropsPerAsset) throw new HttpError(422, 'Visual crop count limit exceeded.', { code: 'visual_crop_limit' });
+    if (areaRatio < 0.01) {
+      throw new HttpError(422, 'Invalid crop: region is too small.', { code: 'crop_region_too_small' });
+    }
+    if (asset.cropCount >= this.maxCropsPerAsset) {
+      throw new HttpError(422, 'Visual crop count limit exceeded.', { code: 'visual_crop_count_limit' });
+    }
     asset.cropCount += 1;
     const left = Math.floor((leftN / 1000) * asset.width);
     const top = Math.floor((topN / 1000) * asset.height);

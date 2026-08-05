@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK; do
   grep -q "^${name}=" .env.example
 done
 grep -q '^CONCURRENCY_PROFILE=default$' .env.example
@@ -34,15 +34,20 @@ grep -Fq "'/api/hello'" src/services/proxy-server.js
 test -f src/cache/cache-key.js
 test -f src/cache/media-cache.js
 test -f src/media/analysis-registry.js
+test -f src/visual/crop-errors.js
+grep -Fq 'VLLM_VISION_PROVIDER: ${VLLM_VISION_PROVIDER:-vllm}' compose.yaml
+grep -Fq 'VLLM_VISION_THINK: ${VLLM_VISION_THINK:-false}' compose.yaml
+grep -q '^VLLM_VISION_PROVIDER=vllm$' .env.example
+grep -q '^VLLM_VISION_THINK=false$' .env.example
 
-grep -Fq "export const PROGRESS_BLOCK_HEADER = 'VLLM-CC-TOOLS-PROXY 進度：';" src/proxy/progress.js
+grep -Fq "export const PROGRESS_BLOCK_HEADER = '目前處理進度：';" src/proxy/progress.js
 node - <<'NODE'
 const fs = require('node:fs');
 const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.5'
+test "$(node -p "require('./package.json').version")" = '0.2.6'
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   docker compose --env-file .env.example config >/dev/null

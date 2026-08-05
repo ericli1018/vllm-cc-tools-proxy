@@ -30,6 +30,7 @@ export async function parsePdf(buffer, options) {
   const {
     limits, onProgress = () => {}, signal, runner = runCommand,
     vllmVisionUrl = '', vllmVisionModel = '', vllmVisionApiKey = '',
+    vllmVisionProvider = 'vllm', vllmVisionThink = false,
     analyzeVisualAssets = defaultAnalyzeVisualAssets, cropImage = defaultCropImage,
   } = options;
   if (!Buffer.isBuffer(buffer) || detectMediaType(buffer) !== 'application/pdf') throw new HttpError(422, 'Input is not a valid PDF.', { code: 'invalid_pdf' });
@@ -44,7 +45,12 @@ export async function parsePdf(buffer, options) {
     if (info.encrypted) throw new HttpError(422, 'PDF is encrypted or requires a password.', { code: 'encrypted_pdf' });
     if (!Number.isInteger(info.pages) || info.pages < 1) throw new HttpError(422, 'PDF contains no readable pages.', { code: 'empty_pdf' });
     if (info.pages > limits.maxPdfPages) throw new HttpError(413, 'PDF exceeds the configured page limit.', { code: 'pdf_page_limit' });
-    await onProgress(`已確認 ${info.pages} 頁；正在抽取原生文字…`, { phase: 'pdf_metadata', total: info.pages });
+    await onProgress(`已確認 ${info.pages} 頁；正在抽取原生文字…`, {
+      phase: 'pdf_metadata',
+      total: info.pages,
+      received_pdf_pages: info.pages,
+      processed_pdf_pages: 0,
+    });
 
     const pages = [];
     let insufficientCount = 0;
@@ -76,12 +82,19 @@ export async function parsePdf(buffer, options) {
         visualPages.push({ ...page, asset });
       }
       const batches = batchVisualPages(visualPages, limits.maxVisualPagesPerBatch || 4);
+      await onProgress(`已接收 ${info.pages} 頁 PDF；將分成 ${batches.length} 批進行視覺分析…`, {
+        phase: 'pdf_visual_plan',
+        received_pdf_pages: info.pages,
+        visual_batch_size: limits.maxVisualPagesPerBatch || 4,
+        visual_batch_count: batches.length,
+      });
       let completed = 0;
       for (let index = 0; index < batches.length; index += 1) {
         const batch = batches[index];
         await onProgress(`正在使用視覺模型分析第 ${index + 1}/${batches.length} 批頁面…`, { phase: 'pdf_visual_batch', batch: index + 1, batches: batches.length });
         const result = await analyzeVisualAssets(batch.map((entry) => entry.asset), {
-          baseUrl: vllmVisionUrl, model: vllmVisionModel, apiKey: vllmVisionApiKey, registry, signal, onProgress,
+          baseUrl: vllmVisionUrl, model: vllmVisionModel, apiKey: vllmVisionApiKey,
+          provider: vllmVisionProvider, think: vllmVisionThink, registry, signal, onProgress,
           cropImage: (asset, authorization, callOptions) => cropImage(asset, authorization, { ...limits, ...callOptions, runner }),
           prompt: `Analyze PDF pages ${batch.map((entry) => entry.page).join(', ')}. Preserve each source_id and page number. Extract visible text when native text is missing; identify tables, diagrams, arrows, labels and relationships. Do not answer the final user task.`,
         });
@@ -89,7 +102,14 @@ export async function parsePdf(buffer, options) {
         completed += batch.length;
         visualBatches.push({ pages: batch.map((entry) => entry.page), markdown: result.markdown, cropCount: result.cropCount });
         warnings.push(...(result.warnings || []));
-        await onProgress(`視覺模型已完成 ${completed}/${info.pages} 頁…`, { phase: 'pdf_visual_progress', completed, total: info.pages });
+        await onProgress(`視覺模型已完成 ${completed}/${info.pages} 頁…`, {
+          phase: 'pdf_visual_progress',
+          completed,
+          total: info.pages,
+          processed_pdf_pages: completed,
+          received_pdf_pages: info.pages,
+          visual_batch_count: batches.length,
+        });
       }
     }
 
@@ -105,7 +125,7 @@ export async function parsePdf(buffer, options) {
     await onProgress('PDF 內容已完成合併。', { phase: 'pdf_complete', completed: info.pages, total: info.pages });
     return {
       parser: visualUsed ? 'poppler+visual-vllm' : 'poppler', visual_used: visualUsed,
-      page_count: info.pages, processed_pages: info.pages, markdown: bounded.text,
+      page_count: info.pages, processed_pages: info.pages, visual_batch_count: visualBatches.length, markdown: bounded.text,
       warnings: [...new Set(warnings)], truncated: bounded.truncated,
       original_chars: bounded.originalChars, returned_chars: bounded.text.length,
     };

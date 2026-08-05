@@ -86,6 +86,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         const result = await parsePdf(buffer, {
           limits: config.limits, signal: analysisSignal, onProgress,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
+          vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
         });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
@@ -95,13 +96,15 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           `source_sha256="${xmlAttribute(block.source.media_sha256 || '')}"`,
           `parser="${xmlAttribute(result.parser || 'unknown')}"`, `pages="${xmlAttribute(result.page_count ?? '')}"`,
           `processed_pages="${xmlAttribute(result.processed_pages ?? result.page_count ?? '')}"`,
+          `visual_batch_count="${xmlAttribute(result.visual_batch_count ?? 0)}"`,
           `visual_used="${Boolean(result.visual_used)}"`, `truncated="${Boolean(result.truncated || bounded.truncated)}"`,
         ].join(' ');
         const normalizedBlock = { type: 'text', text: `<document ${attributes}>\n${bounded.text}${warnings.length ? `\n<warnings>${warnings.map(xmlAttribute).join(',')}</warnings>` : ''}\n</document>` };
         return {
           block: normalizedBlock,
           metadata: {
-            mediaType: 'application/pdf', pages: result.page_count ?? null, parser: result.parser || 'unknown',
+            mediaType: 'application/pdf', pages: result.page_count ?? null, processedPages: result.processed_pages ?? result.page_count ?? null,
+            visualBatchCount: result.visual_batch_count ?? 0, parser: result.parser || 'unknown',
             visualUsed: Boolean(result.visual_used), warnings, truncated: Boolean(result.truncated || bounded.truncated),
           },
         };
@@ -119,6 +122,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         await onProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision', path: context.path });
         const result = await analyzeWithAdmission([asset], {
           baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
+          provider: config.vllmVisionProvider, think: config.vllmVisionThink,
           registry, signal: analysisSignal, onProgress,
           cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
         });

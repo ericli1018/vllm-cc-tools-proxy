@@ -1,15 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.5 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.6 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.5 architecture
+## V0.2.6 architecture
 
 ```text
 Claude Code
   -> vllm-cc-tools-proxy:8080
        ├─ local Poppler: PDF metadata, native text, page rendering
        ├─ local ImageMagick: validation, normalization, bounded crops
-       ├─ visual vLLM: OCR, tables, charts, diagrams, UI and photographs
+       ├─ visual provider: vLLM OpenAI-compatible or Ollama native multimodal analysis
        ├─ SearXNG / awesome-web-fetch: managed WebSearch and WebFetch
        └─ base vLLM: final reasoning and Claude Code tool calling
 ```
@@ -112,17 +112,34 @@ VLLM_BASE_URL=http://host.docker.internal:8000
 VLLM_BASE_API_KEY=
 
 VLLM_VISION_URL=http://host.docker.internal:8001
-VLLM_VISION_MODEL=Qwen/Qwen3-VL-30B-A3B-Instruct
+VLLM_VISION_MODEL=Qwen/Qwen3.6-27B
 VLLM_VISION_API_KEY=
+VLLM_VISION_PROVIDER=vllm
+VLLM_VISION_THINK=false
 ```
 
 `VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint.
 
-`VLLM_VISION_URL` points to an OpenAI-compatible vLLM server. The proxy calls `/v1/chat/completions` and sends the vision key only to this endpoint. `VLLM_VISION_URL` and `VLLM_VISION_MODEL` must be configured together.
+`VLLM_VISION_URL` and `VLLM_VISION_MODEL` must be configured together. `VLLM_VISION_PROVIDER` is either `vllm` or `ollama` and defaults to `vllm` for backward compatibility.
+
+Provider behavior:
+
+```text
+VLLM_VISION_PROVIDER=vllm
+  -> POST /v1/chat/completions
+  -> VLLM_VISION_THINK=false sends reasoning_effort=none
+     and chat_template_kwargs.enable_thinking=false
+
+VLLM_VISION_PROVIDER=ollama
+  -> POST /api/chat
+  -> VLLM_VISION_THINK=false sends think=false
+```
+
+`VLLM_VISION_THINK` accepts only `true` or `false`; invalid values stop startup. Visual reasoning remains internal to the visual tool loop and is never copied into the normalized document/image block or forwarded to the base vLLM. For an Ollama-hosted Qwen3.6 model, configure `VLLM_VISION_PROVIDER=ollama` explicitly.
 
 ## Persistent media cache
 
-Claude Code sends complete message history on later tool rounds. A PDF/image Base64 block from an earlier `Read` can therefore appear again after `Write`, `Bash` or another tool result. V0.2.5 fingerprints decoded media and replaces every historical occurrence with the same cached normalized content instead of rerunning Poppler or the visual model.
+Claude Code sends complete message history on later tool rounds. A PDF/image Base64 block from an earlier `Read` can therefore appear again after `Write`, `Bash` or another tool result. V0.2.6 fingerprints decoded media and replaces every historical occurrence with the same cached normalized content instead of rerunning Poppler or the visual model.
 
 The cache key includes:
 
@@ -132,6 +149,9 @@ media MIME type
 parser pipeline version
 visual prompt version
 VLLM_VISION_MODEL
+VLLM_VISION_PROVIDER
+visual API protocol
+VLLM_VISION_THINK
 RESOURCE_PROFILE
 ```
 
@@ -176,13 +196,15 @@ Anthropic document/base64
 -> pdfinfo
 -> pdftotext per page
 -> render pages with pdftoppm when visual mode is enabled
--> batches of at most four page images to visual vLLM
+-> count every page actually present in the received PDF payload
+-> batches of at most four page images to the configured visual provider
+-> report received pages, processed pages and visual batch count
 -> merge native text and visual Markdown with page boundaries
 -> replace document block with text
 -> send to base vLLM
 ```
 
-A text PDF can still be processed without a visual endpoint. A scanned or low-text PDF requires visual vLLM; the proxy returns `vision_endpoint_required` instead of forwarding raw Base64.
+A text PDF can still be processed without a visual endpoint. A scanned or low-text PDF requires a visual provider; the proxy returns `vision_endpoint_required` instead of forwarding raw Base64. If Claude Code displays `Read(... · pages 1-20)`, the proxy processes every page present in the resulting PDF payload. A received 20-page PDF is processed as five sequential visual batches at the default batch size of four. The proxy cannot infer an original file page range when Claude Code does not include that metadata on the wire.
 
 ## Image flow
 
@@ -190,7 +212,7 @@ A text PDF can still be processed without a visual endpoint. A scanned or low-te
 Anthropic image/base64
 -> MIME/magic and resource validation
 -> ImageMagick auto-orient, resize and strip metadata
--> visual vLLM analysis
+-> configured visual-provider analysis
 -> replace image block with bounded visual Markdown
 -> send to base vLLM
 ```
@@ -213,7 +235,9 @@ Fixed limits:
 - Maximum four crop calls per round.
 - Maximum six crops per source asset.
 - No file paths or shell commands are accepted from the model.
-- Crops smaller than one percent of the source are rejected.
+- Crops smaller than one percent of the source are rejected internally.
+
+A model-generated crop validation failure is returned to the visual model as a bounded tool result instead of becoming a Claude Code API error. The visual model may correct the crop or complete from existing evidence. After two crop rounds, the proxy disables crop tools and requests a final evidence-bounded answer. Unexpected proxy programming errors are not hidden by this recovery path.
 
 ## Streaming progress
 
@@ -221,14 +245,15 @@ Managed streaming requests open Anthropic SSE immediately so the connection rema
 
 ```text
 正在解析 PDF…
-已確認 18 頁；正在抽取原生文字…
+已確認 20 頁；正在抽取原生文字…
+已接收 20 頁 PDF；將分成 5 批進行視覺分析…
 正在使用視覺模型分析第 1/5 批頁面…
 視覺模型要求檢視 1 個局部區域…
-視覺模型已完成 18/18 頁…
+視覺模型已完成 20/20 頁…
 文件與圖片內容已就緒；正在交給模型分析…
 ```
 
-When progress becomes visible, it is emitted as a dedicated first text block headed `VLLM-CC-TOOLS-PROXY 進度：`. The final transition message is appended only when that block already exists; it never creates a progress block by itself. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy V0.2.2 sentinel-wrapped history is also cleaned for backward compatibility.
+When progress becomes visible, it is emitted as a dedicated first text block headed `目前處理進度：`. The final transition message is appended only when that block already exists; it never creates a progress block by itself. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy `VLLM-CC-TOOLS-PROXY 進度：` blocks and V0.2.2 sentinel-wrapped history are also cleaned for backward compatibility.
 
 After PDF/image preprocessing finishes, the managed slot is released and the final base-vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted as Anthropic SSE after the bounded loop completes.
 
@@ -316,12 +341,12 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and frame-safe Anthropic SSE keepalive.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and frame-safe Anthropic SSE keepalive.
 
-## V0.2.5 limits
+## V0.2.6 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
-- Visual analysis depends on the selected multimodal model and its vLLM tool-call parser/template.
+- Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.
 - Queue, semaphore and singleflight state are process-local; multiple proxy replicas do not share admission state.
 - Cache files are persistent, but multiple proxy replicas do not coordinate cache writes or distributed locks.
 - No persistent document-handle API or distributed Redis cache.

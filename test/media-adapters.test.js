@@ -17,13 +17,22 @@ test('document adapter uses local parser result and removes raw Base64', async (
   const pdf = Buffer.from('%PDF-1.7\nbody');
   const adapters = createMediaAdapters({
     limits: { maxDecodedBytes: 1024, maxOutputChars: 1000 },
-    vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+    vllmVisionUrl: 'http://vision:8000', vllmVisionModel: 'qwen3.6:27b', vllmVisionApiKey: '',
+    vllmVisionProvider: 'ollama', vllmVisionThink: false,
   }, undefined, undefined, {
-    parsePdf: async (buffer) => { assert.deepEqual(buffer, pdf); return { parser: 'poppler', page_count: 1, processed_pages: 1, visual_used: false, markdown: '# Parsed', warnings: [], truncated: false }; },
+    parsePdf: async (buffer, options) => {
+      assert.deepEqual(buffer, pdf);
+      assert.equal(options.vllmVisionProvider, 'ollama');
+      assert.equal(options.vllmVisionThink, false);
+      return { parser: 'poppler+visual-vllm', page_count: 20, processed_pages: 20, visual_batch_count: 5, visual_used: true, markdown: '# Parsed', warnings: [], truncated: false };
+    },
   });
   const base64 = pdf.toString('base64');
   const output = await adapters.adaptDocument({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: base64 } });
   assert.match(output.text, /# Parsed/);
+  assert.match(output.text, /pages="20"/);
+  assert.match(output.text, /processed_pages="20"/);
+  assert.match(output.text, /visual_batch_count="5"/);
   assert.equal(output.text.includes(base64), false);
 });
 
@@ -32,9 +41,15 @@ test('image adapter sends normalized image to visual vLLM and removes Base64', a
   const adapters = createMediaAdapters({
     limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
     vllmVisionUrl: 'http://vision:8000', vllmVisionModel: 'vision', vllmVisionApiKey: 'key',
+    vllmVisionProvider: 'vllm', vllmVisionThink: true,
   }, undefined, undefined, {
     normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 600, height: 180 }),
-    analyzeVisualAssets: async (assets) => { assert.equal(assets[0].sourceId, 'asset-1'); return { markdown: 'VISIBLE TEXT', warnings: [], cropCount: 0 }; },
+    analyzeVisualAssets: async (assets, options) => {
+      assert.equal(assets[0].sourceId, 'asset-1');
+      assert.equal(options.provider, 'vllm');
+      assert.equal(options.think, true);
+      return { markdown: 'VISIBLE TEXT', warnings: [], cropCount: 0 };
+    },
   });
   const base64 = png.toString('base64');
   const output = await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } });

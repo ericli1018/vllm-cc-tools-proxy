@@ -78,3 +78,26 @@ test('vision admission wraps visual analysis and always releases', async () => {
   assert.equal(active, 0);
   assert.equal(releases, 1);
 });
+
+
+test('media cache fingerprints change across visual provider and thinking modes', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const make = async (visionProvider, visionApiProtocol, visionThink) => prepareMediaHandles(
+    imageMessage(png.toString('base64')),
+    { maxDecodedBytes: 5_000_000 },
+    { cacheKeyContext: {
+      pipelineVersion: 'media-v4', visualPromptVersion: 'visual-v3', visionModel: 'qwen3.6:27b',
+      visionProvider, visionApiProtocol, visionThink, resourceProfile: 'default',
+    } },
+  );
+  const vllm = await make('vllm', 'openai-chat', false);
+  const ollama = await make('ollama', 'ollama-native', false);
+  const ollamaThink = await make('ollama', 'ollama-native', true);
+  try {
+    const key = (prepared) => prepared.mediaEntries[0].key;
+    assert.notEqual(key(vllm), key(ollama));
+    assert.notEqual(key(ollama), key(ollamaThink));
+  } finally {
+    await Promise.all([vllm.cleanup(), ollama.cleanup(), ollamaThink.cleanup()]);
+  }
+});

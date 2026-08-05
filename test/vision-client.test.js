@@ -12,6 +12,7 @@ test('vision client uses separate auth and executes a bounded crop request', asy
   const requests = [];
   const server = http.createServer(async (req, res) => {
     assert.equal(req.headers.authorization, 'Bearer vision-key');
+    assert.equal(req.url, '/v1/chat/completions');
     const payload = await read(req); requests.push(payload);
     const message = requests.length === 1
       ? { content: '', tool_calls: [{ id: 'crop-1', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,800,800], purpose: 'read labels' }) } }] }
@@ -24,12 +25,156 @@ test('vision client uses separate auth and executes a bounded crop request', asy
   const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
   const crops = [];
   const result = await analyzeVisualAssets([asset], {
-    baseUrl: url, model: 'vision-model', apiKey: 'vision-key', registry,
+    baseUrl: url, model: 'vision-model', apiKey: 'vision-key', provider: 'vllm', think: false, registry,
     cropImage: async (_asset, authorization) => { crops.push(authorization); return { buffer: Buffer.from('crop'), mediaType: 'image/png', width: 700, height: 700 }; },
   });
   assert.match(result.markdown, /Visual result/);
   assert.equal(crops.length, 1);
   assert.equal(requests[0].parallel_tool_calls, false);
+  assert.equal(requests[0].reasoning_effort, 'none');
+  assert.equal(requests[0].chat_template_kwargs.enable_thinking, false);
   assert.equal(requests[0].tools[0].function.name, 'request_image_crop');
   assert.equal(requests[1].messages.some((m) => m.role === 'user' && Array.isArray(m.content)), true);
+});
+
+
+test('Ollama native vision requests carry think=false and native image messages', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    assert.equal(req.url, '/api/chat');
+    const payload = await read(req); requests.push(payload);
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'OLLAMA RESULT', tool_calls: [] } }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: false, registry,
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(result.markdown, 'OLLAMA RESULT');
+  assert.equal(requests[0].think, false);
+  assert.equal(requests[0].messages[1].images.length, 1);
+  assert.equal(typeof requests[0].messages[1].content, 'string');
+  assert.equal('reasoning_effort' in requests[0], false);
+});
+
+test('invalid crop is returned to the visual model as a recoverable tool result', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const payload = await read(req); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'bad-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,105,105], purpose: 'tiny' }) } }] }
+      : { content: 'Completed without the invalid crop.', tool_calls: [] };
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
+  const progress = [];
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'vision-model', provider: 'vllm', think: false, registry,
+    onProgress: async (message, details) => progress.push({ message, details }),
+    cropImage: async () => { throw new Error('invalid crop must not reach image processor'); },
+  });
+  assert.equal(result.markdown, 'Completed without the invalid crop.');
+  assert.equal(requests.length, 2);
+  const toolResult = requests[1].messages.find((message) => message.role === 'tool');
+  const content = JSON.parse(toolResult.content);
+  assert.equal(content.ok, false);
+  assert.equal(content.error.code, 'crop_region_too_small');
+  assert.equal(content.error.retryable, true);
+  assert.equal(progress.some((item) => item.message.includes('Invalid crop')), false);
+  assert.equal(progress.some((item) => item.details.code === 'crop_region_too_small'), true);
+});
+
+test('crop recovery is bounded and finishes with tools disabled', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const payload = await read(req); requests.push(payload);
+    const message = requests.length <= 2
+      ? { content: '', tool_calls: [{ id: `bad-${requests.length}`, type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [0,0,1,1], purpose: 'tiny' }) } }] }
+      : { content: 'Final answer from available evidence.', tool_calls: [] };
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'vision-model', provider: 'vllm', think: true, registry, maxCropRounds: 2,
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(result.markdown, 'Final answer from available evidence.');
+  assert.equal(requests.length, 3);
+  assert.equal(requests[0].chat_template_kwargs.enable_thinking, true);
+  assert.equal(requests[2].tools, undefined);
+  assert.equal(requests[2].tool_choice, undefined);
+});
+
+test('Ollama crop tool arguments may be native objects and thinking remains internal', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const payload = await read(req); requests.push(payload);
+    const message = requests.length === 1
+      ? { thinking: 'private reasoning', content: '', tool_calls: [{ function: { name: 'request_image_crop', arguments: { source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'native object' } } }] }
+      : { thinking: 'more private reasoning', content: 'Native Ollama crop completed.', tool_calls: [] };
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ message }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: true, registry,
+    cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 800, height: 800 }),
+  });
+  assert.equal(result.markdown, 'Native Ollama crop completed.');
+  assert.equal(requests[0].think, true);
+  assert.equal(requests[1].messages.some((message) => message.role === 'assistant' && message.thinking === 'private reasoning'), true);
+  assert.equal(requests[1].messages.some((message) => message.role === 'tool' && message.tool_name === 'request_image_crop'), true);
+  assert.equal(result.markdown.includes('private reasoning'), false);
+});
+
+test('mixed valid and invalid crop calls continue without a top-level error', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const payload = await read(req); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [
+          { id: 'good', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'good' }) } },
+          { id: 'bad', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,101,101], purpose: 'bad' }) } },
+        ] }
+      : { content: 'Completed with the valid crop.', tool_calls: [] };
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'vision', provider: 'vllm', think: false, registry,
+    cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 800, height: 800 }),
+  });
+  assert.equal(result.markdown, 'Completed with the valid crop.');
+  assert.equal(result.cropCount, 1);
+  const toolMessages = requests[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
+  assert.deepEqual(toolMessages.map((item) => item.ok), [true, false]);
+});
+
+test('unexpected proxy programming errors are not hidden as crop validation failures', async (t) => {
+  const server = http.createServer(async (_req, res) => {
+    const message = { content: '', tool_calls: [{ id: 'crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'trigger' }) } }] };
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image' });
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'vision', provider: 'vllm', think: false, registry,
+    cropImage: async () => { throw new TypeError('programming defect'); },
+  }), /programming defect/);
 });

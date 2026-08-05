@@ -27,7 +27,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base and vision vLLM variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -44,15 +44,17 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
+  assert.match(compose, /VLLM_VISION_PROVIDER:\s*\$\{VLLM_VISION_PROVIDER:-vllm\}/);
+  assert.match(compose, /VLLM_VISION_THINK:\s*\$\{VLLM_VISION_THINK:-false\}/);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.5', async () => {
+test('package version is V0.2.6', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.5');
-  assert.equal(lock.version, '0.2.5');
-  assert.equal(lock.packages[''].version, '0.2.5');
+  assert.equal(packageJson.version, '0.2.6');
+  assert.equal(lock.version, '0.2.6');
+  assert.equal(lock.packages[''].version, '0.2.6');
 });
 
 
@@ -60,6 +62,6 @@ test('new progress protocol does not generate the V0.2.2 nonce sentinel', async 
   const source = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
   const generatorSection = source.slice(source.indexOf('export class ProgressStream'));
   assert.doesNotMatch(generatorSection, /VLLMCCP:v1:/);
-  assert.match(source, /VLLM-CC-TOOLS-PROXY 進度/);
+  assert.match(source, /目前處理進度/);
   assert.doesNotMatch(source, /function createProgressMarkers/);
 });

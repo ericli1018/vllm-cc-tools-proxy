@@ -25,6 +25,20 @@ function intValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGE
   return parsed;
 }
 
+function enumValue(value, fallback, name, allowed) {
+  const candidate = String(value ?? fallback).trim().toLowerCase();
+  if (!allowed.includes(candidate)) throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
+  return candidate;
+}
+
+function booleanValue(value, fallback, name) {
+  if (value === undefined || value === '') return fallback;
+  const candidate = String(value).trim().toLowerCase();
+  if (candidate === 'true') return true;
+  if (candidate === 'false') return false;
+  throw new Error(`${name} must be true or false`);
+}
+
 function normalizedUrl(value, fallback, name, { required = false } = {}) {
   const candidate = value || fallback;
   if (!candidate) {
@@ -44,6 +58,9 @@ export function loadConfig(env = process.env) {
 
   const vllmVisionUrl = normalizedUrl(env.VLLM_VISION_URL, '', 'VLLM_VISION_URL');
   const vllmVisionModel = env.VLLM_VISION_MODEL || '';
+  const vllmVisionProvider = enumValue(env.VLLM_VISION_PROVIDER, 'vllm', 'VLLM_VISION_PROVIDER', ['vllm', 'ollama']);
+  const vllmVisionThink = booleanValue(env.VLLM_VISION_THINK, false, 'VLLM_VISION_THINK');
+  const vllmVisionApiProtocol = vllmVisionProvider === 'ollama' ? 'ollama-native' : 'openai-chat';
   if (vllmVisionUrl && !vllmVisionModel) throw new Error('VLLM_VISION_MODEL is required when VLLM_VISION_URL is set');
   if (vllmVisionModel && !vllmVisionUrl) throw new Error('VLLM_VISION_URL is required when VLLM_VISION_MODEL is set');
 
@@ -79,8 +96,8 @@ export function loadConfig(env = process.env) {
     maxBytes: explicitCacheMb * MiB,
     retentionMs: cacheProfile.retentionDays * 24 * 60 * 60 * 1000,
     limitMode: explicitCacheMb === 0 ? 'filesystem' : 'bounded',
-    pipelineVersion: 'media-v3',
-    visualPromptVersion: 'visual-v2',
+    pipelineVersion: 'media-v4',
+    visualPromptVersion: 'visual-v3',
   });
 
   return Object.freeze({
@@ -95,6 +112,9 @@ export function loadConfig(env = process.env) {
     vllmVisionUrl,
     vllmVisionModel,
     vllmVisionApiKey: env.VLLM_VISION_API_KEY || '',
+    vllmVisionProvider,
+    vllmVisionThink,
+    vllmVisionApiProtocol,
     searxngUrl: normalizedUrl(env.SEARXNG_URL, '', 'SEARXNG_URL'),
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),
     logLevel: env.LOG_LEVEL || 'info',

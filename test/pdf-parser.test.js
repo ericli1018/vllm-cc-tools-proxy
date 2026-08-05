@@ -29,3 +29,43 @@ test('parsePdf rejects scanned pages when visual endpoint is absent', async () =
   const buffer = await fs.readFile(new URL('./fixtures/scanned.pdf', import.meta.url));
   await assert.rejects(() => parsePdf(buffer, { limits, vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '' }), /Visual vLLM endpoint/);
 });
+
+
+test('parsePdf processes all 20 received pages in five visual batches', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const progress = [];
+  const visualCalls = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 20\nEncrypted: no\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') {
+      const page = Number(args[1]);
+      return { stdout: Buffer.from(`page ${page} native text `.repeat(10)), stderr: Buffer.alloc(0) };
+    }
+    if (command === 'pdftoppm') {
+      const prefix = args.at(-1);
+      await fs.writeFile(`${prefix}.png`, png);
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    }
+    if (command === 'identify') return { stdout: Buffer.from('600 180'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') {
+      await fs.writeFile(args.at(-1), png);
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+    onProgress: async (message, details) => progress.push({ message, details }),
+    analyzeVisualAssets: async (assets, options) => {
+      visualCalls.push({ assets, options });
+      return { markdown: `batch ${visualCalls.length}`, warnings: [], cropCount: 0 };
+    },
+  });
+  assert.equal(result.page_count, 20);
+  assert.equal(result.processed_pages, 20);
+  assert.equal(result.visual_batch_count, 5);
+  assert.deepEqual(visualCalls.map((call) => call.assets.length), [4,4,4,4,4]);
+  assert.ok(progress.some((item) => item.message.includes('已接收 20 頁 PDF；將分成 5 批')));
+  assert.equal(visualCalls.every((call) => call.options.provider === 'vllm' && call.options.think === false), true);
+});

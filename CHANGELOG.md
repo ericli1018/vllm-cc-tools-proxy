@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.6 - 2026-08-05
+
+- Renamed the visible managed progress heading to `目前處理進度：` while retaining cleanup compatibility for V0.2.2–V0.2.5 history.
+- Added explicit `VLLM_VISION_PROVIDER=vllm|ollama` and strict `VLLM_VISION_THINK=true|false` settings.
+- Added Ollama native `/api/chat` requests with boolean `think`, native image messages and `tool_name` tool results.
+- Added vLLM OpenAI-compatible thinking control using both `reasoning_effort` and `chat_template_kwargs.enable_thinking`.
+- Added visual provider, API protocol and thinking mode to media cache fingerprints; advanced the cache pipeline contract to `media-v4` / `visual-v3`.
+- Added PDF received-page, processed-page and visual-batch observability; a received 20-page PDF is processed in five default four-page batches.
+- Changed invalid model-requested crops from top-level `422` errors into bounded internal tool results returned to the visual model.
+- Added mixed valid/invalid crop handling, two-round correction, final tools-disabled completion and protection against hiding unexpected proxy programming defects.
+- Added end-to-end coverage proving an invalid crop does not become a Claude Code API error.
+
 ## 0.2.5 - 2026-08-05
 
 - Added persistent normalized PDF/image analysis cache in the dedicated `proxy-data` volume.

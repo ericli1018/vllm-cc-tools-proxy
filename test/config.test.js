@@ -15,6 +15,11 @@ test('loadConfig exposes the five vLLM settings and one proxy mode', () => {
   assert.equal(config.vllmVisionUrl, 'http://vllm-vision:8000');
   assert.equal(config.vllmVisionModel, 'Qwen/Qwen3-VL-30B-A3B-Instruct');
   assert.equal(config.vllmVisionApiKey, 'vision-secret');
+  assert.equal(config.vllmVisionProvider, 'vllm');
+  assert.equal(config.vllmVisionThink, false);
+  assert.equal(config.vllmVisionApiProtocol, 'openai-chat');
+  assert.equal(config.cache.pipelineVersion, 'media-v4');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v3');
   assert.equal(config.port, 8080);
 });
 
@@ -94,4 +99,23 @@ test('MEDIA_CACHE_MAX_MB zero selects filesystem-limited mode and positive value
 test('invalid media cache capacity is rejected', () => {
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: '-1' }), /MEDIA_CACHE_MAX_MB/);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: 'abc' }), /MEDIA_CACHE_MAX_MB/);
+});
+
+
+test('visual provider and thinking mode are explicit and strictly validated', () => {
+  const ollama = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_VISION_URL: 'http://ollama:11434',
+    VLLM_VISION_MODEL: 'qwen3.6:27b',
+    VLLM_VISION_PROVIDER: 'ollama',
+    VLLM_VISION_THINK: 'true',
+  });
+  assert.equal(ollama.vllmVisionProvider, 'ollama');
+  assert.equal(ollama.vllmVisionThink, true);
+  assert.equal(ollama.vllmVisionApiProtocol, 'ollama-native');
+
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_VISION_PROVIDER: 'unknown' }), /VLLM_VISION_PROVIDER/);
+  for (const value of ['1', '0', 'yes', 'no', 'auto']) {
+    assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_VISION_THINK: value }), /VLLM_VISION_THINK/);
+  }
 });
