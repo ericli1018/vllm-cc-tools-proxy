@@ -1,0 +1,35 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+
+const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), 'utf8');
+const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
+
+test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
+  assert.match(compose, /image:\s*node:22-bookworm-slim/);
+  const servicesBlock = compose.split('\nvolumes:\n', 1)[0];
+  assert.equal((servicesBlock.match(/^  [a-zA-Z0-9_-]+:\s*$/gm) || []).length, 1);
+  assert.match(compose, /git clone --depth 1 --branch main/);
+  assert.match(compose, /git -C \"\$\$SOURCE_DIR\" pull --ff-only origin main/);
+  assert.match(compose, /proxy-source:\s*\/workspace\/vllm-cc-tools-proxy/);
+  assert.match(compose, /proxy-npm-cache:\s*\/root\/.npm/);
+  assert.match(compose, /proxy-apt-cache:\s*\/var\/cache\/apt\/archives/);
+  assert.match(compose, /^volumes:\s*\n  proxy-source:\s*\n  proxy-npm-cache:\s*\n  proxy-apt-cache:/m);
+  assert.match(compose, /DEPENDENCY_FINGERPRINT/);
+  assert.doesNotMatch(compose, /(?<!\$)\$SOURCE_DIR/);
+  assert.doesNotMatch(compose, /(?<!\$)\$DEPENDENCY_FINGERPRINT/);
+  assert.match(compose, /npm ci --omit=dev/);
+  assert.match(compose, /node_modules\/.dependency-fingerprint/);
+  assert.doesNotMatch(compose, /rm -rf \/workspace\/vllm-cc-tools-proxy/);
+  assert.doesNotMatch(compose, /bootstrap\.sh/);
+  assert.doesNotMatch(compose, /document-parser:|image-parser:|ocr-service:/);
+});
+
+test('ENV example preserves base and vision vLLM variables', () => {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY']) {
+    assert.match(envExample, new RegExp(`^${name}=`, 'm'));
+  }
+  for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
+    assert.doesNotMatch(envExample, new RegExp(`^${removed}=`, 'm'));
+  }
+});
