@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.8 - 2026-08-06
+
+- Added request-scoped file-aware media progress with safe basename resolution from `source.filename`, block titles, and correlated Claude Code `Read` tool calls.
+- Added page, batch, image and split-document-segment progress formatting without exposing full local paths.
+- Added a visible semantic `content_block_delta` heartbeat, defaulting to 30 seconds, across media processing, Base vLLM header wait and first-model-event wait.
+- Preserved the separate five-second invisible Anthropic `ping` keepalive and stopped semantic heartbeat before forwarding the first upstream content block.
+- Added timeout-aware SSE backpressure handling through `SSE_DRAIN_TIMEOUT_MS`, defaulting to 10 seconds.
+- Preserved `managed_task_progress` with `delivery_status=requested` and added `progress_sse_sent` / `progress_sse_backpressure` diagnostics for confirmed writes.
+- Added Base vLLM lifecycle timing logs for request start, response headers, first content event and stream completion without logging prompt content.
+- Added end-to-end regression coverage for delayed Base vLLM headers, delayed first events, filename display, path privacy and semantic idle-timeout prevention.
+
 ## 0.2.7 - 2026-08-05
 
 - Replaced generic unescaped XML-like media wrappers with a non-XML `VCC_PROXY_EVIDENCE` envelope.

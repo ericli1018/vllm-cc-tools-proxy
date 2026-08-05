@@ -46,19 +46,23 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
   assert.match(compose, /VLLM_VISION_PROVIDER:\s*\$\{VLLM_VISION_PROVIDER:-vllm\}/);
   assert.match(compose, /VLLM_VISION_THINK:\s*\$\{VLLM_VISION_THINK:-false\}/);
+  assert.match(compose, /PROGRESS_HEARTBEAT_MS:\s*\$\{PROGRESS_HEARTBEAT_MS:-30000\}/);
+  assert.match(compose, /SSE_DRAIN_TIMEOUT_MS:\s*\$\{SSE_DRAIN_TIMEOUT_MS:-10000\}/);
+  assert.match(envExample, /^PROGRESS_HEARTBEAT_MS=30000$/m);
+  assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.7', async () => {
+test('package version is V0.2.8', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.7');
-  assert.equal(lock.version, '0.2.7');
-  assert.equal(lock.packages[''].version, '0.2.7');
+  assert.equal(packageJson.version, '0.2.8');
+  assert.equal(lock.version, '0.2.8');
+  assert.equal(lock.packages[''].version, '0.2.8');
 });
 
 
-test('new progress protocol does not generate the V0.2.2 nonce sentinel', async () => {
+test('current progress protocol does not generate the V0.2.2 nonce sentinel', async () => {
   const source = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
   const generatorSection = source.slice(source.indexOf('export class ProgressStream'));
   assert.doesNotMatch(generatorSection, /VLLMCCP:v1:/);

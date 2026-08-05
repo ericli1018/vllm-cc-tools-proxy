@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.7 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.8 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.7 architecture
+## V0.2.8 architecture
 
 ```text
 Claude Code
@@ -284,21 +284,44 @@ A model-generated crop validation failure is returned to the visual model as a b
 
 ## Streaming progress
 
-Managed streaming requests open Anthropic SSE immediately so the connection remains alive, but the proxy does not create a visible progress text block for every request. Invisible `ping` events continue through queueing, PDF/image processing, visual-model calls, base-vLLM time-to-first-token and pauses in the final token stream. A frame-safe multiplexer inserts pings only between complete SSE frames. A visible progress block is created only when the request is actually queued or a managed phase remains active beyond the configured visibility delay. Fast managed requests and cache hits proceed directly to the model result without showing a proxy progress heading or a completion-only message. Verified visible phases include:
+Managed streaming requests open Anthropic SSE immediately. Two heartbeat layers are used:
 
 ```text
-正在解析 PDF…
-已確認 20 頁；正在抽取原生文字…
-已接收 20 頁 PDF；將分成 5 批進行視覺分析…
-正在使用視覺模型分析第 1/5 批頁面…
-視覺模型要求檢視 1 個局部區域…
-視覺模型已完成 20/20 頁…
-文件與圖片內容已就緒；正在交給模型分析…
+PROGRESS_PING_INTERVAL_MS=5000
+  invisible Anthropic event: ping
+  keeps TCP and intermediary connections active
+
+PROGRESS_HEARTBEAT_MS=30000
+  visible Anthropic content_block_delta
+  keeps Claude Code's semantic stream watchdog active
 ```
 
-When progress becomes visible, it is emitted as a dedicated first text block headed `目前處理進度：`. The final transition message is appended only when that block already exists; it never creates a progress block by itself. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy `VLLM-CC-TOOLS-PROXY 進度：` blocks and V0.2.2 sentinel-wrapped history are also cleaned for backward compatibility.
+The visible heartbeat remains active while the proxy is parsing media, waiting for a visual-model response, waiting for Base vLLM response headers, or waiting for the first real Base vLLM content event. It stops before the first upstream thinking, text or tool-use content block is forwarded. Fast managed requests and cache hits still avoid a progress-only block.
 
-After PDF/image preprocessing finishes, the managed slot is released and the final base-vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted as Anthropic SSE after the bounded loop completes.
+File-aware progress uses only a safe basename. When Claude Code includes a `Read` tool call in message history, the proxy associates nested PDF/image blocks with the original `file_path` but never displays the full local path. Examples:
+
+```text
+目前處理進度：
+檔案：GW305_N101_20260519-board.pdf｜圖片 4/15｜狀態：正在使用視覺模型分析圖片…
+檔案：GW305_N101_20260519-board.pdf｜頁面 8/15（53%）｜批次 2/4｜狀態：視覺模型已完成 8/15 頁…
+檔案：GW305_N101_20260519-board.pdf｜處理進度 15/15（100%）｜狀態：文件與圖片內容已就緒；正在交給主模型分析…
+檔案：GW305_N101_20260519-board.pdf｜狀態：主模型仍在處理中，已等待 30 秒…
+```
+
+If filename metadata and the corresponding Read tool call are both unavailable, the proxy falls back to `PDF #N` or `圖片 #N`. Multiple media blocks associated with one Read call are shown as image or document-segment progress instead of unrelated generic messages.
+
+When progress becomes visible, it is emitted as a dedicated first text block headed `目前處理進度：`. No hidden nonce or `VLLMCCP:v1:*` marker is emitted. Before a later request reaches the base vLLM, the proxy removes that dedicated block structurally. Legacy readable progress blocks and V0.2.2 sentinel-wrapped history are also cleaned for backward compatibility.
+
+SSE writes use a bounded drain wait (`SSE_DRAIN_TIMEOUT_MS=10000`). Logs distinguish a requested status from a successfully written text delta through `managed_task_progress (`delivery_status=requested`)` and `progress_sse_sent`. Base vLLM timing logs include request start, response headers, first model content event and stream completion without recording prompt text:
+
+```text
+base_upstream_request_start
+base_upstream_headers_received
+base_upstream_first_event
+base_upstream_stream_completed
+```
+
+After PDF/image preprocessing finishes, the managed slot is released and the final Base vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted after the bounded loop completes.
 
 ## Concurrency and queue
 
@@ -325,6 +348,15 @@ MANAGED_MAX_CONCURRENCY=
 MANAGED_MAX_QUEUE=
 MANAGED_QUEUE_TIMEOUT_MS=
 VISION_MAX_CONCURRENCY=
+```
+
+Streaming progress settings:
+
+```env
+PROGRESS_VISIBLE_AFTER_MS=1500
+PROGRESS_PING_INTERVAL_MS=5000
+PROGRESS_HEARTBEAT_MS=30000
+SSE_DRAIN_TIMEOUT_MS=10000
 ```
 
 Queue behavior:
@@ -386,9 +418,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools, frame-safe Anthropic SSE keepalive, structured-evidence escaping, contaminated-thinking sanitation, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools, file-aware progress, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.7 limits
+## V0.2.8 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

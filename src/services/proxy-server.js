@@ -14,6 +14,7 @@ import { sanitizeProtocolHistory } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
+import { createMediaProgressTracker } from '../proxy/media-progress.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -69,8 +70,40 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function streamManagedBase(progress, request, config, incomingHeaders, signal, onDiagnostic = () => {}) {
-  const upstream = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal);
+function evidenceByteLength(value) {
+  let total = 0;
+  const walk = (item) => {
+    if (typeof item === 'string') {
+      if (item.includes('[VCC_PROXY_EVIDENCE_BEGIN')) total += Buffer.byteLength(item);
+      return;
+    }
+    if (Array.isArray(item)) {
+      for (const entry of item) walk(entry);
+      return;
+    }
+    if (!item || typeof item !== 'object') return;
+    for (const entry of Object.values(item)) walk(entry);
+  };
+  walk(value);
+  return total;
+}
+
+async function streamManagedBase(progress, request, config, incomingHeaders, signal, {
+  onDiagnostic = () => {}, onLifecycle = () => {},
+} = {}) {
+  const outbound = { ...request, stream: true };
+  const requestStartedAt = Date.now();
+  await onLifecycle('base_upstream_request_start', {
+    request_bytes: Buffer.byteLength(JSON.stringify(outbound)),
+    message_count: Array.isArray(outbound.messages) ? outbound.messages.length : 0,
+    evidence_bytes: evidenceByteLength(outbound.messages),
+  });
+  const upstream = await fetchUpstream(outbound, config, incomingHeaders, signal);
+  const headersReceivedAt = Date.now();
+  await onLifecycle('base_upstream_headers_received', {
+    status: upstream.status,
+    header_wait_ms: headersReceivedAt - requestStartedAt,
+  });
   if (!upstream.ok) {
     const text = await upstream.text();
     throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, text || 'vLLM rejected the request.', {
@@ -83,7 +116,19 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
       code: 'vllm_invalid_stream', retryable: true, details: text.slice(0, 1000),
     });
   }
-  await pipeAnthropicUpstreamStream(progress, upstream, { onDiagnostic });
+  await pipeAnthropicUpstreamStream(progress, upstream, {
+    onDiagnostic,
+    onFirstEvent: async ({ event, type }) => onLifecycle('base_upstream_first_event', {
+      upstream_event: event,
+      upstream_type: type,
+      first_event_wait_ms: Date.now() - requestStartedAt,
+      first_event_after_headers_ms: Date.now() - headersReceivedAt,
+    }),
+    onComplete: async ({ firstModelEventObserved } = {}) => onLifecycle('base_upstream_stream_completed', {
+      total_stream_ms: Date.now() - requestStartedAt,
+      first_model_event_observed: Boolean(firstModelEventObserved),
+    }),
+  });
 }
 
 async function streamTransformedBase(request, res, config, incomingHeaders, signal, path = '/v1/messages') {
@@ -127,7 +172,12 @@ function canonicalMessagesPath(pathname) {
 function log(config, level, event, fields = {}) {
   const ranks = { debug: 10, info: 20, warn: 30, error: 40 };
   if ((ranks[level] || 20) < (ranks[config.logLevel] || 20)) return;
-  process.stderr.write(`${JSON.stringify({ timestamp: new Date().toISOString(), level, event, ...fields })}\n`);
+  const entry = { timestamp: new Date().toISOString(), level, event, ...fields };
+  if (typeof config.logSink === 'function') {
+    config.logSink(entry);
+    return;
+  }
+  process.stderr.write(`${JSON.stringify(entry)}\n`);
 }
 
 function defaultConcurrency(config) {
@@ -148,6 +198,7 @@ export function createProxyServer(config, dependencies = {}) {
     let releaseManaged = null;
     let releaseIngress = null;
     let preparedMedia = null;
+    let mediaProgress = null;
     const url = new URL(req.url || '/', 'http://localhost');
 
     res.on('close', () => {
@@ -186,7 +237,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.7', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.8', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -282,6 +333,7 @@ export function createProxyServer(config, dependencies = {}) {
           },
         });
         request.messages = preparedMedia.messages;
+        mediaProgress = createMediaProgressTracker(request.messages);
         for (const entry of preparedMedia.mediaEntries) {
           const cached = await mediaCache.get(entry.key);
           if (cached?.block) {
@@ -304,6 +356,7 @@ export function createProxyServer(config, dependencies = {}) {
         ...(dependencies.mediaAdapterDependencies || {}),
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
         onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+        mediaProgress,
       };
 
       if (!needsManagedWork) {
@@ -334,14 +387,42 @@ export function createProxyServer(config, dependencies = {}) {
         progress = new ProgressStream(res, {
           model: request.model || 'vllm',
           pingIntervalMs: config.progressPingIntervalMs,
+          heartbeatIntervalMs: config.progressHeartbeatMs,
+          drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
+          onWrite: (entry) => {
+            if (entry.backpressure) {
+              log(config, 'warn', 'progress_sse_backpressure', {
+                requestId,
+                kind: entry.kind,
+                phase: entry.phase,
+                sequence: entry.sequence,
+                bytes: entry.bytes,
+                waited_ms: entry.waitedMs,
+              });
+            }
+            if (['progress_delta', 'semantic_heartbeat'].includes(entry.kind)) {
+              log(config, 'info', 'progress_sse_sent', {
+                requestId,
+                kind: entry.kind,
+                phase: entry.phase,
+                sequence: entry.sequence,
+                bytes: entry.bytes,
+                writable_length: res.writableLength || 0,
+              });
+            }
+          },
         });
         await progress.open();
+        const semanticHeartbeatStartedAt = Date.now();
+        progress.startSemanticHeartbeat(() => mediaProgress?.renderHeartbeat()
+          || `目前任務｜狀態：仍在處理中，已等待 ${Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000)} 秒…`);
       }
 
       const onProgress = async (message, details = {}) => {
-        log(config, 'info', 'managed_task_progress', { requestId, message, ...details });
-        await progress?.update(message);
+        const rendered = mediaProgress?.render(message, details) || message;
+        log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...details });
+        await progress?.update(rendered, { details });
       };
 
       if (hasMedia && !allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
@@ -356,11 +437,11 @@ export function createProxyServer(config, dependencies = {}) {
         signal: abortController.signal,
         onPosition: (position) => {
           log(config, 'info', 'managed_job_enqueued', { requestId, position, queued: admission.health().managed.queued });
-          progress?.update(`任務正在排隊，目前前方有 ${position} 個任務…`, { force: true }).catch(() => {});
+          progress?.update(`任務正在排隊，目前前方有 ${position} 個任務…`, { force: true, details: { phase: 'queue_wait' } }).catch(() => {});
         },
       });
       if (beforeAcquire.active >= beforeAcquire.limit) {
-        await progress?.update('任務已開始處理…', { force: true });
+        await progress?.update('任務已開始處理…', { force: true, details: { phase: 'queue_admitted' } });
       }
       log(config, 'info', 'managed_job_admitted', { requestId, queue_wait_ms: Date.now() - queuedAt });
 
@@ -369,7 +450,10 @@ export function createProxyServer(config, dependencies = {}) {
         request.messages = await adaptMessages(request.messages, adapters);
         request = injectEvidenceContract(request);
         await preparedMedia.cleanup(); preparedMedia = null;
-        await onProgress('文件與圖片內容已就緒；正在交給模型分析…', { phase: 'media_ready' });
+        const readyMessage = mediaProgress?.renderMediaReady()
+          || '文件與圖片內容已就緒；正在交給主模型分析…';
+        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
+        await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
       }
 
       if (messagesPath === '/v1/messages/count_tokens') {
@@ -394,8 +478,10 @@ export function createProxyServer(config, dependencies = {}) {
       } else {
         releaseManaged(); releaseManaged = null;
         if (request.stream === true) {
-          await streamManagedBase(progress, request, config, req.headers, abortController.signal,
-            (event, fields) => log(config, 'warn', event, { requestId, ...fields }));
+          await streamManagedBase(progress, request, config, req.headers, abortController.signal, {
+            onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+            onLifecycle: (event, fields) => log(config, 'info', event, { requestId, ...fields }),
+          });
         } else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
       }
 

@@ -1,5 +1,3 @@
-import { once } from 'node:events';
-
 export class HttpError extends Error {
   constructor(status, message, { code = 'request_error', retryable = false, details } = {}) {
     super(message);
@@ -65,8 +63,43 @@ export function sendError(res, error) {
   });
 }
 
-export async function writeChunk(res, chunk) {
-  if (!res.write(chunk)) await once(res, 'drain');
+export async function writeChunk(res, chunk, { drainTimeoutMs = 0 } = {}) {
+  if (res.destroyed || res.writableEnded) {
+    throw new HttpError(499, 'SSE client connection is closed.', { code: 'sse_connection_closed' });
+  }
+  const bytes = Buffer.isBuffer(chunk) || chunk instanceof Uint8Array
+    ? chunk.byteLength
+    : Buffer.byteLength(String(chunk));
+  const startedAt = Date.now();
+  if (res.write(chunk)) return { bytes, backpressure: false, waitedMs: 0 };
+
+  await new Promise((resolve, reject) => {
+    let timer = null;
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      res.off?.('drain', onDrain);
+      res.off?.('close', onClose);
+      res.off?.('error', onError);
+    };
+    const onDrain = () => { cleanup(); resolve(); };
+    const onClose = () => {
+      cleanup();
+      reject(new HttpError(499, 'SSE client disconnected while waiting for drain.', { code: 'sse_connection_closed' }));
+    };
+    const onError = (error) => { cleanup(); reject(error); };
+    res.once('drain', onDrain);
+    res.once('close', onClose);
+    res.once('error', onError);
+    if (drainTimeoutMs > 0) {
+      timer = setTimeout(() => {
+        cleanup();
+        reject(new HttpError(504, 'SSE write backpressure did not drain in time.', {
+          code: 'sse_drain_timeout', retryable: true,
+        }));
+      }, drainTimeoutMs);
+    }
+  });
+  return { bytes, backpressure: true, waitedMs: Date.now() - startedAt };
 }
 
 export function requestUrl(req, base = 'http://localhost') {

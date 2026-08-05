@@ -27,3 +27,26 @@ test('readJsonBody rejects oversized bodies as 413', async () => {
     (error) => error instanceof HttpError && error.status === 413,
   );
 });
+
+import { EventEmitter } from 'node:events';
+import { writeChunk } from '../src/lib/http.js';
+
+test('writeChunk times out when backpressure never drains', async () => {
+  class BlockedResponse extends EventEmitter {
+    write() { return false; }
+  }
+  await assert.rejects(
+    writeChunk(new BlockedResponse(), 'chunk', { drainTimeoutMs: 10 }),
+    (error) => error instanceof HttpError && error.code === 'sse_drain_timeout',
+  );
+});
+
+test('writeChunk returns bytes and backpressure timing after drain', async () => {
+  class DrainingResponse extends EventEmitter {
+    write() { setTimeout(() => this.emit('drain'), 5); return false; }
+  }
+  const result = await writeChunk(new DrainingResponse(), 'abc', { drainTimeoutMs: 100 });
+  assert.equal(result.bytes, 3);
+  assert.equal(result.backpressure, true);
+  assert.ok(result.waitedMs >= 0);
+});

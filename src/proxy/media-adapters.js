@@ -20,6 +20,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const preloadedCache = dependencies.preloadedCache || new Map();
   const onCacheEvent = dependencies.onCacheEvent || (() => {});
   const onDiagnostic = dependencies.onDiagnostic || (() => {});
+  const mediaProgress = dependencies.mediaProgress || null;
   const { maxDecodedBytes, maxOutputChars } = config.limits;
 
   const diagnoseSourceControlTags = (value) => {
@@ -92,11 +93,13 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   return {
     async adaptDocument(block, context = {}) {
       const key = block.source.cache_key || '';
+      const tracked = mediaProgress?.contextForPath(context.path);
+      const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'document.pdf';
+      const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       return cachedAnalysis(key, () => readSource(block.source, 'application/pdf'), async (analysisSignal, buffer) => {
-        const filename = block.source.filename || block.title || context.filename || 'document.pdf';
-        await onProgress('正在解析 PDF…', { phase: 'pdf_start', path: context.path });
+        await reportProgress('正在解析 PDF…', { phase: 'pdf_start' });
         const result = await parsePdf(buffer, {
-          limits: config.limits, signal: analysisSignal, onProgress,
+          limits: config.limits, signal: analysisSignal, onProgress: reportProgress,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
           vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
@@ -132,19 +135,23 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
 
     async adaptImage(block, context = {}) {
       const key = block.source.cache_key || '';
+      const tracked = mediaProgress?.contextForPath(context.path);
+      const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'image';
+      const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       return cachedAnalysis(key, () => readSource(block.source, block.source.media_type), async (analysisSignal, sourceBuffer) => {
         const mediaType = block.source.media_type;
-        await onProgress('正在準備圖片…', { phase: 'image_start', path: context.path });
+        await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal: analysisSignal });
         const registry = new VisualAssetRegistry();
-        const asset = registry.add({ ...normalized, label: context.filename || 'Claude Code image' });
-        await onProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision', path: context.path });
+        const asset = registry.add({ ...normalized, label: filename || 'Claude Code image' });
+        await reportProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision' });
         const result = await analyzeWithAdmission([asset], {
           baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
           provider: config.vllmVisionProvider, think: config.vllmVisionThink,
-          registry, signal: analysisSignal, onProgress,
+          registry, signal: analysisSignal, onProgress: reportProgress,
           cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
         });
+        await reportProgress('圖片分析已完成。', { phase: 'image_complete', completed: 1, total: 1 });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
         const warnings = [...(result.warnings || []), ...(bounded.truncated ? ['proxy_output_char_limit'] : [])];
         diagnoseSourceControlTags(bounded.text);

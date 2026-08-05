@@ -81,21 +81,36 @@ function event(name, data) {
 }
 
 export class ProgressStream {
-  constructor(res, { model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId } = {}) {
+  constructor(res, {
+    model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, onWrite = () => {},
+  } = {}) {
     this.res = res;
     this.model = model;
     this.messageId = messageId || `msg_proxy_${crypto.randomUUID().replaceAll('-', '')}`;
     this.visibleAfterMs = visibleAfterMs;
+    this.heartbeatIntervalMs = heartbeatIntervalMs;
+    this.drainTimeoutMs = drainTimeoutMs;
+    this.onWrite = onWrite;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
     this.progressClosed = false;
     this.lastMessage = '';
     this.queue = Promise.resolve();
+    this.sequence = 0;
+    this.semanticHeartbeatTimer = null;
     this.pingTimer = setInterval(() => {
-      this.writeRaw(event('ping', { type: 'ping' })).catch(() => {});
+      this.writeRaw(event('ping', { type: 'ping' }), { kind: 'ping' }).catch(() => {});
     }, pingIntervalMs);
     this.pingTimer.unref?.();
+  }
+
+  async #write(chunk, metadata = {}) {
+    const result = await writeChunk(this.res, chunk, { drainTimeoutMs: this.drainTimeoutMs });
+    this.sequence += 1;
+    try { await this.onWrite({ sequence: this.sequence, ...metadata, ...result }); } catch {}
+    return result;
   }
 
   async open() {
@@ -105,7 +120,7 @@ export class ProgressStream {
       connection: 'keep-alive',
       'x-accel-buffering': 'no',
     });
-    await writeChunk(this.res, event('message_start', {
+    await this.#write(event('message_start', {
       type: 'message_start',
       message: {
         id: this.messageId,
@@ -117,8 +132,8 @@ export class ProgressStream {
         stop_sequence: null,
         usage: { input_tokens: 0, output_tokens: 0 },
       },
-    }));
-    await writeChunk(this.res, event('ping', { type: 'ping' }));
+    }), { kind: 'message_start' });
+    await this.#write(event('ping', { type: 'ping' }), { kind: 'ping' });
   }
 
   #enqueue(operation) {
@@ -126,9 +141,9 @@ export class ProgressStream {
     return this.queue;
   }
 
-  writeRaw(chunk) {
+  writeRaw(chunk, metadata = {}) {
     if (this.closed) return Promise.resolve();
-    return this.#enqueue(() => writeChunk(this.res, chunk));
+    return this.#enqueue(() => this.#write(chunk, { kind: 'upstream', ...metadata }));
   }
 
   stopKeepalive() {
@@ -137,45 +152,68 @@ export class ProgressStream {
     this.pingTimer = null;
   }
 
-  async update(message, { force = false } = {}) {
-    if (this.closed || !message || message === this.lastMessage) return;
+  startSemanticHeartbeat(messageFactory) {
+    if (this.semanticHeartbeatTimer || this.progressClosed || this.closed || typeof messageFactory !== 'function') return;
+    this.semanticHeartbeatTimer = setInterval(() => {
+      let message = '';
+      try { message = messageFactory(); } catch { return; }
+      this.update(message, {
+        force: true,
+        kind: 'semantic_heartbeat',
+        details: { phase: 'semantic_heartbeat' },
+      }).catch(() => {});
+    }, this.heartbeatIntervalMs);
+    this.semanticHeartbeatTimer.unref?.();
+  }
+
+  stopSemanticHeartbeat() {
+    if (!this.semanticHeartbeatTimer) return;
+    clearInterval(this.semanticHeartbeatTimer);
+    this.semanticHeartbeatTimer = null;
+  }
+
+  async update(message, { force = false, kind = 'progress_delta', details = {} } = {}) {
+    if (this.closed || this.progressClosed || !message || message === this.lastMessage) return;
     if (!force && !this.visible && Date.now() - this.startedAt < this.visibleAfterMs) return;
     this.lastMessage = message;
     await this.#enqueue(async () => {
       if (!this.visible) {
         this.visible = true;
-        await writeChunk(this.res, event('content_block_start', {
+        await this.#write(event('content_block_start', {
           type: 'content_block_start',
           index: 0,
           content_block: { type: 'text', text: '' },
-        }));
-        await writeChunk(this.res, event('content_block_delta', {
+        }), { kind: 'progress_block_start', phase: details.phase });
+        await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
           delta: { type: 'text_delta', text: `${PROGRESS_BLOCK_HEADER}\n${message}` },
-        }));
+        }), { kind, phase: details.phase });
       } else {
-        await writeChunk(this.res, event('content_block_delta', {
+        await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
           delta: { type: 'text_delta', text: `\n${message}` },
-        }));
+        }), { kind, phase: details.phase });
       }
     });
   }
 
   async closeProgress(finalMessage = '') {
     if (this.progressClosed) return;
+    this.stopSemanticHeartbeat();
+    if (finalMessage && this.visible) await this.update(finalMessage, { force: true, details: { phase: 'progress_close' } });
     this.progressClosed = true;
-    if (finalMessage && this.visible) await this.update(finalMessage);
     await this.#enqueue(async () => {
       if (this.visible) {
-        await writeChunk(this.res, event('content_block_delta', {
+        await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
           delta: { type: 'text_delta', text: '\n\n' },
-        }));
-        await writeChunk(this.res, event('content_block_stop', { type: 'content_block_stop', index: 0 }));
+        }), { kind: 'progress_close_delta', phase: 'progress_close' });
+        await this.#write(event('content_block_stop', { type: 'content_block_stop', index: 0 }), {
+          kind: 'progress_block_stop', phase: 'progress_close',
+        });
       }
     });
   }
@@ -183,6 +221,7 @@ export class ProgressStream {
   async stop() {
     this.closed = true;
     this.stopKeepalive();
+    this.stopSemanticHeartbeat();
     await this.queue;
   }
 }

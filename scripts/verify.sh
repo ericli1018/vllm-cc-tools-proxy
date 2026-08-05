@@ -39,6 +39,13 @@ grep -Fq 'VLLM_VISION_PROVIDER: ${VLLM_VISION_PROVIDER:-vllm}' compose.yaml
 grep -Fq 'VLLM_VISION_THINK: ${VLLM_VISION_THINK:-false}' compose.yaml
 grep -q '^VLLM_VISION_PROVIDER=vllm$' .env.example
 grep -q '^VLLM_VISION_THINK=false$' .env.example
+grep -q '^PROGRESS_HEARTBEAT_MS=30000$' .env.example
+grep -q '^SSE_DRAIN_TIMEOUT_MS=10000$' .env.example
+grep -Fq 'PROGRESS_HEARTBEAT_MS: ${PROGRESS_HEARTBEAT_MS:-30000}' compose.yaml
+grep -Fq 'SSE_DRAIN_TIMEOUT_MS: ${SSE_DRAIN_TIMEOUT_MS:-10000}' compose.yaml
+test -f src/proxy/media-progress.js
+grep -Fq 'base_upstream_first_event' src/services/proxy-server.js
+grep -Fq 'progress_sse_sent' src/services/proxy-server.js
 
 grep -Fq "export const PROGRESS_BLOCK_HEADER = '目前處理進度：';" src/proxy/progress.js
 node - <<'NODE'
@@ -47,7 +54,7 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.7'
+test "$(node -p "require('./package.json').version")" = '0.2.8'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js

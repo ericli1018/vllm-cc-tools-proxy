@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.7, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.8, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.7', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.8', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -566,4 +566,67 @@ test('plain request with contaminated assistant thinking is sanitized instead of
   assert.match(thinking, /&lt;arg_key&gt;/);
   assert.equal('signature' in observed.messages[0].content[0], false);
   assert.match(observed.messages[0].content[1].text, /prior visible output/);
+});
+
+test('streamed media progress shows filename and semantic heartbeats across delayed Base vLLM TTFT', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const lifecycle = [];
+  const base = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.stream, true);
+    setTimeout(() => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+    }, 45);
+    setTimeout(() => {
+      res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+      res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FINAL"}}\n\n');
+      res.end('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+    }, 95);
+  });
+  const baseUrl = await listen(base);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: baseUrl,
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision-model',
+    progressHeartbeatMs: 20,
+    progressPingIntervalMs: 60_000,
+    sseDrainTimeoutMs: 1000,
+    logLevel: 'debug',
+    logSink: (entry) => lifecycle.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 10, height: 10, warnings: [] }),
+      analyzeVisualAssets: async (_assets, options) => {
+        await options.onProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision' });
+        return { markdown: 'IMAGE', cropCount: 0, warnings: [] };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.close()); t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      messages: [{ role: 'user', content: [{
+        type: 'image', source: {
+          type: 'base64', media_type: 'image/png', data: png.toString('base64'),
+          filename: '/home/master/workspace-claude/GW305_N101_20260519-board.pdf',
+        },
+      }] }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
+  assert.match(stream, /圖片 1\/1/);
+  assert.match(stream, /主模型仍在處理中/);
+  assert.match(stream, /FINAL/);
+  assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
+  for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
+    assert.ok(lifecycle.some((entry) => entry.event === event), `missing ${event}`);
+  }
+  assert.ok(lifecycle.some((entry) => entry.event === 'managed_task_progress' && entry.delivery_status === 'requested'));
+  assert.ok(lifecycle.some((entry) => entry.event === 'progress_sse_sent' && entry.kind === 'semantic_heartbeat'));
 });

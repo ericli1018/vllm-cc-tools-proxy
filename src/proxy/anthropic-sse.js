@@ -107,12 +107,18 @@ function shiftEventIndex(payload, offset) {
   return payload;
 }
 
-export async function pipeAnthropicUpstreamStream(progress, upstream, { onDiagnostic = () => {} } = {}) {
-  await progress.closeProgress('文件與圖片處理完成；正在串流主模型結果…');
-  const offset = progress.visible ? 1 : 0;
+export async function pipeAnthropicUpstreamStream(progress, upstream, {
+  onDiagnostic = () => {}, onFirstEvent = () => {}, onComplete = () => {},
+} = {}) {
+  let offset = 0;
+  let progressClosedForModel = false;
+  let firstModelEventObserved = false;
   if (!upstream.body) {
+    progress.stopSemanticHeartbeat?.();
+    await progress.closeProgress();
     progress.stopKeepalive();
     await progress.stop();
+    await onComplete();
     progress.res.end();
     return;
   }
@@ -136,23 +142,41 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, { onDiagno
     }
     diagnosticTail = combined.slice(-256);
   };
+  const closeProgressForModel = async () => {
+    if (progressClosedForModel) return;
+    progress.stopSemanticHeartbeat?.();
+    await progress.closeProgress('主模型已開始回傳結果…');
+    progressClosedForModel = true;
+    offset = progress.visible ? 1 : 0;
+  };
   const processBlock = async (block) => {
     if (!block.trim()) return;
     const parsed = parseSseBlock(block);
     if (parsed.name === 'message_start') return;
-    if (parsed.name === 'message_stop') progress.stopKeepalive();
     let data = parsed.data;
+    let payload = null;
     if (data) {
-      try {
-        const payload = JSON.parse(data);
-        if (payload?.type === 'content_block_delta') {
-          if (payload.delta?.type === 'thinking_delta') observeControlTags(payload.delta.thinking, 'thinking');
-          if (payload.delta?.type === 'text_delta') observeControlTags(payload.delta.text, 'text');
-        }
-        data = JSON.stringify(shiftEventIndex(payload, offset));
-      } catch {}
+      try { payload = JSON.parse(data); } catch {}
     }
-    await progress.writeRaw(`${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`);
+    const meaningful = parsed.name === 'content_block_start' || parsed.name === 'content_block_delta';
+    if (meaningful && !firstModelEventObserved) {
+      firstModelEventObserved = true;
+      await closeProgressForModel();
+      await onFirstEvent({ event: parsed.name, type: payload?.type || '' });
+    }
+    if (parsed.name === 'message_stop' && !progressClosedForModel) await closeProgressForModel();
+    if (parsed.name === 'message_stop') progress.stopKeepalive();
+
+    if (payload) {
+      if (payload?.type === 'content_block_delta') {
+        if (payload.delta?.type === 'thinking_delta') observeControlTags(payload.delta.thinking, 'thinking');
+        if (payload.delta?.type === 'text_delta') observeControlTags(payload.delta.text, 'text');
+      }
+      data = JSON.stringify(shiftEventIndex(payload, offset));
+    }
+    await progress.writeRaw(`${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`, {
+      kind: 'upstream_event', upstreamEvent: parsed.name,
+    });
   };
 
   for await (const chunk of upstream.body) {
@@ -167,6 +191,7 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, { onDiagno
   }
   buffer += decoder.decode();
   if (buffer.trim()) await processBlock(buffer);
+  if (!progressClosedForModel) await closeProgressForModel();
   if (diagnosticTagCount > 0) {
     await onDiagnostic('base_generation_control_tags_detected', {
       tagCount: diagnosticTagCount,
@@ -176,5 +201,6 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, { onDiagno
   }
   progress.stopKeepalive();
   await progress.stop();
+  await onComplete({ firstModelEventObserved });
   progress.res.end();
 }

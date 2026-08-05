@@ -122,7 +122,8 @@ export function loadConfig(env = process.env) {
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),
-    progressHeartbeatMs: intValue(env.PROGRESS_HEARTBEAT_MS, 15000, 'PROGRESS_HEARTBEAT_MS', { min: 5000 }),
+    progressHeartbeatMs: intValue(env.PROGRESS_HEARTBEAT_MS, 30000, 'PROGRESS_HEARTBEAT_MS', { min: 5000 }),
+    sseDrainTimeoutMs: intValue(env.SSE_DRAIN_TIMEOUT_MS, 10000, 'SSE_DRAIN_TIMEOUT_MS', { min: 1000, max: 300000 }),
     gitRevision: env.GIT_REVISION || 'unknown',
   });
 }

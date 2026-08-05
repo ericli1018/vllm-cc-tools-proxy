@@ -120,3 +120,17 @@ test('visual provider and thinking mode are explicit and strictly validated', ()
     assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_VISION_THINK: value }), /VLLM_VISION_THINK/);
   }
 });
+
+test('semantic heartbeat and SSE drain timeout have bounded defaults and overrides', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(defaults.progressHeartbeatMs, 30000);
+  assert.equal(defaults.sseDrainTimeoutMs, 10000);
+  const custom = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    PROGRESS_HEARTBEAT_MS: '45000',
+    SSE_DRAIN_TIMEOUT_MS: '20000',
+  });
+  assert.equal(custom.progressHeartbeatMs, 45000);
+  assert.equal(custom.sseDrainTimeoutMs, 20000);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', SSE_DRAIN_TIMEOUT_MS: '999' }), /SSE_DRAIN_TIMEOUT_MS/);
+});
