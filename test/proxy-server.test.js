@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 import { once } from 'node:events';
 import { createProxyServer } from '../src/services/proxy-server.js';
 
@@ -20,15 +22,16 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.4 and admission state', async (t) => {
+test('proxy health endpoint reports V0.2.5, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.4', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.5', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
+    cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
   });
 });
 
@@ -38,6 +41,19 @@ test('HEAD root is handled locally as Claude Code startup probe', async (t) => {
   const response = await fetch(`${url}/`, { method: 'HEAD' });
   assert.equal(response.status, 204);
   assert.equal(await response.text(), '');
+});
+
+test('Claude Code hello probes are handled locally without contacting base vLLM', async (t) => {
+  const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
+  const url = await listen(server); t.after(() => server.close());
+
+  const head = await fetch(`${url}/api/hello`, { method: 'HEAD' });
+  assert.equal(head.status, 200);
+  assert.equal(await head.text(), '');
+
+  const get = await fetch(`${url}/api/hello/`);
+  assert.equal(get.status, 200);
+  assert.deepEqual(await get.json(), { message: 'hello' });
 });
 
 test('unknown endpoints bypass transparently to base vLLM', async (t) => {
@@ -89,6 +105,59 @@ test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', 
   const serialized = JSON.stringify(upstreamBodies[0]);
   assert.match(serialized, /Native PDF text page/);
   assert.equal(serialized.includes(base64), false);
+});
+
+test('historical PDF is analyzed once then served from cache without a second progress block', async (t) => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-proxy-cache-'));
+  t.after(() => fs.rm(cacheRoot, { recursive: true, force: true }));
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const base64 = pdf.toString('base64');
+  let parses = 0;
+  let upstreamCalls = 0;
+  const vllm = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamCalls += 1;
+    assert.match(JSON.stringify(payload), /CACHED PDF MARKDOWN/);
+    assert.equal(JSON.stringify(payload).includes(base64), false);
+    if (payload.stream) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"SECOND"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+    } else {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id:'first',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FIRST'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+    }
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    cache: { rootDir: cacheRoot, maxBytes: 0, retentionMs: 60_000, pipelineVersion: 'media-v3', visualPromptVersion: 'visual-v2' },
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async () => {
+        parses += 1;
+        return { parser:'test',page_count:1,processed_pages:1,visual_used:false,markdown:'CACHED PDF MARKDOWN',warnings:[],truncated:false };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close()); t.after(() => proxy.close());
+  const messages = [{ role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}}] }];
+
+  const first = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({model:'m',stream:false,messages}) });
+  assert.equal(first.status, 200);
+  assert.equal((await first.json()).content[0].text, 'FIRST');
+  const cacheFiles = (await fs.readdir(cacheRoot)).filter((name) => name.endsWith('.json'));
+  assert.equal(cacheFiles.length, 1);
+  const cacheText = await fs.readFile(path.join(cacheRoot, cacheFiles[0]), 'utf8');
+  assert.equal(cacheText.includes(base64), false);
+  assert.match(cacheText, /CACHED PDF MARKDOWN/);
+
+  const second = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({model:'m',stream:true,messages:[...messages,{role:'assistant',content:[{type:'text',text:'FIRST'}]},{role:'user',content:'write it'}]}) });
+  const stream = await second.text();
+  assert.match(stream, /SECOND/);
+  assert.doesNotMatch(stream, /VLLM-CC-TOOLS-PROXY 進度/);
+  assert.equal(parses, 1);
+  assert.equal(upstreamCalls, 2);
 });
 
 test('streamed managed request emits progress and final Anthropic blocks', async (t) => {

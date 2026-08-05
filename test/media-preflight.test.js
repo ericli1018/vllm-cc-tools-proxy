@@ -17,11 +17,27 @@ test('media preflight replaces nested Base64 with request-scoped file handles', 
   assert.equal(source.type, 'proxy_file');
   assert.equal(source.media_type, 'image/png');
   assert.equal(typeof source.path, 'string');
+  assert.match(source.cache_key, /^[a-f0-9]{64}$/);
+  assert.match(source.media_sha256, /^[a-f0-9]{64}$/);
   assert.equal('data' in source, false);
   assert.equal(prepared.allowedPaths.has(source.path), true);
   assert.deepEqual(await fs.readFile(source.path), png);
   await prepared.cleanup();
   await assert.rejects(fs.stat(prepared.root), /ENOENT/);
+});
+
+test('media preflight deduplicates identical media within one request', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const block = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } };
+  const messages = [{ role: 'user', content: [structuredClone(block), structuredClone(block)] }];
+  const prepared = await prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 }, {
+    cacheKeyContext: { pipelineVersion: 'media-v3', visualPromptVersion: 'visual-v2', visionModel: 'vision', resourceProfile: 'default' },
+  });
+  const [first, second] = prepared.messages[0].content.map((item) => item.source);
+  assert.equal(first.cache_key, second.cache_key);
+  assert.equal(first.path, second.path);
+  assert.equal(prepared.mediaEntries.length, 1);
+  await prepared.cleanup();
 });
 
 test('media adapter reads only handles created by the current preflight', async () => {

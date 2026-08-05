@@ -81,7 +81,7 @@ export class ProgressStream {
     this.lastMessage = '';
     this.queue = Promise.resolve();
     this.pingTimer = setInterval(() => {
-      this.#enqueue(() => writeChunk(this.res, event('ping', { type: 'ping' }))).catch(() => {});
+      this.writeRaw(event('ping', { type: 'ping' })).catch(() => {});
     }, pingIntervalMs);
     this.pingTimer.unref?.();
   }
@@ -112,6 +112,17 @@ export class ProgressStream {
   #enqueue(operation) {
     this.queue = this.queue.then(operation);
     return this.queue;
+  }
+
+  writeRaw(chunk) {
+    if (this.closed) return Promise.resolve();
+    return this.#enqueue(() => writeChunk(this.res, chunk));
+  }
+
+  stopKeepalive() {
+    if (!this.pingTimer) return;
+    clearInterval(this.pingTimer);
+    this.pingTimer = null;
   }
 
   async update(message, { force = false } = {}) {
@@ -159,7 +170,7 @@ export class ProgressStream {
 
   async stop() {
     this.closed = true;
-    clearInterval(this.pingTimer);
+    this.stopKeepalive();
     await this.queue;
   }
 }

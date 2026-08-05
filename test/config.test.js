@@ -69,3 +69,29 @@ test('invalid concurrency profile and bounds are rejected', () => {
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_MAX_QUEUE: '-1' }), /MANAGED_MAX_QUEUE/);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VISION_MAX_CONCURRENCY: '0' }), /VISION_MAX_CONCURRENCY/);
 });
+
+test('media cache uses resource-profile defaults when no explicit capacity is set', () => {
+  const small = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', RESOURCE_PROFILE: 'small' });
+  const normal = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  const large = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', RESOURCE_PROFILE: 'large' });
+  assert.equal(small.cache.maxBytes, 512 * 1024 * 1024);
+  assert.equal(small.cache.retentionMs, 3 * 24 * 60 * 60 * 1000);
+  assert.equal(normal.cache.maxBytes, 2048 * 1024 * 1024);
+  assert.equal(normal.cache.retentionMs, 7 * 24 * 60 * 60 * 1000);
+  assert.equal(large.cache.maxBytes, 10240 * 1024 * 1024);
+  assert.equal(large.cache.retentionMs, 30 * 24 * 60 * 60 * 1000);
+});
+
+test('MEDIA_CACHE_MAX_MB zero selects filesystem-limited mode and positive values use MiB', () => {
+  const unlimited = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: '0' });
+  const bounded = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: '4096' });
+  assert.equal(unlimited.cache.maxBytes, 0);
+  assert.equal(unlimited.cache.limitMode, 'filesystem');
+  assert.equal(bounded.cache.maxBytes, 4096 * 1024 * 1024);
+  assert.equal(bounded.cache.limitMode, 'bounded');
+});
+
+test('invalid media cache capacity is rejected', () => {
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: '-1' }), /MEDIA_CACHE_MAX_MB/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_CACHE_MAX_MB: 'abc' }), /MEDIA_CACHE_MAX_MB/);
+});

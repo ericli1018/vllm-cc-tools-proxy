@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { HttpError, readBody, sendError, sendJson } from '../lib/http.js';
+import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
 import { hasProgressHistory, stripProgressHistory, ProgressStream } from '../proxy/progress.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
@@ -10,6 +10,8 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
+import { MediaCache } from '../cache/media-cache.js';
+import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -82,6 +84,27 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
   await pipeAnthropicUpstreamStream(progress, upstream);
 }
 
+async function streamTransformedBase(request, res, config, incomingHeaders, signal, path = '/v1/messages') {
+  const upstream = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path);
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, text || 'vLLM rejected the request.', {
+      code: 'vllm_request_failed', retryable: upstream.status >= 500,
+    });
+  }
+  const contentType = upstream.headers.get('content-type') || 'text/event-stream; charset=utf-8';
+  res.writeHead(upstream.status, {
+    'content-type': contentType,
+    'cache-control': upstream.headers.get('cache-control') || 'no-cache',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  if (upstream.body) {
+    for await (const chunk of upstream.body) await writeChunk(res, chunk);
+  }
+  res.end();
+}
+
 function parseJson(rawBody) {
   if (!rawBody.length) return null;
   try { return JSON.parse(rawBody.toString('utf8')); } catch { return null; }
@@ -111,6 +134,9 @@ function defaultConcurrency(config) {
 
 export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
+  const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
+  const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
+  const cacheReady = mediaCache.initialize();
 
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
@@ -138,13 +164,30 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      if (['GET', 'HEAD'].includes(req.method) && ['/api/hello', '/api/hello/'].includes(url.pathname)) {
+        const body = JSON.stringify({ message: 'hello' });
+        res.writeHead(200, {
+          'content-type': 'application/json; charset=utf-8',
+          'content-length': Buffer.byteLength(body),
+          'cache-control': 'no-store',
+        });
+        res.end(req.method === 'HEAD' ? undefined : body);
+        completed = true;
+        log(config, 'debug', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'local', reason: 'claude_code_hello_probe' });
+        return;
+      }
+
       if (req.method === 'GET' && (url.pathname === '/health' || url.pathname === '/healthz')) {
+        await cacheReady;
         const state = admission.health();
+        const cacheState = mediaCache.health();
+        const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: 'ok', service: 'proxy', version: '0.2.4', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.5', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
+          cache: { ...cacheState, ...registryState },
         });
       }
 
@@ -172,11 +215,11 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const classification = classifyMessagesRequest(original);
-      const managed = messagesPath === '/v1/messages/count_tokens'
+      const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
         : classification.managed;
 
-      if (!managed) {
+      if (!initiallyManaged) {
         if (hasProgressHistory(original.messages)) {
           original = { ...original, messages: stripProgressHistory(original.messages) };
           rawBody = Buffer.from(JSON.stringify(original));
@@ -189,13 +232,69 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       validateMessagesRequest(original);
-      if (!admission.canAcceptManaged()) {
-        throw new HttpError(429, 'Proxy managed-task queue is full.', { code: 'proxy_queue_full', retryable: true });
-      }
-
       let request = { ...original, messages: stripProgressHistory(original.messages) };
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
+      const preloadedCache = new Map();
+      let allMediaCached = false;
+
+      if (hasMedia) {
+        await cacheReady;
+        preparedMedia = await prepareMediaHandles(request.messages, config.limits, {
+          signal: abortController.signal,
+          cacheKeyContext: {
+            pipelineVersion: config.cache?.pipelineVersion,
+            visualPromptVersion: config.cache?.visualPromptVersion,
+            visionModel: config.vllmVisionModel,
+            resourceProfile: config.resourceProfile,
+          },
+        });
+        request.messages = preparedMedia.messages;
+        for (const entry of preparedMedia.mediaEntries) {
+          const cached = await mediaCache.get(entry.key);
+          if (cached?.block) {
+            preloadedCache.set(entry.key, cached);
+            log(config, 'info', 'media_cache_hit', { requestId, cache_key_prefix: entry.key.slice(0, 12), media_type: entry.mediaType });
+          } else {
+            log(config, 'info', 'media_cache_miss', { requestId, cache_key_prefix: entry.key.slice(0, 12), media_type: entry.mediaType });
+          }
+        }
+        allMediaCached = preparedMedia.mediaEntries.length > 0 && preloadedCache.size === preparedMedia.mediaEntries.length;
+      }
+
+      const needsManagedWork = hasManagedTools || (hasMedia && !allMediaCached);
+      const adapterDependencies = {
+        allowedMediaPaths: preparedMedia?.allowedPaths,
+        acquireVision: (options) => admission.acquireVision(options),
+        mediaCache,
+        analysisRegistry,
+        preloadedCache,
+        ...(dependencies.mediaAdapterDependencies || {}),
+        onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
+      };
+
+      if (!needsManagedWork) {
+        const adapters = createMediaAdapters(config, abortController.signal, () => {}, adapterDependencies);
+        request.messages = await adaptMessages(request.messages, adapters);
+        await preparedMedia?.cleanup(); preparedMedia = null;
+        rawBody = null;
+        original = null;
+        releaseIngress(); releaseIngress = null;
+        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'cached_transform', reason: 'all_media_cached' });
+        if (messagesPath === '/v1/messages/count_tokens') {
+          const payload = await callUpstreamJson(request, config, req.headers, abortController.signal, messagesPath);
+          completed = true;
+          return sendJson(res, 200, payload);
+        }
+        if (request.stream === true) await streamTransformedBase(request, res, config, req.headers, abortController.signal);
+        else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
+        completed = true;
+        return;
+      }
+
+      if (!admission.canAcceptManaged()) {
+        throw new HttpError(429, 'Proxy managed-task queue is full.', { code: 'proxy_queue_full', retryable: true });
+      }
 
       if (request.stream === true) {
         progress = new ProgressStream(res, {
@@ -211,11 +310,7 @@ export function createProxyServer(config, dependencies = {}) {
         await progress?.update(message);
       };
 
-      if (hasMedia) {
-        await onProgress('正在安全準備文件與圖片內容…', { phase: 'media_preflight' });
-        preparedMedia = await prepareMediaHandles(request.messages, config.limits, { signal: abortController.signal });
-        request.messages = preparedMedia.messages;
-      }
+      if (hasMedia && !allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
       rawBody = null;
       original = null;
       releaseIngress(); releaseIngress = null;
@@ -236,10 +331,7 @@ export function createProxyServer(config, dependencies = {}) {
       log(config, 'info', 'managed_job_admitted', { requestId, queue_wait_ms: Date.now() - queuedAt });
 
       if (hasMedia) {
-        const adapters = createMediaAdapters(config, abortController.signal, onProgress, {
-          allowedMediaPaths: preparedMedia.allowedPaths,
-          acquireVision: (options) => admission.acquireVision(options),
-        });
+        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
         await preparedMedia.cleanup(); preparedMedia = null;
         await onProgress('文件與圖片內容已就緒；正在交給模型分析…', { phase: 'media_ready' });

@@ -12,6 +12,12 @@ const CONCURRENCY_PROFILES = Object.freeze({
   large: { managedLimit: 4, queueLimit: 32, queueTimeoutMs: 180_000, visionLimit: 2 },
 });
 
+const CACHE_PROFILES = Object.freeze({
+  small: { maxMb: 512, retentionDays: 3 },
+  default: { maxMb: 2048, retentionDays: 7 },
+  large: { maxMb: 10240, retentionDays: 30 },
+});
+
 function intValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   if (value === undefined || value === '') return fallback;
   const parsed = Number.parseInt(value, 10);
@@ -64,12 +70,26 @@ export function loadConfig(env = process.env) {
     visionLimit: intValue(env.VISION_MAX_CONCURRENCY, concurrencyProfile.visionLimit, 'VISION_MAX_CONCURRENCY', { min: 1, max: 64 }),
   });
 
+  const cacheProfile = CACHE_PROFILES[profileName];
+  const explicitCacheMb = env.MEDIA_CACHE_MAX_MB === undefined || env.MEDIA_CACHE_MAX_MB === ''
+    ? cacheProfile.maxMb
+    : intValue(env.MEDIA_CACHE_MAX_MB, cacheProfile.maxMb, 'MEDIA_CACHE_MAX_MB', { min: 0, max: 1024 * 1024 });
+  const cache = Object.freeze({
+    rootDir: env.MEDIA_CACHE_DIR || '/var/lib/vllm-cc-tools-proxy/media-cache',
+    maxBytes: explicitCacheMb * MiB,
+    retentionMs: cacheProfile.retentionDays * 24 * 60 * 60 * 1000,
+    limitMode: explicitCacheMb === 0 ? 'filesystem' : 'bounded',
+    pipelineVersion: 'media-v3',
+    visualPromptVersion: 'visual-v2',
+  });
+
   return Object.freeze({
     port: intValue(env.PORT || env.PROXY_PORT, 8080, 'PORT', { min: 1, max: 65535 }),
     host: env.HOST || '0.0.0.0',
     resourceProfile: profileName,
     limits,
     concurrency,
+    cache,
     vllmBaseUrl: normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true }),
     vllmBaseApiKey: env.VLLM_BASE_API_KEY || '',
     vllmVisionUrl,

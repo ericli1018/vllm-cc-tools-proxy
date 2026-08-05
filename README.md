@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.4 bypasses ordinary traffic directly to the base vLLM and only intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.5 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.4 architecture
+## V0.2.5 architecture
 
 ```text
 Claude Code
@@ -17,11 +17,14 @@ Claude Code
 Routing is intentionally asymmetric:
 
 ```text
-HEAD / and GET /health
+HEAD /, HEAD/GET /api/hello and GET /health
   -> handled locally
 
-PDF, image, WebSearch or WebFetch Messages requests
+PDF/image cache miss, WebSearch or WebFetch Messages requests
   -> bounded managed workflow
+
+PDF/image cache hit
+  -> normalized cached transform without managed queue or visible progress
 
 all other methods and endpoints
   -> transparent bypass to VLLM_BASE_URL
@@ -42,6 +45,7 @@ Startup behavior:
 3. `package.json` and `package-lock.json` are fingerprinted. `npm ci --omit=dev` runs only when that fingerprint changes.
 4. `node_modules` and the dependency fingerprint remain inside `proxy-source`; npm downloads remain in `proxy-npm-cache`.
 5. Debian package archives remain in `proxy-apt-cache`, reducing downloads after container recreation. Installed Poppler/ImageMagick binaries survive a normal container restart; a recreated container reinstalls them from the persistent package cache.
+6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
 
@@ -80,6 +84,10 @@ proxy-npm-cache
 
 proxy-apt-cache
   downloaded Debian package archives
+
+proxy-data
+  normalized PDF/image analysis cache
+  atomic cache entries and runtime cache metadata
 ```
 
 Normal update:
@@ -95,6 +103,7 @@ docker compose down -v
 ```
 
 This deletion is destructive and forces a new clone and dependency installation on the next start.
+It also deletes the persistent media-analysis cache.
 
 ## Required vLLM settings
 
@@ -110,6 +119,54 @@ VLLM_VISION_API_KEY=
 `VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint.
 
 `VLLM_VISION_URL` points to an OpenAI-compatible vLLM server. The proxy calls `/v1/chat/completions` and sends the vision key only to this endpoint. `VLLM_VISION_URL` and `VLLM_VISION_MODEL` must be configured together.
+
+## Persistent media cache
+
+Claude Code sends complete message history on later tool rounds. A PDF/image Base64 block from an earlier `Read` can therefore appear again after `Write`, `Bash` or another tool result. V0.2.5 fingerprints decoded media and replaces every historical occurrence with the same cached normalized content instead of rerunning Poppler or the visual model.
+
+The cache key includes:
+
+```text
+SHA-256(decoded media)
+media MIME type
+parser pipeline version
+visual prompt version
+VLLM_VISION_MODEL
+RESOURCE_PROFILE
+```
+
+Routing behavior:
+
+```text
+all media cache hits
+  -> cached_transform
+  -> no managed queue
+  -> no visual-model call
+  -> no visible proxy progress
+  -> base-vLLM streaming starts directly
+
+at least one media cache miss
+  -> managed queue
+  -> parse/analyze each unique media key once
+  -> persist normalized result
+```
+
+Capacity is configured in MiB:
+
+```env
+MEDIA_CACHE_MAX_MB=0
+```
+
+Meaning:
+
+- Unset outside Compose: use the selected resource-profile default (`512`, `2048` or `10240` MiB).
+- `0`: disable capacity-based eviction and continue until the filesystem reports insufficient space.
+- Positive value: enforce that many MiB using least-recently-used eviction.
+- Negative or non-numeric value: configuration error; the proxy does not start.
+
+Retention still applies when capacity is `0`: `small` targets three days, `default` seven days and `large` thirty days since last use. Expired entries are removed at startup and during later writes. Cache entries use atomic same-directory rename; incomplete temporary files are removed on startup.
+
+If the filesystem returns `ENOSPC` or `EDQUOT`, the completed analysis is still used for the current request. Only persistence fails, `/health` changes to `degraded`, and a later request may need to analyze that media again.
 
 ## PDF flow
 
@@ -160,7 +217,7 @@ Fixed limits:
 
 ## Streaming progress
 
-Managed streaming requests open Anthropic SSE immediately so the connection remains alive, but the proxy does not create a visible progress text block for every request. Invisible `ping` events continue while work is active. A visible progress block is created only when the request is actually queued or a managed phase remains active beyond the configured visibility delay. Fast managed requests proceed directly to the model result without showing a proxy progress heading or a completion-only message. Verified visible phases include:
+Managed streaming requests open Anthropic SSE immediately so the connection remains alive, but the proxy does not create a visible progress text block for every request. Invisible `ping` events continue through queueing, PDF/image processing, visual-model calls, base-vLLM time-to-first-token and pauses in the final token stream. A frame-safe multiplexer inserts pings only between complete SSE frames. A visible progress block is created only when the request is actually queued or a managed phase remains active beyond the configured visibility delay. Fast managed requests and cache hits proceed directly to the model result without showing a proxy progress heading or a completion-only message. Verified visible phases include:
 
 ```text
 正在解析 PDF…
@@ -216,7 +273,15 @@ The health endpoint exposes only aggregate counters:
 ```json
 {
   "managed": { "active": 1, "limit": 2, "queued": 3, "queue_limit": 12 },
-  "vision": { "active": 1, "limit": 1 }
+  "vision": { "active": 1, "limit": 1 },
+  "cache": {
+    "entries": 42,
+    "bytes": 183500800,
+    "max_bytes": 0,
+    "limit_mode": "filesystem",
+    "write_available": true,
+    "inflight_analyses": 1
+  }
 }
 ```
 
@@ -251,11 +316,12 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, FIFO admission, queue full/timeout/cancellation, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and Anthropic SSE.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vision serialization, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, managed web tools and frame-safe Anthropic SSE keepalive.
 
-## V0.2.4 limits
+## V0.2.5 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and its vLLM tool-call parser/template.
-- Queue and semaphore state are process-local; multiple proxy replicas do not share admission state.
-- No persistent document handles, request coalescing or distributed cache.
+- Queue, semaphore and singleflight state are process-local; multiple proxy replicas do not share admission state.
+- Cache files are persistent, but multiple proxy replicas do not coordinate cache writes or distributed locks.
+- No persistent document-handle API or distributed Redis cache.

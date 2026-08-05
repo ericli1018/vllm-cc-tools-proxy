@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.5 - 2026-08-05
+
+- Added persistent normalized PDF/image analysis cache in the dedicated `proxy-data` volume.
+- Added SHA-256 media fingerprints keyed by parser pipeline, visual prompt, visual model and resource profile.
+- Added `cached_transform` routing so historical media remains available to the base vLLM without re-entering the managed queue.
+- Added request-local media deduplication and process-local singleflight for concurrent identical media analyses.
+- Added `MEDIA_CACHE_MAX_MB`: `0` uses filesystem capacity; positive values set the cache limit in MiB.
+- Added TTL plus LRU eviction and atomic cache writes; `ENOSPC`/`EDQUOT` degrade cache health without failing the current request.
+- Extended managed SSE keepalive through visual processing, base-vLLM TTFT and token-stream pauses using frame-safe event multiplexing.
+- Added local `HEAD /api/hello` and `GET /api/hello` Claude Code compatibility probes.
+- Added cache statistics and in-flight analysis count to `/health`.
+
 ## 0.2.4 - 2026-08-05
 
 - Fixed completion-only progress blocks appearing on fast managed requests.

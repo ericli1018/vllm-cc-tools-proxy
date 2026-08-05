@@ -14,7 +14,8 @@ test('Compose uses one official Node container with persistent source clone and 
   assert.match(compose, /proxy-source:\s*\/workspace\/vllm-cc-tools-proxy/);
   assert.match(compose, /proxy-npm-cache:\s*\/root\/.npm/);
   assert.match(compose, /proxy-apt-cache:\s*\/var\/cache\/apt\/archives/);
-  assert.match(compose, /^volumes:\s*\n  proxy-source:\s*\n  proxy-npm-cache:\s*\n  proxy-apt-cache:/m);
+  assert.match(compose, /proxy-data:\s*\/var\/lib\/vllm-cc-tools-proxy/);
+  assert.match(compose, /^volumes:\s*\n  proxy-source:\s*\n  proxy-npm-cache:\s*\n  proxy-apt-cache:\s*\n  proxy-data:/m);
   assert.match(compose, /DEPENDENCY_FINGERPRINT/);
   assert.doesNotMatch(compose, /(?<!\$)\$SOURCE_DIR/);
   assert.doesNotMatch(compose, /(?<!\$)\$DEPENDENCY_FINGERPRINT/);
@@ -33,6 +34,7 @@ test('ENV example preserves base and vision vLLM variables', () => {
     assert.doesNotMatch(envExample, new RegExp(`^${removed}=`, 'm'));
   }
   assert.match(envExample, /^CONCURRENCY_PROFILE=default$/m);
+  assert.match(envExample, /^MEDIA_CACHE_MAX_MB=0$/m);
 });
 
 test('Compose exposes the simple concurrency profile without adding queue services', () => {
@@ -41,15 +43,16 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_MAX_QUEUE:\s*\$\{MANAGED_MAX_QUEUE:-\}/);
   assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
+  assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.4', async () => {
+test('package version is V0.2.5', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.4');
-  assert.equal(lock.version, '0.2.4');
-  assert.equal(lock.packages[''].version, '0.2.4');
+  assert.equal(packageJson.version, '0.2.5');
+  assert.equal(lock.version, '0.2.5');
+  assert.equal(lock.packages[''].version, '0.2.5');
 });
 
 

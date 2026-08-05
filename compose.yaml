@@ -88,11 +88,13 @@ services:
       MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}
       MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}
       VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}
+      MEDIA_CACHE_MAX_MB: ${MEDIA_CACHE_MAX_MB:-0}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     volumes:
       - proxy-source:/workspace/vllm-cc-tools-proxy
       - proxy-npm-cache:/root/.npm
       - proxy-apt-cache:/var/cache/apt/archives
+      - proxy-data:/var/lib/vllm-cc-tools-proxy
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
@@ -104,3 +106,4 @@ volumes:
   proxy-source:
   proxy-npm-cache:
   proxy-apt-cache:
+  proxy-data:

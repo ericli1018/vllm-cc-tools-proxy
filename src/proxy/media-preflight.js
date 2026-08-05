@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { decodeBase64Media } from '../lib/media.js';
+import { buildMediaCacheKey } from '../cache/cache-key.js';
 
 function isExternalBase64Media(block) {
   return block && typeof block === 'object'
@@ -23,9 +24,11 @@ function extensionFor(mediaType) {
   }[mediaType] || '.bin';
 }
 
-export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signal } = {}) {
+export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signal, cacheKeyContext = {} } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-cc-media-'));
   const allowedPaths = new Set();
+  const mediaEntries = [];
+  const pathByKey = new Map();
   let counter = 0;
   let cleaned = false;
   const cleanup = async () => {
@@ -45,13 +48,33 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
     if (isExternalBase64Media(value)) {
       const mediaType = value.source.media_type;
       const buffer = decodeBase64Media(value.source.data, maxDecodedBytes, mediaType);
-      const filePath = path.join(root, `media-${++counter}${extensionFor(mediaType)}`);
-      await fs.writeFile(filePath, buffer, { mode: 0o600 });
-      allowedPaths.add(filePath);
+      const fingerprint = buildMediaCacheKey({
+        buffer,
+        mediaType,
+        pipelineVersion: cacheKeyContext.pipelineVersion || 'media-v3',
+        visualPromptVersion: cacheKeyContext.visualPromptVersion || 'visual-v2',
+        visionModel: cacheKeyContext.visionModel || '',
+        resourceProfile: cacheKeyContext.resourceProfile || 'default',
+      });
+      let filePath = pathByKey.get(fingerprint.key);
+      if (!filePath) {
+        filePath = path.join(root, `media-${++counter}${extensionFor(mediaType)}`);
+        await fs.writeFile(filePath, buffer, { mode: 0o600 });
+        allowedPaths.add(filePath);
+        pathByKey.set(fingerprint.key, filePath);
+        mediaEntries.push({
+          key: fingerprint.key,
+          mediaSha256: fingerprint.mediaSha256,
+          mediaType,
+          path: filePath,
+        });
+      }
       value.source = {
         type: 'proxy_file',
         media_type: mediaType,
         path: filePath,
+        cache_key: fingerprint.key,
+        media_sha256: fingerprint.mediaSha256,
         ...(value.source.filename ? { filename: value.source.filename } : {}),
       };
       return;
@@ -61,7 +84,7 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
 
   try {
     await walk(messages);
-    return { messages, root, allowedPaths, cleanup };
+    return { messages, root, allowedPaths, mediaEntries, cleanup };
   } catch (error) {
     await cleanup();
     throw error;

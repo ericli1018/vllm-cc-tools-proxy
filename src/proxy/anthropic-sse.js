@@ -1,59 +1,58 @@
-import { writeChunk } from '../lib/http.js';
 import { formatSseEvent } from './progress.js';
 
-async function emitTextBlock(res, index, block) {
-  await writeChunk(res, formatSseEvent('content_block_start', {
+async function emitTextBlock(progress, index, block) {
+  await progress.writeRaw(formatSseEvent('content_block_start', {
     type: 'content_block_start', index, content_block: { type: 'text', text: '' },
   }));
   if (block.text) {
-    await writeChunk(res, formatSseEvent('content_block_delta', {
+    await progress.writeRaw(formatSseEvent('content_block_delta', {
       type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text },
     }));
   }
-  await writeChunk(res, formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+  await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
 }
 
-async function emitThinkingBlock(res, index, block) {
-  await writeChunk(res, formatSseEvent('content_block_start', {
+async function emitThinkingBlock(progress, index, block) {
+  await progress.writeRaw(formatSseEvent('content_block_start', {
     type: 'content_block_start', index, content_block: { type: 'thinking', thinking: '', signature: block.signature || '' },
   }));
   if (block.thinking) {
-    await writeChunk(res, formatSseEvent('content_block_delta', {
+    await progress.writeRaw(formatSseEvent('content_block_delta', {
       type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking: block.thinking },
     }));
   }
-  await writeChunk(res, formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+  await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
 }
 
-async function emitToolUseBlock(res, index, block) {
-  await writeChunk(res, formatSseEvent('content_block_start', {
+async function emitToolUseBlock(progress, index, block) {
+  await progress.writeRaw(formatSseEvent('content_block_start', {
     type: 'content_block_start',
     index,
     content_block: { type: 'tool_use', id: block.id, name: block.name, input: {} },
   }));
   const input = JSON.stringify(block.input ?? {});
-  await writeChunk(res, formatSseEvent('content_block_delta', {
+  await progress.writeRaw(formatSseEvent('content_block_delta', {
     type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: input },
   }));
-  await writeChunk(res, formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+  await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
 }
 
 export async function emitFinalAnthropicResponse(progress, response) {
   await progress.closeProgress('處理完成；正在回傳模型結果…');
   let index = progress.visible ? 1 : 0;
   for (const block of response.content || []) {
-    if (block.type === 'text') await emitTextBlock(progress.res, index, block);
-    else if (block.type === 'thinking') await emitThinkingBlock(progress.res, index, block);
-    else if (block.type === 'tool_use') await emitToolUseBlock(progress.res, index, block);
+    if (block.type === 'text') await emitTextBlock(progress, index, block);
+    else if (block.type === 'thinking') await emitThinkingBlock(progress, index, block);
+    else if (block.type === 'tool_use') await emitToolUseBlock(progress, index, block);
     else {
-      await writeChunk(progress.res, formatSseEvent('content_block_start', {
+      await progress.writeRaw(formatSseEvent('content_block_start', {
         type: 'content_block_start', index, content_block: block,
       }));
-      await writeChunk(progress.res, formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+      await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
     }
     index += 1;
   }
-  await writeChunk(progress.res, formatSseEvent('message_delta', {
+  await progress.writeRaw(formatSseEvent('message_delta', {
     type: 'message_delta',
     delta: {
       stop_reason: response.stop_reason ?? 'end_turn',
@@ -63,15 +62,17 @@ export async function emitFinalAnthropicResponse(progress, response) {
       output_tokens: response.usage?.output_tokens ?? 0,
     },
   }));
-  await writeChunk(progress.res, formatSseEvent('message_stop', { type: 'message_stop' }));
-  progress.res.end();
+  progress.stopKeepalive();
+  await progress.writeRaw(formatSseEvent('message_stop', { type: 'message_stop' }));
   await progress.stop();
+  progress.res.end();
 }
 
 export async function emitSseError(progress, error) {
   try {
     await progress.closeProgress();
-    await writeChunk(progress.res, formatSseEvent('error', {
+    progress.stopKeepalive();
+    await progress.writeRaw(formatSseEvent('error', {
       type: 'error',
       error: {
         type: error.code || 'internal_error',
@@ -79,6 +80,7 @@ export async function emitSseError(progress, error) {
         retryable: Boolean(error.retryable),
       },
     }));
+    await progress.stop();
     progress.res.end();
   } finally {
     await progress.stop();
@@ -107,8 +109,9 @@ function shiftEventIndex(payload, offset) {
 export async function pipeAnthropicUpstreamStream(progress, upstream) {
   await progress.closeProgress('文件與圖片處理完成；正在串流主模型結果…');
   const offset = progress.visible ? 1 : 0;
-  await progress.stop();
   if (!upstream.body) {
+    progress.stopKeepalive();
+    await progress.stop();
     progress.res.end();
     return;
   }
@@ -119,11 +122,12 @@ export async function pipeAnthropicUpstreamStream(progress, upstream) {
     if (!block.trim()) return;
     const parsed = parseSseBlock(block);
     if (parsed.name === 'message_start') return;
+    if (parsed.name === 'message_stop') progress.stopKeepalive();
     let data = parsed.data;
     if (data) {
       try { data = JSON.stringify(shiftEventIndex(JSON.parse(data), offset)); } catch {}
     }
-    await writeChunk(progress.res, `${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`);
+    await progress.writeRaw(`${parsed.name ? `event: ${parsed.name}\n` : ''}${data ? `data: ${data}\n` : ''}\n`);
   };
 
   for await (const chunk of upstream.body) {
@@ -138,5 +142,7 @@ export async function pipeAnthropicUpstreamStream(progress, upstream) {
   }
   buffer += decoder.decode();
   if (buffer.trim()) await processBlock(buffer);
+  progress.stopKeepalive();
+  await progress.stop();
   progress.res.end();
 }

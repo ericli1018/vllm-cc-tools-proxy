@@ -7,6 +7,7 @@ import {
   hasProgressHistory,
   stripProgressHistory,
 } from '../src/proxy/progress.js';
+import { pipeAnthropicUpstreamStream } from '../src/proxy/anthropic-sse.js';
 
 class FakeResponse extends EventEmitter {
   constructor() {
@@ -24,6 +25,11 @@ class FakeResponse extends EventEmitter {
   write(chunk) {
     this.chunks.push(String(chunk));
     return true;
+  }
+
+  end(chunk = '') {
+    if (chunk) this.chunks.push(String(chunk));
+    this.ended = true;
   }
 }
 
@@ -101,4 +107,32 @@ test('closeProgress does not create a progress block when no progress became vis
   assert.doesNotMatch(stream, new RegExp(PROGRESS_BLOCK_HEADER));
   assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
   assert.doesNotMatch(stream, /event: content_block_start/);
+});
+
+test('managed keepalive continues through upstream TTFT and stops before message_stop', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 10 });
+  await progress.open();
+  await progress.update('正在解析 PDF…', { force: true });
+  const encoder = new TextEncoder();
+  const upstream = new Response(new ReadableStream({
+    start(controller) {
+      setTimeout(() => controller.enqueue(encoder.encode('event: message_start\ndata: {"type":"message_start"}\n\n')), 25);
+      setTimeout(() => controller.enqueue(encoder.encode('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n')), 50);
+      setTimeout(() => {
+        controller.enqueue(encoder.encode('event: message_stop\ndata: {"type":"message_stop"}\n\n'));
+        controller.close();
+      }, 75);
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+
+  await pipeAnthropicUpstreamStream(progress, upstream);
+  const stream = response.chunks.join('');
+  const pingCount = (stream.match(/event: ping/g) || []).length;
+  assert.ok(pingCount >= 3, `expected periodic pings, received ${pingCount}`);
+  assert.match(stream, /"text":"OK"/);
+  assert.ok(stream.lastIndexOf('event: ping') < stream.lastIndexOf('event: message_stop'));
+  for (const line of stream.split(/\r?\n/).filter((item) => item.startsWith('data: '))) {
+    assert.doesNotThrow(() => JSON.parse(line.slice(6)));
+  }
 });
