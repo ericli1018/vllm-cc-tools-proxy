@@ -215,3 +215,17 @@ test('explicit WebFetch Processor URL does not inherit the Base API key across h
   });
   assert.equal(config.webFetchProcessor.apiKey, '');
 });
+
+test('protocol anomaly snippets are opt-in and strictly validated', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(defaults.logProtocolSnippets, false);
+  const enabled = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    LOG_PROTOCOL_SNIPPETS: 'true',
+  });
+  assert.equal(enabled.logProtocolSnippets, true);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    LOG_PROTOCOL_SNIPPETS: 'yes',
+  }), /LOG_PROTOCOL_SNIPPETS/);
+});

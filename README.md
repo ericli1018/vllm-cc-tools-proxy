@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.11 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.12 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.11 architecture
+## V0.2.12 architecture
 
 ```text
 Claude Code
@@ -466,6 +466,64 @@ web_fetch_processor_response
 web_fetch_processor_fallback
 ```
 
+
+## Protocol anomaly diagnostics
+
+Normal logs continue to record only counts and block metadata. To capture the exact malformed fragment when the managed final-response guard starts a repair, enable:
+
+```env
+LOG_LEVEL=info
+LOG_PROTOCOL_SNIPPETS=true
+```
+
+`LOG_PROTOCOL_SNIPPETS` is strictly `true` or `false` and defaults to `false`. When enabled, the proxy emits one structured event for every detected anomaly location instead of dumping the complete prompt or response:
+
+```text
+managed_final_response_anomaly_snippet
+managed_final_response_input_protocol_snippet
+managed_final_response_diagnostic_summary
+```
+
+A control-tag event includes:
+
+```json
+{
+  "event": "managed_final_response_anomaly_snippet",
+  "round": 3,
+  "repair": false,
+  "reason": "control_tag_leak",
+  "response_id": "msg-123",
+  "response_model": "laguna",
+  "stop_reason": "end_turn",
+  "block_index": 0,
+  "block_type": "thinking",
+  "field": "thinking",
+  "tag_name": "function_results",
+  "tag_raw": "</function_results>",
+  "char_index": 428,
+  "line": 12,
+  "column": 9,
+  "snippet": "...the nearby generated text </function_results> the following generated text...",
+  "context_before": "...the nearby generated text ",
+  "context_after": " the following generated text...",
+  "content_chars": 1184,
+  "content_bytes": 1260,
+  "content_sha256": "..."
+}
+```
+
+If the complete answer remains inside a `thinking` block without a control tag, the anomaly event records bounded `excerpt_head` and `excerpt_tail` fields. If no visible response exists, it records a bounded `block_preview`.
+
+At the same repair boundary, the proxy scans the current request's System prompt, message history and tool definitions. Each matching protocol fragment is emitted as `managed_final_response_input_protocol_snippet` with `scope`, `path`, message index and role. This makes it possible to distinguish a tag generated only by the model from a tag already primed by Claude Code history or a tool description.
+
+Detailed snippets are bounded and credentials are redacted before logging. Bearer values, common API-key/token/password/secret assignments, known key prefixes and URL user information are replaced with `[REDACTED]`. Complete prompts, fetched pages and complete model responses are never written by this diagnostic path.
+
+After reproducing the issue, return to:
+
+```env
+LOG_PROTOCOL_SNIPPETS=false
+```
+
 ## Resource profiles
 
 - `small`: 12 MiB media, 40 PDF pages.
@@ -493,9 +551,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, opt-in redacted anomaly-location snippets, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.11 limits
+## V0.2.12 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

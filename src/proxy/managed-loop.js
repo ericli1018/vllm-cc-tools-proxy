@@ -3,6 +3,7 @@ import { buildManagedFinalRepairRequest, inspectManagedFinalResponse } from './m
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
+import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
 function progressMessage(name, input, phase) {
   const normalized = normalizeManagedToolName(name);
@@ -44,11 +45,35 @@ async function inspectFinal(response, { onDiagnostic, round, repair }) {
   return inspection;
 }
 
+async function emitDetailedFinalDiagnostics(request, response, inspection, {
+  onDiagnostic, round, repair, includeInput,
+}) {
+  const outputSnippets = collectResponseAnomalySnippets(response, inspection);
+  for (const snippet of outputSnippets) {
+    await onDiagnostic('managed_final_response_anomaly_snippet', { round, repair, ...snippet });
+  }
+  const inputSnippets = includeInput ? collectRequestProtocolSnippets(request) : [];
+  for (const snippet of inputSnippets) {
+    await onDiagnostic('managed_final_response_input_protocol_snippet', { round, repair, ...snippet });
+  }
+  await onDiagnostic('managed_final_response_diagnostic_summary', {
+    round, repair, reasons: inspection.reasons,
+    output_snippet_count: outputSnippets.length,
+    input_snippet_count: inputSnippets.length,
+  });
+}
+
 async function repairFinalResponse(request, response, {
-  upstream, signal, onDiagnostic, onProgress, round,
+  upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
 }) {
   const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
   if (inspection.valid) return response;
+
+  if (logProtocolSnippets) {
+    await emitDetailedFinalDiagnostics(request, response, inspection, {
+      onDiagnostic, round, repair: false, includeInput: true,
+    });
+  }
 
   await onDiagnostic('managed_final_response_repair_start', {
     round,
@@ -70,6 +95,12 @@ async function repairFinalResponse(request, response, {
     return repaired;
   }
 
+  if (logProtocolSnippets) {
+    await emitDetailedFinalDiagnostics(request, repaired, repairedInspection, {
+      onDiagnostic, round, repair: true, includeInput: false,
+    });
+  }
+
   await onDiagnostic('managed_final_response_rejected', {
     round,
     reasons: repairedInspection.reasons,
@@ -89,6 +120,7 @@ export async function runManagedLoop(initialRequest, {
   onProgress = () => {},
   onDiagnostic = () => {},
   showInitialModelProgress = true,
+  logProtocolSnippets = false,
   signal,
 } = {}) {
   const request = structuredClone(initialRequest);
@@ -108,7 +140,7 @@ export async function runManagedLoop(initialRequest, {
       : [];
     if (toolUses.length === 0) {
       return repairFinalResponse(request, response, {
-        upstream, signal, onDiagnostic, onProgress, round: round + 1,
+        upstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
       });
     }
     if (toolUses.some((block) => !isManagedToolName(block.name))) return response;

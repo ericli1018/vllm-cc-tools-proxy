@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK LOG_PROTOCOL_SNIPPETS; do
   grep -q "^${name}=" .env.example
 done
 grep -q '^CONCURRENCY_PROFILE=default$' .env.example
@@ -55,6 +55,7 @@ grep -Fq 'WEB_FETCH_PROCESSOR_URL: ${WEB_FETCH_PROCESSOR_URL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_MODEL: ${WEB_FETCH_PROCESSOR_MODEL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_API_KEY: ${WEB_FETCH_PROCESSOR_API_KEY:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_THINK: ${WEB_FETCH_PROCESSOR_THINK:-false}' compose.yaml
+grep -Fq 'LOG_PROTOCOL_SNIPPETS: ${LOG_PROTOCOL_SNIPPETS:-false}' compose.yaml
 grep -q '^WEB_FETCH_PROCESSOR_ENABLED=true$' .env.example
 grep -q '^WEB_FETCH_PROCESSOR_THINK=false$' .env.example
 test -f src/proxy/media-progress.js
@@ -71,13 +72,15 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.11'
+test "$(node -p "require('./package.json').version")" = '0.2.12'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js
 test -f src/proxy/managed-final.js
 test -f src/proxy/web-result-contract.js
 test -f src/services/web-fetch-processor.js
+test -f src/proxy/protocol-diagnostics.js
+test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v5'" src/config.js
 grep -Fq "visualPromptVersion: 'visual-v4'" src/config.js
@@ -86,6 +89,8 @@ grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
 grep -Fq 'managed_final_response_repair_start' src/proxy/managed-loop.js
+grep -Fq 'managed_final_response_anomaly_snippet' src/proxy/managed-loop.js
+grep -Fq 'managed_final_response_input_protocol_snippet' src/proxy/managed-loop.js
 grep -Fq 'neutralizeProtocolValue' src/proxy/managed-loop.js
 grep -Fq 'renderManagedToolResult' src/proxy/managed-loop.js
 grep -Fq 'WEB_SOURCE_CONTENT_BEGIN' src/services/web-fetch-processor.js

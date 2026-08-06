@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.12 - 2026-08-06
+
+- Added opt-in `LOG_PROTOCOL_SNIPPETS=true` diagnostics for managed final-response anomalies.
+- Added one structured log event per malformed control-tag location with response phase, block type, field, tag spelling, character offset, line/column, bounded context and content fingerprint.
+- Added bounded head/tail excerpts for answers trapped in `thinking` and bounded block previews for missing visible output.
+- Added request-side protocol provenance snippets across the System prompt, message history and tool definitions when repair begins.
+- Added credential redaction for Bearer tokens, common key/token/password/secret assignments, known key prefixes and URL user information.
+- Kept detailed snippets disabled by default; normal safe count-only diagnostics remain unchanged.
+- Unified package, health and startup log version reporting through `src/version.js`.
+
 ## 0.2.11 - 2026-08-06
 
 - Added an isolated prompt-directed WebFetch Content Processor using an OpenAI-compatible `/v1/chat/completions` request with no Claude Code history or tools.

@@ -27,7 +27,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -57,6 +57,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /WEB_FETCH_PROCESSOR_MODEL:\s*\$\{WEB_FETCH_PROCESSOR_MODEL:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_API_KEY:\s*\$\{WEB_FETCH_PROCESSOR_API_KEY:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_THINK:\s*\$\{WEB_FETCH_PROCESSOR_THINK:-false\}/);
+  assert.match(compose, /LOG_PROTOCOL_SNIPPETS:\s*\$\{LOG_PROTOCOL_SNIPPETS:-false\}/);
   assert.match(compose, /VLLM_BASE_CONNECT_TIMEOUT_MS:\s*\$\{VLLM_BASE_CONNECT_TIMEOUT_MS:-10000\}/);
   assert.match(compose, /VLLM_BASE_HEADERS_TIMEOUT_MS:\s*\$\{VLLM_BASE_HEADERS_TIMEOUT_MS:-900000\}/);
   assert.match(compose, /VLLM_BASE_BODY_TIMEOUT_MS:\s*\$\{VLLM_BASE_BODY_TIMEOUT_MS:-900000\}/);
@@ -65,12 +66,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.11', async () => {
+test('package version is V0.2.12', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.11');
-  assert.equal(lock.version, '0.2.11');
-  assert.equal(lock.packages[''].version, '0.2.11');
+  assert.equal(packageJson.version, '0.2.12');
+  assert.equal(lock.version, '0.2.12');
+  assert.equal(lock.packages[''].version, '0.2.12');
 });
 
 

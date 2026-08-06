@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.11, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.12, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.11', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.12', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -887,4 +887,66 @@ test('managed WebFetch processes raw page content before sending readable eviden
   assert.ok(logs.some((entry) => entry.event === 'web_fetch_processor_response'));
   assert.equal(JSON.stringify(logs).includes('processor-secret'), false);
   assert.equal(JSON.stringify(logs).includes('Source fact 42'), false);
+});
+
+test('managed final anomaly logging emits redacted output and request provenance snippets when enabled', async (t) => {
+  const logs = [];
+  let call = 0;
+  const vllm = await startJsonServer(async (req, res) => {
+    JSON.parse((await read(req)).toString());
+    call += 1;
+    const body = call === 1
+      ? {
+        id: 'bad', type: 'message', role: 'assistant', model: 'm',
+        content: [{
+          type: 'thinking',
+          thinking: 'Before Authorization: Bearer model-secret </function_results> final answer stayed here.',
+        }],
+        stop_reason: 'end_turn', usage: {},
+      }
+      : {
+        id: 'fixed', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'SAFE_FINAL' }],
+        stop_reason: 'end_turn', usage: {},
+      };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    logLevel: 'debug',
+    logProtocolSnippets: true,
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      system: 'Claude system example </function_results>',
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'news' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'SAFE_FINAL');
+
+  const anomaly = logs.find((entry) => entry.event === 'managed_final_response_anomaly_snippet'
+    && entry.reason === 'control_tag_leak');
+  assert.ok(anomaly);
+  assert.equal(anomaly.level, 'warn');
+  assert.equal(anomaly.tag_name, 'function_results');
+  assert.equal(anomaly.block_type, 'thinking');
+  assert.match(anomaly.context_before, /Bearer \[REDACTED\] $/);
+  assert.match(anomaly.context_after, /^ final answer stayed here/);
+
+  const input = logs.find((entry) => entry.event === 'managed_final_response_input_protocol_snippet'
+    && entry.scope === 'system');
+  assert.ok(input);
+  assert.equal(input.level, 'warn');
+  assert.equal(input.tag_name, 'function_results');
+  assert.equal(JSON.stringify(logs).includes('model-secret'), false);
 });

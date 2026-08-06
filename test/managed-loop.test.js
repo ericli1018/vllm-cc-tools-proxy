@@ -242,3 +242,67 @@ test('runManagedLoop sends readable multiline WebFetch evidence and one System s
   assert.equal(result.content[0].text, 'done');
   assert.equal(requests.length, 2);
 });
+
+test('runManagedLoop emits detailed original and input protocol snippets only when enabled', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  const request = {
+    system: 'Claude dialect </function_results>',
+    tools: [{ name: 'WebSearch', description: 'Use <tool_call> syntax', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'news' }],
+  };
+  const result = await runManagedLoop(request, {
+    upstream: async () => {
+      calls += 1;
+      return calls === 1
+        ? response([{ type: 'thinking', thinking: 'Need boundary. </function_results> Final answer in thinking.' }])
+        : response([{ type: 'text', text: 'repaired' }]);
+    },
+    executeTool: async () => ({}),
+    logProtocolSnippets: true,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+  assert.equal(result.content[0].text, 'repaired');
+  const output = diagnostics.filter((entry) => entry.event === 'managed_final_response_anomaly_snippet');
+  assert.ok(output.some((entry) => entry.details.reason === 'control_tag_leak'
+    && entry.details.tag_name === 'function_results'
+    && entry.details.repair === false));
+  assert.ok(output.some((entry) => entry.details.reason === 'final_answer_in_thinking'));
+  const inputs = diagnostics.filter((entry) => entry.event === 'managed_final_response_input_protocol_snippet');
+  assert.ok(inputs.some((entry) => entry.details.scope === 'system'
+    && entry.details.tag_name === 'function_results'));
+  assert.ok(inputs.some((entry) => entry.details.scope === 'tools'
+    && entry.details.tag_name === 'tool_call'));
+  const summary = diagnostics.find((entry) => entry.event === 'managed_final_response_diagnostic_summary');
+  assert.equal(summary.details.output_snippet_count, output.length);
+  assert.equal(summary.details.input_snippet_count, inputs.length);
+});
+
+test('runManagedLoop diagnoses the failed repair separately and keeps snippets disabled by default', async () => {
+  const disabled = [];
+  let disabledCalls = 0;
+  await assert.rejects(runManagedLoop({ messages: [] }, {
+    upstream: async () => {
+      disabledCalls += 1;
+      return response([{ type: 'thinking', thinking: `bad </function_results> ${disabledCalls}` }]);
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => disabled.push({ event, details }),
+  }), (error) => error.code === 'final_response_protocol_mismatch');
+  assert.equal(disabled.some((entry) => entry.event.includes('_snippet')), false);
+
+  const enabled = [];
+  let enabledCalls = 0;
+  await assert.rejects(runManagedLoop({ messages: [] }, {
+    upstream: async () => {
+      enabledCalls += 1;
+      return response([{ type: 'thinking', thinking: `bad </function_results> ${enabledCalls}` }]);
+    },
+    executeTool: async () => ({}),
+    logProtocolSnippets: true,
+    onDiagnostic: (event, details) => enabled.push({ event, details }),
+  }), (error) => error.code === 'final_response_protocol_mismatch');
+  const output = enabled.filter((entry) => entry.event === 'managed_final_response_anomaly_snippet');
+  assert.ok(output.some((entry) => entry.details.repair === false));
+  assert.ok(output.some((entry) => entry.details.repair === true));
+});

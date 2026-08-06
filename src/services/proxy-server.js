@@ -16,6 +16,7 @@ import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
+import { VERSION } from '../version.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -181,6 +182,11 @@ function log(config, level, event, fields = {}) {
   process.stderr.write(`${JSON.stringify(entry)}\n`);
 }
 
+function diagnosticLogLevel(event) {
+  if (event.endsWith('_rejected') || event.includes('_anomaly_snippet') || event.includes('_input_protocol_snippet')) return 'warn';
+  return 'info';
+}
+
 function defaultConcurrency(config) {
   return config.concurrency || { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 };
 }
@@ -238,7 +244,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.11', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: VERSION, revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -519,8 +525,9 @@ export function createProxyServer(config, dependencies = {}) {
           }),
           maxRounds: config.maxToolRounds,
           onProgress,
-          onDiagnostic: (event, fields) => log(config, event.endsWith('_rejected') ? 'warn' : 'info', event, { requestId, ...fields }),
+          onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,
+          logProtocolSnippets: Boolean(config.logProtocolSnippets),
           signal: abortController.signal,
         });
         releaseManaged(); releaseManaged = null;
