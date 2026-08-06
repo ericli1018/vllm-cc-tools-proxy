@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.13 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.14 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.13 architecture
+## V0.2.14 architecture
 
 ```text
 Claude Code
@@ -207,9 +207,74 @@ base_generation_control_tags_detected
 
 Every string inside a managed tool result is recursively neutralized before it is serialized as Anthropic `tool_result`. This prevents fetched Markdown or search snippets containing `</tool_response>`, `</function_results>`, `<tool_call>`, ChatML tokens or related singular/plural wrappers from becoming active prompt syntax.
 
-When a managed final response contains control wrappers or leaves the complete answer inside `thinking` with no visible text, the proxy performs one tool-disabled repair round using the already collected tool evidence. A second malformed response is rejected as `final_response_protocol_mismatch`; raw protocol tags are not forwarded to Claude Code. Valid Base output is never regex-deleted or silently rewritten.
+V0.2.14 no longer treats every thinking-only response as a completed final answer. Invalid no-tool responses are routed conservatively: only a substantial structured answer with no continuation intent enters short final-channel recovery; unfinished reasoning, next-step planning, missing visible output and ambiguous content enter continuation recovery with the original tools preserved. A second invalid response is rejected as `response_recovery_exhausted`; raw protocol tags are not forwarded to Claude Code. Valid Base output is never regex-deleted or silently rewritten.
 
 After upgrading from a session that already displayed raw `</function_result>`, `</function_results>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. Structured thinking history is sanitized on later requests, but intentionally does not rewrite already-visible assistant text.
+
+
+## V0.2.14 recovery routing
+
+The proxy remains subordinate to Claude Code's outer agent loop. It executes only proxy-owned WebSearch/WebFetch calls and must not decide that the complete Claude Code task is finished merely because one Base-model turn ended in `thinking`.
+
+The no-tool recovery state machine is:
+
+```text
+invalid no-tool Base response
+  ├─ completed structured answer, no continuation intent
+  │    -> Final-channel recovery
+  │    -> short context only
+  │    -> chat_template_kwargs.enable_thinking=false
+  │    -> tools and tool_choice removed
+  │    -> visible final text only
+  │
+  └─ unfinished, planning, missing or ambiguous output
+       -> Continuation recovery
+       -> original conversation and evidence retained
+       -> preserves the original tools and tool choice
+       -> model must emit one valid next action
+```
+
+Continuation recovery may return:
+
+```text
+managed WebSearch/WebFetch tool call
+  -> proxy executes it and continues the managed loop
+
+Read/Bash/Edit/Task or another non-managed tool call
+  -> response is returned unchanged to Claude Code
+
+visible text
+  -> returned as the completed response
+```
+
+A structured action plan is deliberately not considered a completed answer. Headings such as `Plan` or `Next steps`, imperative tool-oriented list items, explicit search/read/verification intent, or statements that evidence is still missing force the continuation route.
+
+Final-channel recovery is intentionally conservative. It uses a short isolated request containing only the malformed candidate answer, replaces the original System prompt, disables thinking through request-level chat-template kwargs, and prohibits new facts or tool calls.
+
+Recovery is bounded to one additional Base-model call for the invalid response. If that recovery still contains no valid visible answer or tool action, the proxy returns:
+
+```text
+response_recovery_exhausted
+```
+
+Recovery diagnostics retain the existing V0.2.13 file-based protocol bundles and add route metadata to the safe main-log events:
+
+```text
+managed_final_response_repair_start
+  recovery_route=final_channel|continuation
+  tools_preserved=true|false
+  recovery_signals=...
+
+managed_final_response_repair_success
+  recovery_route=...
+  tool_use_count=...
+
+managed_final_response_recovery_tool_dispatch
+  disposition=managed|unmanaged
+  tool_names=[...]
+```
+
+No additional ENV setting is required.
 
 ## Persistent media cache
 
@@ -573,7 +638,7 @@ The default visual PDF batch size is four pages.
 
 The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.13 limits
+## V0.2.14 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

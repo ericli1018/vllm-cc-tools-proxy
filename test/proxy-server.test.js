@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.13, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.14, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.13', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.14', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -748,7 +748,8 @@ test('managed request logs protocol provenance and repairs malformed final outpu
     } else if (call === 2) {
       body = { id:'b',type:'message',role:'assistant',model:'m',content:[{type:'thinking',thinking:'done </function_results> final in thinking'}],stop_reason:'end_turn',usage:{} };
     } else {
-      assert.equal('tools' in payload, false);
+      assert.ok(Array.isArray(payload.tools));
+      assert.match(JSON.stringify(payload.messages.at(-1)), /Complete exactly one valid next action/);
       body = { id:'c',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'SAFE_FINAL'}],stop_reason:'end_turn',usage:{} };
     }
     res.writeHead(200, { 'content-type': 'application/json' });

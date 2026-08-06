@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.14 - 2026-08-06
+
+- Split invalid no-tool Base responses into conservative `final_channel` and agent-safe `continuation` recovery routes.
+- Preserved the original tools and tool choice for unfinished reasoning, next-step planning, ambiguous thinking-only responses, missing visible output and non-final protocol recovery.
+- Added a short isolated final-channel recovery that disables thinking with request-level chat-template kwargs and removes tools only for a substantial structured completed answer with no continuation intent.
+- Routed recovered WebSearch/WebFetch calls back through the normal managed executor and returned recovered Read/Bash/Edit/Task calls unchanged to Claude Code.
+- Prevented structured action plans and imperative research steps from being misclassified as completed final answers.
+- Added bounded one-attempt recovery diagnostics with route, tool-preservation, classification signals and managed/unmanaged recovered-tool disposition.
+- Replaced the terminal recovery error code with `response_recovery_exhausted` when the single recovery call also fails to produce a valid next action.
+- Added regression coverage for completed answers, unfinished reasoning, recovered managed tools, recovered Claude Code tools and structured action plans.
+
 ## 0.2.13 - 2026-08-06
 
 - Changed `LOG_PROTOCOL_SNIPPETS=true` from per-fragment main-log expansion to atomic timestamped JSON diagnostic files.

@@ -1,5 +1,10 @@
 import { HttpError } from '../lib/http.js';
-import { buildManagedFinalRepairRequest, inspectManagedFinalResponse } from './managed-final.js';
+import {
+  buildManagedContinuationRecoveryRequest,
+  buildManagedFinalChannelRecoveryRequest,
+  classifyManagedRecovery,
+  inspectManagedFinalResponse,
+} from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
@@ -106,12 +111,12 @@ async function emitDetailedFinalDiagnostics(request, response, inspection, {
   }
 }
 
-async function repairFinalResponse(request, response, {
+async function recoverInvalidResponse(request, response, {
   upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
   writeProtocolDiagnostics,
 }) {
   const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
-  if (inspection.valid) return response;
+  if (inspection.valid) return { response, recovered: false, recovery: null };
 
   if (logProtocolSnippets) {
     await emitDetailedFinalDiagnostics(request, response, inspection, {
@@ -119,41 +124,67 @@ async function repairFinalResponse(request, response, {
     });
   }
 
+  const recovery = classifyManagedRecovery(response, inspection);
   await onDiagnostic('managed_final_response_repair_start', {
     round,
     reasons: inspection.reasons,
     control_tag_count: inspection.control_tag_count,
     control_tag_counts: inspection.control_tag_counts,
+    recovery_route: recovery.route,
+    tools_preserved: recovery.tools_preserved,
+    recovery_signals: recovery.signals,
   });
-  await onProgress('主模型回應格式異常；正在進行一次受控修正…', {
-    phase: 'managed_final_repair_start', round, force: true,
+  await onProgress(
+    recovery.route === 'final_channel'
+      ? '主模型答案通道異常；正在進行一次短格式修正…'
+      : '主模型未產生有效下一步；正在進行一次受控續接…',
+    {
+      phase: recovery.route === 'final_channel'
+        ? 'managed_final_channel_recovery_start'
+        : 'managed_continuation_recovery_start',
+      round,
+      recovery_route: recovery.route,
+      force: true,
+    },
+  );
+
+  const recoveryRequest = recovery.route === 'final_channel'
+    ? buildManagedFinalChannelRecoveryRequest(request, response)
+    : buildManagedContinuationRecoveryRequest(request);
+  const recoveredResponse = await upstream(recoveryRequest, signal);
+  const recoveredInspection = await inspectFinal(recoveredResponse, {
+    onDiagnostic, round, repair: true,
   });
-  const repaired = await upstream(buildManagedFinalRepairRequest(request), signal);
-  const repairedInspection = await inspectFinal(repaired, { onDiagnostic, round, repair: true });
-  if (repairedInspection.valid) {
+  if (recoveredInspection.valid) {
     await onDiagnostic('managed_final_response_repair_success', {
       round,
-      text_bytes: repairedInspection.text_bytes,
-      thinking_bytes: repairedInspection.thinking_bytes,
+      recovery_route: recovery.route,
+      tools_preserved: recovery.tools_preserved,
+      text_bytes: recoveredInspection.text_bytes,
+      thinking_bytes: recoveredInspection.thinking_bytes,
+      tool_use_count: recoveredInspection.tool_use_count,
     });
-    return repaired;
+    return { response: recoveredResponse, recovered: true, recovery };
   }
 
   if (logProtocolSnippets) {
-    await emitDetailedFinalDiagnostics(request, repaired, repairedInspection, {
+    await emitDetailedFinalDiagnostics(recoveryRequest, recoveredResponse, recoveredInspection, {
       onDiagnostic, writeProtocolDiagnostics, round, repair: true, includeInput: false,
     });
   }
 
   await onDiagnostic('managed_final_response_rejected', {
     round,
-    reasons: repairedInspection.reasons,
-    control_tag_count: repairedInspection.control_tag_count,
-    control_tag_counts: repairedInspection.control_tag_counts,
+    recovery_route: recovery.route,
+    tools_preserved: recovery.tools_preserved,
+    reasons: recoveredInspection.reasons,
+    control_tag_count: recoveredInspection.control_tag_count,
+    control_tag_counts: recoveredInspection.control_tag_counts,
   });
-  throw new HttpError(502, 'Base model returned an invalid final response after one repair attempt.', {
-    code: 'final_response_protocol_mismatch',
+  throw new HttpError(502, 'Base model did not produce a valid next action after one recovery attempt.', {
+    code: 'response_recovery_exhausted',
     retryable: true,
+    details: { recovery_route: recovery.route },
   });
 }
 
@@ -179,17 +210,43 @@ export async function runManagedLoop(initialRequest, {
         { phase: 'managed_model_round_start', round: round + 1 },
       );
     }
-    const response = await upstream(request, signal);
-    const toolUses = Array.isArray(response?.content)
+    let response = await upstream(request, signal);
+    let recovery = null;
+    let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
     if (toolUses.length === 0) {
-      return repairFinalResponse(request, response, {
+      const recovered = await recoverInvalidResponse(request, response, {
         upstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
         writeProtocolDiagnostics,
       });
+      if (!recovered.recovered) return recovered.response;
+      response = recovered.response;
+      recovery = recovered.recovery;
+      toolUses = Array.isArray(response?.content)
+        ? response.content.filter((block) => block?.type === 'tool_use')
+        : [];
+      if (toolUses.length === 0) return response;
     }
-    if (toolUses.some((block) => !isManagedToolName(block.name))) return response;
+    if (toolUses.some((block) => !isManagedToolName(block.name))) {
+      if (recovery) {
+        await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
+          round: round + 1,
+          recovery_route: recovery.route,
+          disposition: 'unmanaged',
+          tool_names: toolUses.map((block) => String(block?.name || '')),
+        });
+      }
+      return response;
+    }
+    if (recovery) {
+      await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
+        round: round + 1,
+        recovery_route: recovery.route,
+        disposition: 'managed',
+        tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
+      });
+    }
 
     const results = [];
     for (const toolUse of toolUses) {

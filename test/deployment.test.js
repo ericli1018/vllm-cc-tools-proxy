@@ -67,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.13', async () => {
+test('package version is V0.2.14', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.13');
-  assert.equal(lock.version, '0.2.13');
-  assert.equal(lock.packages[''].version, '0.2.13');
+  assert.equal(packageJson.version, '0.2.14');
+  assert.equal(lock.version, '0.2.14');
+  assert.equal(lock.packages[''].version, '0.2.14');
 });
 
 
@@ -93,4 +93,14 @@ test('README documents file-based protocol diagnostics without adding another EN
   assert.doesNotMatch(section, /managed_final_response_anomaly_snippet/);
   assert.doesNotMatch(section, /managed_final_response_input_protocol_snippet/);
   assert.doesNotMatch(envExample, /^LOG_PROTOCOL_SNIPPETS_DIR=/m);
+});
+
+
+test('README documents agent-safe recovery routing', () => {
+  assert.match(readme, /V0\.2\.14 recovery routing/);
+  assert.match(readme, /Final-channel recovery/);
+  assert.match(readme, /Continuation recovery/);
+  assert.match(readme, /preserves the original tools and tool choice/);
+  assert.match(readme, /managed_final_response_recovery_tool_dispatch/);
+  assert.match(readme, /response_recovery_exhausted/);
 });
