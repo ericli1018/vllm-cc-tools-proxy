@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.13 - 2026-08-06
+
+- Changed `LOG_PROTOCOL_SNIPPETS=true` from per-fragment main-log expansion to atomic timestamped JSON diagnostic files.
+- Added one file per original or repaired malformed response with request ID, round, phase, response metadata, complete redacted anomalous fields, request provenance, positions and fingerprints.
+- Added `managed_final_response_diagnostic_file` main-log events containing only path, size, SHA-256 and match counts.
+- Added non-fatal `managed_final_response_diagnostic_file_failed` events; diagnostic storage failure does not alter Claude Code execution or final-response repair.
+- Added private directory/file permissions and atomic temporary-file rename so diagnostic collectors never receive partially written JSON.
+- Kept `LOG_PROTOCOL_SNIPPETS` as the only switch; the internal directory is `/tmp/vllm-cc-tools-proxy/protocol-snippets` and no new ENV variable is required.
+- Added Docker retrieval instructions and complete file-based regression coverage.
+
 ## 0.2.12 - 2026-08-06
 
 - Added opt-in `LOG_PROTOCOL_SNIPPETS=true` diagnostics for managed final-response anomalies.

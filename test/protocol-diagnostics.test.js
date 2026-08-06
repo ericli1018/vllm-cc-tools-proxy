@@ -90,3 +90,30 @@ test('diagnostic redaction removes common credentials while preserving surroundi
   assert.match(output, /https:\/\/\[REDACTED\]@example\.com/);
   assert.match(output, /Bearer \[REDACTED\]/);
 });
+
+test('full diagnostic fields are opt-in and fully redacted before persistence', () => {
+  const response = {
+    content: [{
+      type: 'thinking',
+      thinking: 'Authorization: Bearer top-secret\nComplete final answer inside thinking.',
+    }],
+  };
+  const bounded = collectResponseAnomalySnippets(response, { reasons: ['final_answer_in_thinking'] });
+  assert.equal('full_text_redacted' in bounded[0], false);
+
+  const complete = collectResponseAnomalySnippets(
+    response,
+    { reasons: ['final_answer_in_thinking'] },
+    { includeFullText: true },
+  );
+  assert.match(complete[0].full_text_redacted, /Complete final answer inside thinking\.$/);
+  assert.doesNotMatch(complete[0].full_text_redacted, /top-secret/);
+  assert.match(complete[0].full_text_redacted, /Bearer \[REDACTED\]/);
+
+  const request = collectRequestProtocolSnippets({
+    tools: [{ description: 'password=hidden Example <thinking>full tool description</thinking>' }],
+  }, { includeFullText: true });
+  assert.equal(request.length, 2);
+  assert.ok(request.every((entry) => entry.full_text_redacted.includes('full tool description')));
+  assert.ok(request.every((entry) => !entry.full_text_redacted.includes('hidden')));
+});

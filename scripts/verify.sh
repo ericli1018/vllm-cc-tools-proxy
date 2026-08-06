@@ -72,7 +72,7 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.12'
+test "$(node -p "require('./package.json').version")" = '0.2.13'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js
@@ -80,6 +80,7 @@ test -f src/proxy/managed-final.js
 test -f src/proxy/web-result-contract.js
 test -f src/services/web-fetch-processor.js
 test -f src/proxy/protocol-diagnostics.js
+test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v5'" src/config.js
@@ -89,8 +90,10 @@ grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
 grep -Fq 'managed_final_response_repair_start' src/proxy/managed-loop.js
-grep -Fq 'managed_final_response_anomaly_snippet' src/proxy/managed-loop.js
-grep -Fq 'managed_final_response_input_protocol_snippet' src/proxy/managed-loop.js
+grep -Fq 'managed_final_response_diagnostic_file' src/proxy/managed-loop.js
+grep -Fq 'managed_final_response_diagnostic_file_failed' src/proxy/managed-loop.js
+! grep -Fq "onDiagnostic('managed_final_response_anomaly_snippet'" src/proxy/managed-loop.js
+! grep -Fq "onDiagnostic('managed_final_response_input_protocol_snippet'" src/proxy/managed-loop.js
 grep -Fq 'neutralizeProtocolValue' src/proxy/managed-loop.js
 grep -Fq 'renderManagedToolResult' src/proxy/managed-loop.js
 grep -Fq 'WEB_SOURCE_CONTENT_BEGIN' src/services/web-fetch-processor.js

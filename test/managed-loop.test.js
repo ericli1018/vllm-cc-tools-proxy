@@ -243,8 +243,9 @@ test('runManagedLoop sends readable multiline WebFetch evidence and one System s
   assert.equal(requests.length, 2);
 });
 
-test('runManagedLoop emits detailed original and input protocol snippets only when enabled', async () => {
+test('runManagedLoop writes complete protocol diagnostics to a file callback without logging snippets', async () => {
   const diagnostics = [];
+  const files = [];
   let calls = 0;
   const request = {
     system: 'Claude dialect </function_results>',
@@ -260,25 +261,39 @@ test('runManagedLoop emits detailed original and input protocol snippets only wh
     },
     executeTool: async () => ({}),
     logProtocolSnippets: true,
+    writeProtocolDiagnostics: async (bundle) => {
+      files.push(bundle);
+      return {
+        file_path: '/tmp/vllm-cc-tools-proxy/protocol-snippets/example.json',
+        file_bytes: 1234,
+        file_sha256: 'a'.repeat(64),
+        created_at: '2026-08-06T07:48:27.545Z',
+      };
+    },
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
   });
   assert.equal(result.content[0].text, 'repaired');
-  const output = diagnostics.filter((entry) => entry.event === 'managed_final_response_anomaly_snippet');
-  assert.ok(output.some((entry) => entry.details.reason === 'control_tag_leak'
-    && entry.details.tag_name === 'function_results'
-    && entry.details.repair === false));
-  assert.ok(output.some((entry) => entry.details.reason === 'final_answer_in_thinking'));
-  const inputs = diagnostics.filter((entry) => entry.event === 'managed_final_response_input_protocol_snippet');
-  assert.ok(inputs.some((entry) => entry.details.scope === 'system'
-    && entry.details.tag_name === 'function_results'));
-  assert.ok(inputs.some((entry) => entry.details.scope === 'tools'
-    && entry.details.tag_name === 'tool_call'));
-  const summary = diagnostics.find((entry) => entry.event === 'managed_final_response_diagnostic_summary');
-  assert.equal(summary.details.output_snippet_count, output.length);
-  assert.equal(summary.details.input_snippet_count, inputs.length);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].repair, false);
+  assert.ok(files[0].output_snippets.some((entry) => entry.reason === 'control_tag_leak'
+    && entry.tag_name === 'function_results'
+    && entry.full_text_redacted.includes('Final answer in thinking.')));
+  assert.ok(files[0].output_snippets.some((entry) => entry.reason === 'final_answer_in_thinking'));
+  assert.ok(files[0].input_snippets.some((entry) => entry.scope === 'system'
+    && entry.tag_name === 'function_results'
+    && entry.full_text_redacted.includes('Claude dialect')));
+  assert.ok(files[0].input_snippets.some((entry) => entry.scope === 'tools'
+    && entry.tag_name === 'tool_call'));
+  assert.equal(diagnostics.some((entry) => entry.event === 'managed_final_response_anomaly_snippet'), false);
+  assert.equal(diagnostics.some((entry) => entry.event === 'managed_final_response_input_protocol_snippet'), false);
+  const fileEvent = diagnostics.find((entry) => entry.event === 'managed_final_response_diagnostic_file');
+  assert.ok(fileEvent);
+  assert.equal(fileEvent.details.file_bytes, 1234);
+  assert.equal(fileEvent.details.output_snippet_count, files[0].output_snippets.length);
+  assert.equal(fileEvent.details.input_snippet_count, files[0].input_snippets.length);
 });
 
-test('runManagedLoop diagnoses the failed repair separately and keeps snippets disabled by default', async () => {
+test('runManagedLoop writes original and failed-repair diagnostics separately and stays quiet when disabled', async () => {
   const disabled = [];
   let disabledCalls = 0;
   await assert.rejects(runManagedLoop({ messages: [] }, {
@@ -289,9 +304,10 @@ test('runManagedLoop diagnoses the failed repair separately and keeps snippets d
     executeTool: async () => ({}),
     onDiagnostic: (event, details) => disabled.push({ event, details }),
   }), (error) => error.code === 'final_response_protocol_mismatch');
-  assert.equal(disabled.some((entry) => entry.event.includes('_snippet')), false);
+  assert.equal(disabled.some((entry) => entry.event.includes('diagnostic_file')), false);
 
   const enabled = [];
+  const files = [];
   let enabledCalls = 0;
   await assert.rejects(runManagedLoop({ messages: [] }, {
     upstream: async () => {
@@ -300,9 +316,45 @@ test('runManagedLoop diagnoses the failed repair separately and keeps snippets d
     },
     executeTool: async () => ({}),
     logProtocolSnippets: true,
+    writeProtocolDiagnostics: async (bundle) => {
+      files.push(bundle);
+      return {
+        file_path: `/tmp/diagnostic-${files.length}.json`,
+        file_bytes: 100 + files.length,
+        file_sha256: String(files.length).repeat(64),
+        created_at: '2026-08-06T07:48:27.545Z',
+      };
+    },
     onDiagnostic: (event, details) => enabled.push({ event, details }),
   }), (error) => error.code === 'final_response_protocol_mismatch');
-  const output = enabled.filter((entry) => entry.event === 'managed_final_response_anomaly_snippet');
-  assert.ok(output.some((entry) => entry.details.repair === false));
-  assert.ok(output.some((entry) => entry.details.repair === true));
+  assert.deepEqual(files.map((entry) => entry.repair), [false, true]);
+  assert.equal(enabled.filter((entry) => entry.event === 'managed_final_response_diagnostic_file').length, 2);
+  assert.equal(enabled.some((entry) => entry.event.includes('_snippet')), false);
 });
+
+test('runManagedLoop continues repair when protocol diagnostic file writing fails', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  const result = await runManagedLoop({ messages: [] }, {
+    upstream: async () => {
+      calls += 1;
+      return calls === 1
+        ? response([{ type: 'thinking', thinking: 'answer stayed in thinking' }])
+        : response([{ type: 'text', text: 'repaired' }]);
+    },
+    executeTool: async () => ({}),
+    logProtocolSnippets: true,
+    writeProtocolDiagnostics: async () => {
+      const error = new Error('disk full');
+      error.code = 'ENOSPC';
+      throw error;
+    },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+  assert.equal(result.content[0].text, 'repaired');
+  const failure = diagnostics.find((entry) => entry.event === 'managed_final_response_diagnostic_file_failed');
+  assert.ok(failure);
+  assert.equal(failure.details.code, 'ENOSPC');
+  assert.equal(JSON.stringify(failure).includes('answer stayed in thinking'), false);
+});
+

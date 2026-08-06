@@ -46,32 +46,76 @@ async function inspectFinal(response, { onDiagnostic, round, repair }) {
 }
 
 async function emitDetailedFinalDiagnostics(request, response, inspection, {
-  onDiagnostic, round, repair, includeInput,
+  onDiagnostic, writeProtocolDiagnostics, round, repair, includeInput,
 }) {
-  const outputSnippets = collectResponseAnomalySnippets(response, inspection);
-  for (const snippet of outputSnippets) {
-    await onDiagnostic('managed_final_response_anomaly_snippet', { round, repair, ...snippet });
+  const outputSnippets = collectResponseAnomalySnippets(
+    response,
+    inspection,
+    { includeFullText: true },
+  );
+  const inputSnippets = includeInput
+    ? collectRequestProtocolSnippets(request, { includeFullText: true })
+    : [];
+  const bundle = {
+    round,
+    repair,
+    reasons: inspection.reasons,
+    response: {
+      id: typeof response?.id === 'string' ? response.id : null,
+      model: typeof response?.model === 'string' ? response.model : null,
+      stop_reason: response?.stop_reason ?? null,
+      block_types: Array.isArray(response?.content)
+        ? response.content.map((block) => String(block?.type || 'unknown'))
+        : [],
+    },
+    output_snippets: outputSnippets,
+    input_snippets: inputSnippets,
+  };
+
+  if (typeof writeProtocolDiagnostics !== 'function') {
+    await onDiagnostic('managed_final_response_diagnostic_file_failed', {
+      round,
+      repair,
+      reasons: inspection.reasons,
+      code: 'DIAGNOSTIC_WRITER_UNAVAILABLE',
+      output_snippet_count: outputSnippets.length,
+      input_snippet_count: inputSnippets.length,
+    });
+    return;
   }
-  const inputSnippets = includeInput ? collectRequestProtocolSnippets(request) : [];
-  for (const snippet of inputSnippets) {
-    await onDiagnostic('managed_final_response_input_protocol_snippet', { round, repair, ...snippet });
+
+  try {
+    const file = await writeProtocolDiagnostics(bundle);
+    await onDiagnostic('managed_final_response_diagnostic_file', {
+      round,
+      repair,
+      reasons: inspection.reasons,
+      output_snippet_count: outputSnippets.length,
+      input_snippet_count: inputSnippets.length,
+      ...file,
+    });
+  } catch (error) {
+    await onDiagnostic('managed_final_response_diagnostic_file_failed', {
+      round,
+      repair,
+      reasons: inspection.reasons,
+      code: typeof error?.code === 'string' ? error.code : 'DIAGNOSTIC_WRITE_FAILED',
+      output_snippet_count: outputSnippets.length,
+      input_snippet_count: inputSnippets.length,
+    });
   }
-  await onDiagnostic('managed_final_response_diagnostic_summary', {
-    round, repair, reasons: inspection.reasons,
-    output_snippet_count: outputSnippets.length,
-    input_snippet_count: inputSnippets.length,
-  });
 }
 
 async function repairFinalResponse(request, response, {
   upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
+  writeProtocolDiagnostics,
 }) {
   const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
   if (inspection.valid) return response;
 
   if (logProtocolSnippets) {
     await emitDetailedFinalDiagnostics(request, response, inspection, {
-      onDiagnostic, round, repair: false, includeInput: true,
+      onDiagnostic, writeProtocolDiagnostics, round, repair: false, includeInput: true,
     });
   }
 
@@ -97,7 +141,7 @@ async function repairFinalResponse(request, response, {
 
   if (logProtocolSnippets) {
     await emitDetailedFinalDiagnostics(request, repaired, repairedInspection, {
-      onDiagnostic, round, repair: true, includeInput: false,
+      onDiagnostic, writeProtocolDiagnostics, round, repair: true, includeInput: false,
     });
   }
 
@@ -121,6 +165,7 @@ export async function runManagedLoop(initialRequest, {
   onDiagnostic = () => {},
   showInitialModelProgress = true,
   logProtocolSnippets = false,
+  writeProtocolDiagnostics,
   signal,
 } = {}) {
   const request = structuredClone(initialRequest);
@@ -141,6 +186,7 @@ export async function runManagedLoop(initialRequest, {
     if (toolUses.length === 0) {
       return repairFinalResponse(request, response, {
         upstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
+        writeProtocolDiagnostics,
       });
     }
     if (toolUses.some((block) => !isManagedToolName(block.name))) return response;

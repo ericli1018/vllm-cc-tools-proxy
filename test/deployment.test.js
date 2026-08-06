@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 
 const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), 'utf8');
 const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
+const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -66,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.12', async () => {
+test('package version is V0.2.13', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.12');
-  assert.equal(lock.version, '0.2.12');
-  assert.equal(lock.packages[''].version, '0.2.12');
+  assert.equal(packageJson.version, '0.2.13');
+  assert.equal(lock.version, '0.2.13');
+  assert.equal(lock.packages[''].version, '0.2.13');
 });
 
 
@@ -81,4 +82,15 @@ test('current progress protocol does not generate the V0.2.2 nonce sentinel', as
   assert.doesNotMatch(generatorSection, /VLLMCCP:v1:/);
   assert.match(source, /目前處理進度/);
   assert.doesNotMatch(source, /function createProgressMarkers/);
+});
+
+
+test('README documents file-based protocol diagnostics without adding another ENV switch', () => {
+  assert.match(readme, /managed_final_response_diagnostic_file/);
+  assert.match(readme, /docker cp/);
+  assert.match(readme, /protocol-snippets/);
+  const section = readme.slice(readme.indexOf('## Protocol anomaly diagnostics'), readme.indexOf('## Resource profiles'));
+  assert.doesNotMatch(section, /managed_final_response_anomaly_snippet/);
+  assert.doesNotMatch(section, /managed_final_response_input_protocol_snippet/);
+  assert.doesNotMatch(envExample, /^LOG_PROTOCOL_SNIPPETS_DIR=/m);
 });

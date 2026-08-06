@@ -5,6 +5,7 @@ import { hasProgressHistory, stripProgressHistory, ProgressStream } from '../pro
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
+import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
 import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream } from '../proxy/anthropic-sse.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
@@ -183,7 +184,7 @@ function log(config, level, event, fields = {}) {
 }
 
 function diagnosticLogLevel(event) {
-  if (event.endsWith('_rejected') || event.includes('_anomaly_snippet') || event.includes('_input_protocol_snippet')) return 'warn';
+  if (event.endsWith('_rejected') || event.includes('_diagnostic_file') || event.includes('_anomaly_snippet') || event.includes('_input_protocol_snippet')) return 'warn';
   return 'info';
 }
 
@@ -196,6 +197,11 @@ export function createProxyServer(config, dependencies = {}) {
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
   const cacheReady = mediaCache.initialize();
+  const protocolDiagnosticStore = config.logProtocolSnippets
+    ? (dependencies.protocolDiagnosticStore || new ProtocolDiagnosticStore({
+      rootDir: config.protocolDiagnosticsDir,
+    }))
+    : null;
 
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
@@ -528,6 +534,9 @@ export function createProxyServer(config, dependencies = {}) {
           onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),
+          writeProtocolDiagnostics: protocolDiagnosticStore
+            ? (bundle) => protocolDiagnosticStore.write({ request_id: requestId, ...bundle })
+            : undefined,
           signal: abortController.signal,
         });
         releaseManaged(); releaseManaged = null;

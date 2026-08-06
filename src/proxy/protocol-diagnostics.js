@@ -36,7 +36,7 @@ function contentIdentity(text) {
   };
 }
 
-function controlSnippet(text, match, metadata) {
+function controlSnippet(text, match, metadata, { includeFullText = false } = {}) {
   const start = Math.max(0, match.index - TAG_CONTEXT_CHARS);
   const end = Math.min(text.length, match.index + match.raw.length + TAG_CONTEXT_CHARS);
   return {
@@ -51,11 +51,12 @@ function controlSnippet(text, match, metadata) {
     context_before: redactDiagnosticText(text.slice(start, match.index)),
     context_after: redactDiagnosticText(text.slice(match.index + match.raw.length, end)),
     snippet: `${redactDiagnosticText(text.slice(start, match.index))}${match.raw}${redactDiagnosticText(text.slice(match.index + match.raw.length, end))}`,
+    ...(includeFullText ? { full_text_redacted: redactDiagnosticText(text) } : {}),
     ...contentIdentity(text),
   };
 }
 
-function edgeExcerpt(text, metadata) {
+function edgeExcerpt(text, metadata, { includeFullText = false } = {}) {
   const short = text.length <= EXCERPT_EDGE_CHARS * 2;
   return {
     reason: 'final_answer_in_thinking',
@@ -63,17 +64,19 @@ function edgeExcerpt(text, metadata) {
     excerpt_head: redactDiagnosticText(short ? text : text.slice(0, EXCERPT_EDGE_CHARS)),
     excerpt_tail: redactDiagnosticText(short ? '' : text.slice(-EXCERPT_EDGE_CHARS)),
     omitted_chars: short ? 0 : text.length - (EXCERPT_EDGE_CHARS * 2),
+    ...(includeFullText ? { full_text_redacted: redactDiagnosticText(text) } : {}),
     ...contentIdentity(text),
   };
 }
 
-function blockPreview(block, metadata) {
+function blockPreview(block, metadata, { includeFullText = false } = {}) {
   const serialized = JSON.stringify(block ?? null);
   return {
     reason: 'missing_visible_text',
     ...metadata,
     block_preview: redactDiagnosticText(serialized.slice(0, BLOCK_PREVIEW_CHARS)),
     preview_truncated: serialized.length > BLOCK_PREVIEW_CHARS,
+    ...(includeFullText ? { full_text_redacted: redactDiagnosticText(serialized) } : {}),
     ...contentIdentity(serialized),
   };
 }
@@ -86,7 +89,7 @@ function responseMetadata(response) {
   };
 }
 
-export function collectResponseAnomalySnippets(response, inspection = {}) {
+export function collectResponseAnomalySnippets(response, inspection = {}, options = {}) {
   const reasons = new Set(Array.isArray(inspection?.reasons) ? inspection.reasons : []);
   const content = Array.isArray(response?.content) ? response.content : [];
   const common = responseMetadata(response);
@@ -106,7 +109,7 @@ export function collectResponseAnomalySnippets(response, inspection = {}) {
             block_type: blockType,
             field,
             path,
-          }));
+          }, options));
         }
       });
     }
@@ -119,7 +122,7 @@ export function collectResponseAnomalySnippets(response, inspection = {}) {
         block_type: blockType,
         field: 'thinking',
         path: `content[${blockIndex}].thinking`,
-      }));
+      }, options));
     }
     if (reasons.has('missing_visible_text')) {
       output.push(blockPreview(block, {
@@ -127,7 +130,7 @@ export function collectResponseAnomalySnippets(response, inspection = {}) {
         block_index: blockIndex,
         block_type: blockType,
         field: null,
-      }));
+      }, options));
     }
   }
 
@@ -137,7 +140,7 @@ export function collectResponseAnomalySnippets(response, inspection = {}) {
       block_index: null,
       block_type: 'missing',
       field: null,
-    }));
+    }, options));
   }
   return output;
 }
@@ -180,7 +183,7 @@ function messageMetadata(request, path) {
   };
 }
 
-export function collectRequestProtocolSnippets(request) {
+export function collectRequestProtocolSnippets(request, options = {}) {
   const output = [];
   for (const entry of requestScopeEntries(request)) {
     visitStrings(entry.value, entry.path, (text, path) => {
@@ -190,7 +193,7 @@ export function collectRequestProtocolSnippets(request) {
           scope: entry.scope,
           path,
           ...messageMetadata(request, path),
-        }));
+        }, options));
       }
     });
   }

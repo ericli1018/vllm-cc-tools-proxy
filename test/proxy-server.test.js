@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.12, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.13, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.12', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.13', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -889,8 +889,10 @@ test('managed WebFetch processes raw page content before sending readable eviden
   assert.equal(JSON.stringify(logs).includes('Source fact 42'), false);
 });
 
-test('managed final anomaly logging emits redacted output and request provenance snippets when enabled', async (t) => {
+test('managed final anomaly diagnostics are written to a complete temporary file without snippet leakage to main logs', async (t) => {
   const logs = [];
+  const protocolDiagnosticsDir = await fs.mkdtemp(path.join(os.tmpdir(), 'vcc-protocol-server-test-'));
+  t.after(() => fs.rm(protocolDiagnosticsDir, { recursive: true, force: true }));
   let call = 0;
   const vllm = await startJsonServer(async (req, res) => {
     JSON.parse((await read(req)).toString());
@@ -916,6 +918,7 @@ test('managed final anomaly logging emits redacted output and request provenance
     vllmBaseUrl: vllm.url,
     logLevel: 'debug',
     logProtocolSnippets: true,
+    protocolDiagnosticsDir,
     logSink: (entry) => logs.push(entry),
   }));
   const proxyUrl = await listen(proxy);
@@ -926,7 +929,7 @@ test('managed final anomaly logging emits redacted output and request provenance
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'm', stream: false,
-      system: 'Claude system example </function_results>',
+      system: 'Claude system example password=system-secret </function_results>',
       tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
       messages: [{ role: 'user', content: 'news' }],
     }),
@@ -934,19 +937,26 @@ test('managed final anomaly logging emits redacted output and request provenance
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'SAFE_FINAL');
 
-  const anomaly = logs.find((entry) => entry.event === 'managed_final_response_anomaly_snippet'
-    && entry.reason === 'control_tag_leak');
-  assert.ok(anomaly);
-  assert.equal(anomaly.level, 'warn');
-  assert.equal(anomaly.tag_name, 'function_results');
-  assert.equal(anomaly.block_type, 'thinking');
-  assert.match(anomaly.context_before, /Bearer \[REDACTED\] $/);
-  assert.match(anomaly.context_after, /^ final answer stayed here/);
-
-  const input = logs.find((entry) => entry.event === 'managed_final_response_input_protocol_snippet'
-    && entry.scope === 'system');
-  assert.ok(input);
-  assert.equal(input.level, 'warn');
-  assert.equal(input.tag_name, 'function_results');
+  assert.equal(logs.some((entry) => entry.event === 'managed_final_response_anomaly_snippet'), false);
+  assert.equal(logs.some((entry) => entry.event === 'managed_final_response_input_protocol_snippet'), false);
+  const fileEvent = logs.find((entry) => entry.event === 'managed_final_response_diagnostic_file');
+  assert.ok(fileEvent);
+  assert.equal(fileEvent.level, 'warn');
+  assert.equal(fileEvent.output_snippet_count, 2);
+  assert.equal(fileEvent.input_snippet_count, 1);
+  assert.equal(path.dirname(fileEvent.file_path), protocolDiagnosticsDir);
+  assert.equal(JSON.stringify(logs).includes('final answer stayed here'), false);
   assert.equal(JSON.stringify(logs).includes('model-secret'), false);
+  assert.equal(JSON.stringify(logs).includes('system-secret'), false);
+
+  const raw = await fs.readFile(fileEvent.file_path, 'utf8');
+  const bundle = JSON.parse(raw);
+  assert.equal(bundle.request_id, fileEvent.requestId);
+  assert.equal(bundle.output_snippets.length, 2);
+  assert.ok(bundle.output_snippets.some((entry) => entry.full_text_redacted.includes('final answer stayed here.')));
+  assert.ok(bundle.input_snippets.some((entry) => entry.full_text_redacted.includes('Claude system example')));
+  assert.equal(raw.includes('model-secret'), false);
+  assert.equal(raw.includes('system-secret'), false);
+  assert.match(raw, /Bearer \[REDACTED\]/);
+  assert.match(raw, /password=\[REDACTED\]/);
 });

@@ -229,3 +229,8 @@ test('protocol anomaly snippets are opt-in and strictly validated', () => {
     LOG_PROTOCOL_SNIPPETS: 'yes',
   }), /LOG_PROTOCOL_SNIPPETS/);
 });
+
+test('protocol diagnostics use an internal timestamped temporary directory without another ENV setting', () => {
+  const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.match(config.protocolDiagnosticsDir, /vllm-cc-tools-proxy[\\/]protocol-snippets$/);
+});
