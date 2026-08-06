@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.10 - 2026-08-06
+
+- Added protocol provenance inventories for incoming Claude Code system/history, managed tool results and managed final Base-model responses without logging source content.
+- Expanded control-tag recognition to singular, plural and namespaced tool/function/result wrappers including `function_results`, `tool_results`, `function_calls` and `tool_calls`.
+- Recursively neutralized every string in WebSearch/WebFetch output before Anthropic `tool_result` serialization, preventing fetched page markup from becoming active model protocol.
+- Added managed final-response validation for control-tag leakage, missing visible text and answers trapped inside `thinking`.
+- Added one tools-disabled final-response repair round; a second malformed response returns `final_response_protocol_mismatch` instead of leaking raw tags to Claude Code.
+- Delayed Web-only progress activation until a real managed tool call, queue state, repair or the semantic-heartbeat threshold; short direct answers no longer show `目前處理進度：`.
+- Forced the first actual managed tool call to become visible immediately even when `PROGRESS_VISIBLE_AFTER_MS` has not elapsed.
+- Added end-to-end regression coverage for streamed `</function_results>` leakage, safe diagnostic content, recursive tool evidence neutralization and lazy progress.
+
 ## 0.2.9 - 2026-08-06
 
 - Aligned the awesome-web-fetch integration with its HTTP contract: exact configured endpoint, `urls[]` request body, optional Bearer API key and `page_content` / `metadata` response normalization.

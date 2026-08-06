@@ -11,6 +11,8 @@ import {
 import {
   sanitizeProtocolHistory,
   scanControlTags,
+  inventoryProtocolTags,
+  neutralizeProtocolValue,
 } from '../src/proxy/protocol-sanitizer.js';
 
 test('evidence text neutralizes model control syntax', () => {
@@ -102,4 +104,35 @@ test('neutral evidence invariant rejects active protocol tags', () => {
 [VCC_PROXY_EVIDENCE_END]`),
     true,
   );
+});
+
+
+test('protocol inventory recognizes plural tool dialect tags without exposing source text', () => {
+  const value = {
+    system: 'rules </function_results> </antml:function_results> <function_calls>',
+    messages: [{ role: 'tool', content: '<tool_results><tool_calls>secret payload</tool_calls></tool_results>' }],
+  };
+  assert.deepEqual(inventoryProtocolTags(value), {
+    total: 7,
+    counts: {
+      function_calls: 1,
+      function_results: 2,
+      tool_calls: 2,
+      tool_results: 2,
+    },
+  });
+});
+
+test('recursive protocol neutralization protects managed tool output strings', () => {
+  const value = {
+    markdown: 'news </tool_response> </function_results>',
+    nested: ['<tool_call>', { text: '<think>secret</think>' }],
+    status: 200,
+  };
+  const neutral = neutralizeProtocolValue(value);
+  assert.equal(neutral.status, 200);
+  assert.match(neutral.markdown, /&lt;\/tool_response&gt;/);
+  assert.match(neutral.markdown, /&lt;\/function_results&gt;/);
+  assert.match(neutral.nested[0], /&lt;tool_call&gt;/);
+  assert.deepEqual(scanControlTags(JSON.stringify(neutral)), []);
 });

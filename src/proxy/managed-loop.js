@@ -1,4 +1,6 @@
 import { HttpError } from '../lib/http.js';
+import { buildManagedFinalRepairRequest, inspectManagedFinalResponse } from './managed-final.js';
+import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
 
 function progressMessage(name, input, phase) {
@@ -17,7 +19,6 @@ function progressMessage(name, input, phase) {
   return '正在執行工具…';
 }
 
-
 function safeToolError(error) {
   const details = {};
   if (Number.isInteger(error?.details?.upstream_status)) details.upstream_status = error.details.upstream_status;
@@ -32,11 +33,61 @@ function safeToolError(error) {
   };
 }
 
+async function inspectFinal(response, { onDiagnostic, round, repair }) {
+  const inspection = inspectManagedFinalResponse(response);
+  await onDiagnostic('managed_final_response_inspected', {
+    round,
+    repair,
+    ...inspection,
+  });
+  return inspection;
+}
+
+async function repairFinalResponse(request, response, {
+  upstream, signal, onDiagnostic, onProgress, round,
+}) {
+  const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
+  if (inspection.valid) return response;
+
+  await onDiagnostic('managed_final_response_repair_start', {
+    round,
+    reasons: inspection.reasons,
+    control_tag_count: inspection.control_tag_count,
+    control_tag_counts: inspection.control_tag_counts,
+  });
+  await onProgress('主模型回應格式異常；正在進行一次受控修正…', {
+    phase: 'managed_final_repair_start', round, force: true,
+  });
+  const repaired = await upstream(buildManagedFinalRepairRequest(request), signal);
+  const repairedInspection = await inspectFinal(repaired, { onDiagnostic, round, repair: true });
+  if (repairedInspection.valid) {
+    await onDiagnostic('managed_final_response_repair_success', {
+      round,
+      text_bytes: repairedInspection.text_bytes,
+      thinking_bytes: repairedInspection.thinking_bytes,
+    });
+    return repaired;
+  }
+
+  await onDiagnostic('managed_final_response_rejected', {
+    round,
+    reasons: repairedInspection.reasons,
+    control_tag_count: repairedInspection.control_tag_count,
+    control_tag_counts: repairedInspection.control_tag_counts,
+  });
+  throw new HttpError(502, 'Base model returned an invalid final response after one repair attempt.', {
+    code: 'final_response_protocol_mismatch',
+    retryable: true,
+  });
+}
+
 export async function runManagedLoop(initialRequest, {
   upstream,
   executeTool,
   maxRounds = 6,
   onProgress = () => {},
+  onDiagnostic = () => {},
+  showInitialModelProgress = true,
   signal,
 } = {}) {
   const request = structuredClone(initialRequest);
@@ -44,31 +95,47 @@ export async function runManagedLoop(initialRequest, {
   request.messages = Array.isArray(request.messages) ? request.messages : [];
 
   for (let round = 0; round < maxRounds; round += 1) {
-    await onProgress(
-      round === 0 ? '正在請主模型規劃下一步…' : '主模型正在整理工具結果…',
-      { phase: 'managed_model_round_start', round: round + 1 },
-    );
+    if (round > 0 || showInitialModelProgress) {
+      await onProgress(
+        round === 0 ? '正在請主模型規劃下一步…' : '主模型正在整理工具結果…',
+        { phase: 'managed_model_round_start', round: round + 1 },
+      );
+    }
     const response = await upstream(request, signal);
     const toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
-    if (toolUses.length === 0) return response;
+    if (toolUses.length === 0) {
+      return repairFinalResponse(request, response, {
+        upstream, signal, onDiagnostic, onProgress, round: round + 1,
+      });
+    }
     if (toolUses.some((block) => !isManagedToolName(block.name))) return response;
 
     const results = [];
     for (const toolUse of toolUses) {
       await onProgress(progressMessage(toolUse.name, toolUse.input, 'start'), {
-        phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1,
+        phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1, force: true,
       });
       try {
         const output = await executeTool(toolUse, signal);
+        const inventory = inventoryProtocolTags(output);
+        if (inventory.total > 0) {
+          await onDiagnostic('managed_tool_result_protocol_inventory', {
+            name: normalizeManagedToolName(toolUse.name),
+            round: round + 1,
+            tag_count: inventory.total,
+            tag_counts: inventory.counts,
+          });
+        }
+        const neutralOutput = neutralizeProtocolValue(output);
         await onProgress(progressMessage(toolUse.name, toolUse.input, 'done'), {
           phase: 'managed_tool_done', name: normalizeManagedToolName(toolUse.name), round: round + 1,
         });
         results.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: JSON.stringify(output),
+          content: JSON.stringify(neutralOutput),
         });
       } catch (error) {
         if (!(error instanceof HttpError)) throw error;
@@ -80,7 +147,7 @@ export async function runManagedLoop(initialRequest, {
           type: 'tool_result',
           tool_use_id: toolUse.id,
           is_error: true,
-          content: JSON.stringify(safeToolError(error)),
+          content: JSON.stringify(neutralizeProtocolValue(safeToolError(error))),
         });
       }
     }

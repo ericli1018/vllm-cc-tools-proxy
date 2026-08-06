@@ -10,7 +10,7 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
-import { sanitizeProtocolHistory } from '../proxy/protocol-sanitizer.js';
+import { inventoryProtocolTags, sanitizeProtocolHistory } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
@@ -238,7 +238,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.9', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.10', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -268,6 +268,23 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      const incomingSystemProtocolInventory = inventoryProtocolTags(original.system);
+      const incomingMessageProtocolInventory = inventoryProtocolTags(original.messages);
+      const incomingProtocolInventory = {
+        total: incomingSystemProtocolInventory.total + incomingMessageProtocolInventory.total,
+        counts: Object.fromEntries(
+          [...new Set([
+            ...Object.keys(incomingSystemProtocolInventory.counts),
+            ...Object.keys(incomingMessageProtocolInventory.counts),
+          ])]
+            .sort()
+            .map((name) => [
+              name,
+              (incomingSystemProtocolInventory.counts[name] || 0)
+                + (incomingMessageProtocolInventory.counts[name] || 0),
+            ]),
+        ),
+      };
       let historyRewritten = false;
       let cleanedMessages = original.messages;
       if (hasProgressHistory(cleanedMessages)) {
@@ -290,6 +307,18 @@ export function createProxyServer(config, dependencies = {}) {
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
         : classification.managed;
+
+      if (initiallyManaged) {
+        log(config, 'info', 'incoming_protocol_inventory', {
+          requestId,
+          tag_count: incomingProtocolInventory.total,
+          tag_counts: incomingProtocolInventory.counts,
+          system_tag_count: incomingSystemProtocolInventory.total,
+          system_tag_counts: incomingSystemProtocolInventory.counts,
+          message_tag_count: incomingMessageProtocolInventory.total,
+          message_tag_counts: incomingMessageProtocolInventory.counts,
+        });
+      }
 
       if (!initiallyManaged) {
         releaseIngress(); releaseIngress = null;
@@ -431,9 +460,10 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const onProgress = async (message, details = {}) => {
-        const rendered = mediaProgress?.render(message, details) || message;
-        log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...details });
-        await progress?.update(rendered, { details });
+        const { force = false, ...stateDetails } = details;
+        const rendered = mediaProgress?.render(message, stateDetails) || message;
+        log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
+        await progress?.update(rendered, { force, details: stateDetails });
       };
 
       if (hasMedia && !allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
@@ -483,6 +513,8 @@ export function createProxyServer(config, dependencies = {}) {
           }),
           maxRounds: config.maxToolRounds,
           onProgress,
+          onDiagnostic: (event, fields) => log(config, event.endsWith('_rejected') ? 'warn' : 'info', event, { requestId, ...fields }),
+          showInitialModelProgress: hasMedia,
           signal: abortController.signal,
         });
         releaseManaged(); releaseManaged = null;

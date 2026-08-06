@@ -64,16 +64,20 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.9'
+test "$(node -p "require('./package.json').version")" = '0.2.10'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js
+test -f src/proxy/managed-final.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v5'" src/config.js
 grep -Fq "visualPromptVersion: 'visual-v4'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v1'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
+grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
+grep -Fq 'managed_final_response_repair_start' src/proxy/managed-loop.js
+grep -Fq 'neutralizeProtocolValue' src/proxy/managed-loop.js
 ! grep -Eq "<document|<visual_asset|<analysis>|<visual_batch" src/proxy/media-adapters.js
 ! grep -Eq "<page|<native_text|<visual_batch" src/parsers/pdf.js
 

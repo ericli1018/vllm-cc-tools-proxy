@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.9, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.10, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.9', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.10', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -164,7 +164,7 @@ test('streamed managed request emits progress and final Anthropic blocks', async
   const searx = await startJsonServer((_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({results:[{title:'x',url:'https://example.com',content:'y'}]}));});
   let call=0;
   const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'WebSearch',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
-  const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
+  const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url,progressVisibleAfterMs:60_000}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'search'}]})});
   const text=await response.text();assert.match(text,/目前處理進度/);assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
 });
@@ -412,6 +412,7 @@ test('quick managed stream does not show a progress block only to announce compl
   const vllm = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
     assert.equal(payload.stream, false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       id: 'quick', type: 'message', role: 'assistant', model: 'm',
@@ -422,7 +423,7 @@ test('quick managed stream does not show a progress block only to announce compl
   const proxy = createProxyServer(config({
     vllmBaseUrl: vllm.url,
     searxngUrl: 'http://127.0.0.1:9',
-    progressVisibleAfterMs: 60_000,
+    progressVisibleAfterMs: 1,
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => vllm.server.close());
@@ -438,7 +439,9 @@ test('quick managed stream does not show a progress block only to announce compl
   });
   const stream = await response.text();
   assert.match(stream, /QUICK_FINAL/);
+  assert.doesNotMatch(stream, /目前處理進度/);
   assert.doesNotMatch(stream, /VLLM-CC-TOOLS-PROXY 進度/);
+  assert.doesNotMatch(stream, /正在請主模型規劃下一步/);
   assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
 });
 
@@ -730,4 +733,63 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
   assert.ok(sent.some((entry) => entry.phase === 'base_request_start' && entry.delivery_latency_ms < 25));
   assert.ok(sent.some((entry) => entry.phase === 'base_headers_received' && entry.delivery_latency_ms < 25));
   assert.ok(logs.some((entry) => entry.event === 'progress_state_changed' && entry.phase === 'base_headers_received'));
+});
+
+
+test('managed request logs protocol provenance and repairs malformed final output without leaking tags', async (t) => {
+  const logs = [];
+  let call = 0;
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    call += 1;
+    let body;
+    if (call === 1) {
+      body = { id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'s1',name:'WebSearch',input:{query:'news'}}],stop_reason:'tool_use',usage:{} };
+    } else if (call === 2) {
+      body = { id:'b',type:'message',role:'assistant',model:'m',content:[{type:'thinking',thinking:'done </function_results> final in thinking'}],stop_reason:'end_turn',usage:{} };
+    } else {
+      assert.equal('tools' in payload, false);
+      body = { id:'c',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'SAFE_FINAL'}],stop_reason:'end_turn',usage:{} };
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const searx = await startJsonServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    searxngUrl: searx.url,
+    logLevel: 'debug',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => searx.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      system: 'Claude dialect </function_results>',
+      tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'news' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const stream = await response.text();
+  assert.match(stream, /SAFE_FINAL/);
+  assert.doesNotMatch(stream, /<\/function_results>|final in thinking/);
+  const incoming = logs.find((entry) => entry.event === 'incoming_protocol_inventory');
+  assert.equal(incoming.tag_count, 1);
+  assert.deepEqual(incoming.tag_counts, { function_results: 1 });
+  assert.equal(incoming.system_tag_count, 1);
+  assert.deepEqual(incoming.system_tag_counts, { function_results: 1 });
+  assert.equal(incoming.message_tag_count, 0);
+  assert.deepEqual(incoming.message_tag_counts, {});
+  assert.ok(logs.some((entry) => entry.event === 'managed_final_response_repair_success'));
+  assert.equal(JSON.stringify(logs).includes('Claude dialect'), false);
+  assert.equal(JSON.stringify(logs).includes('final in thinking'), false);
 });

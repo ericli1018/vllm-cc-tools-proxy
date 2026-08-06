@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.9 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.10 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.9 architecture
+## V0.2.10 architecture
 
 ```text
 Claude Code
@@ -121,7 +121,7 @@ VLLM_VISION_PROVIDER=vllm
 VLLM_VISION_THINK=false
 ```
 
-`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. V0.2.9 uses explicit upstream timeouts instead of Node.js fetch defaults:
+`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. V0.2.10 uses explicit upstream timeouts instead of Node.js fetch defaults:
 
 ```text
 VLLM_BASE_CONNECT_TIMEOUT_MS
@@ -183,17 +183,32 @@ Each transformed request receives one idempotent `VCC_PROXY_EVIDENCE_CONTRACT_V1
 
 To stop an already contaminated Claude Code history from amplifying malformed protocol text, V0.2.7 also neutralizes known control tags only inside structured assistant `thinking` blocks before forwarding. User-visible text is not rewritten. If a clean request contains no media and no contaminated structured thinking, it remains a raw bypass.
 
-Safe diagnostics scan three boundaries without logging document content:
+V0.2.10 extends protocol provenance checks across the complete managed-tool boundary without logging source text:
 
 ```text
-visual response
-normalized evidence source
-base-vLLM generated thinking/text stream
+incoming Claude Code system/history
+managed WebSearch/WebFetch tool result
+managed final Base-model response
+streamed Base-model thinking/text
 ```
 
-Diagnostics record tag names, counts and channels only. Base output is observed but not regex-deleted or rewritten.
+Diagnostics record tag names, counts, block types and byte counts only:
 
-After upgrading from a session that already displayed raw `</function_result>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. V0.2.7 sanitizes structured thinking history on later requests, but intentionally does not rewrite already-visible assistant text.
+```text
+incoming_protocol_inventory
+managed_tool_result_protocol_inventory
+managed_final_response_inspected
+managed_final_response_repair_start
+managed_final_response_repair_success
+managed_final_response_rejected
+base_generation_control_tags_detected
+```
+
+Every string inside a managed tool result is recursively neutralized before it is serialized as Anthropic `tool_result`. This prevents fetched Markdown or search snippets containing `</tool_response>`, `</function_results>`, `<tool_call>`, ChatML tokens or related singular/plural wrappers from becoming active prompt syntax.
+
+When a managed final response contains control wrappers or leaves the complete answer inside `thinking` with no visible text, the proxy performs one tool-disabled repair round using the already collected tool evidence. A second malformed response is rejected as `final_response_protocol_mismatch`; raw protocol tags are not forwarded to Claude Code. Valid Base output is never regex-deleted or silently rewritten.
+
+After upgrading from a session that already displayed raw `</function_result>`, `</function_results>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. Structured thinking history is sanitized on later requests, but intentionally does not rewrite already-visible assistant text.
 
 ## Persistent media cache
 
@@ -312,7 +327,9 @@ PROGRESS_HEARTBEAT_MS=30000
   keeps Claude Code's semantic stream watchdog active
 ```
 
-Every actual state revision is sent immediately as an Anthropic `content_block_delta`; the 30-second visible heartbeat is used only when the current state has not changed. Before the 1.5-second visibility threshold, the proxy retains the latest pending snapshot instead of discarding early updates. If the task is still active when the threshold expires, that latest state is emitted immediately. Fast managed requests and cache hits still avoid a progress-only block.
+Every actual state revision is sent immediately as an Anthropic `content_block_delta`; the 30-second visible heartbeat is used only when the current state has not changed. Before the 1.5-second visibility threshold, the proxy retains the latest pending snapshot instead of discarding early updates. If the task is still active when the threshold expires, that latest state is emitted immediately.
+
+For a Web-only request, merely having `WebSearch` or `WebFetch` available no longer creates a visible `目前處理進度：` block. The first planning round remains invisible unless it lasts until the semantic-heartbeat threshold. A real managed tool call, queue wait, media operation, retry or repair activates progress immediately. A short direct Base-model answer therefore remains visually transparent.
 
 The visible heartbeat remains active while the proxy is parsing media, waiting for a visual-model response, waiting for Base vLLM response headers, or waiting for the first real Base vLLM content event. Base lifecycle transitions are also visible immediately:
 
@@ -424,6 +441,7 @@ WEB_FETCH_API_KEY=
 - `WebFetch` and `web_fetch` POST to the exact configured `WEB_FETCH_URL`; the proxy does not append `/v1/fetch`.
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
 - Array responses using `page_content` and `metadata` are normalized into the proxy's bounded WebFetch result; the older object response shape remains accepted.
+- All returned strings are scanned and control-tag-neutralized before Anthropic `tool_result` serialization. The original page content is never written to diagnostics.
 - HTTP rejection, robots denial and other expected fetch-service failures become correlated `tool_result` blocks with `is_error: true`. The Base model may choose another source instead of terminating the complete Claude Code request.
 - Unexpected proxy programming failures still abort the request.
 - Managed loops remain bounded to six rounds by default.
@@ -454,7 +472,8 @@ The default visual PDF batch size is four pages.
 - Client disconnect abort propagation to Poppler, ImageMagick, visual vLLM and base vLLM.
 - No Base64, document text or sensitive paths in normal logs.
 - PDF/visual source text is HTML-entity escaped and checked by a neutral-evidence invariant before base-vLLM forwarding.
-- Known malformed protocol tags in structured assistant thinking history are neutralized without rewriting visible assistant text.
+- Known malformed protocol tags in structured assistant thinking history and managed tool-result evidence are neutralized without rewriting valid visible assistant text.
+- Managed final output is validated before progress is closed; one tools-disabled repair is allowed, then malformed output is rejected.
 
 ## Verification
 
@@ -462,9 +481,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.9 limits
+## V0.2.10 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.
