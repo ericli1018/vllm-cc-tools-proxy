@@ -468,7 +468,7 @@ export function createProxyServer(config, dependencies = {}) {
         await progress.open();
         const semanticHeartbeatStartedAt = Date.now();
         progress.startSemanticHeartbeat(() => mediaProgress?.renderHeartbeat()
-          || `目前任務｜狀態：仍在處理中，已等待 ${Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000)} 秒…`);
+          || `主模型仍在處理本輪請求，已等待 ${Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000)} 秒…`);
       }
 
       const onProgress = async (message, details = {}) => {

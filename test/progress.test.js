@@ -246,3 +246,27 @@ test('equal progress text with different structured state revisions is delivered
   assert.deepEqual(stateWrites.map((entry) => entry.revision), [1, 2]);
   assert.ok(stateWrites.every((entry) => Number.isInteger(entry.deliveryLatencyMs)));
 });
+
+
+test('closeProgress preserves response-aware phase and terminal scope metadata', async () => {
+  const response = new FakeResponse();
+  const changes = [];
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    onStateChange: (entry) => changes.push(entry),
+  });
+  await progress.open();
+  await progress.update('主模型仍在處理本輪請求…', { force: true, details: { phase: 'waiting_for_model' } });
+  await progress.closeProgress('主模型已產生下一步 Write；正在交還 Claude Code 執行…', {
+    phase: 'handoff_to_claude_code',
+    details: {
+      terminal_for_proxy: true,
+      terminal_for_claude_task: false,
+      tool_names: ['Write'],
+    },
+  });
+  await progress.stop();
+  assert.equal(changes.at(-1).phase, 'handoff_to_claude_code');
+  assert.match(response.chunks.join(''), /正在交還 Claude Code 執行/);
+});

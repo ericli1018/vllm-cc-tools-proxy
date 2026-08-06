@@ -52,7 +52,7 @@ test('media ready summary names the current file and heartbeat keeps the last st
   tracker.render('正在使用視覺模型分析圖片…', { phase: 'image_vision', path: ['messages', 0, 'content', 0] });
   assert.equal(tracker.renderMediaReady(), '檔案：panel.png｜處理進度 1/1（100%）｜狀態：文件與圖片內容已就緒；正在交給主模型分析…');
   now = 31_000;
-  assert.match(tracker.renderHeartbeat(), /主模型仍在處理中，已等待 30 秒/);
+  assert.match(tracker.renderHeartbeat(), /主模型仍在處理本輪請求，已等待 30 秒/);
 });
 
 test('unnamed media fallback numbering does not skip named media', () => {

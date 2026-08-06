@@ -67,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.14', async () => {
+test('package version is V0.2.15', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.14');
-  assert.equal(lock.version, '0.2.14');
-  assert.equal(lock.packages[''].version, '0.2.14');
+  assert.equal(packageJson.version, '0.2.15');
+  assert.equal(lock.version, '0.2.15');
+  assert.equal(lock.packages[''].version, '0.2.15');
 });
 
 
@@ -103,4 +103,15 @@ test('README documents agent-safe recovery routing', () => {
   assert.match(readme, /preserves the original tools and tool choice/);
   assert.match(readme, /managed_final_response_recovery_tool_dispatch/);
   assert.match(readme, /response_recovery_exhausted/);
+});
+
+
+test('README documents V0.2.15 proxy-turn progress semantics', () => {
+  assert.match(readme, /V0\.2\.15 proxy-turn progress semantics/);
+  assert.match(readme, /handoff_to_claude_code/);
+  assert.match(readme, /returning_visible_response/);
+  assert.match(readme, /terminal_for_proxy/);
+  assert.match(readme, /terminal_for_claude_task/);
+  const section = readme.slice(readme.indexOf('## V0.2.15 proxy-turn progress semantics'), readme.indexOf('## V0.2.14 recovery routing'));
+  assert.doesNotMatch(section, /處理完成；正在回傳模型結果/);
 });

@@ -66,13 +66,16 @@ grep -Fq 'base_upstream_request_failed' src/services/proxy-server.js
 grep -Fq 'web_fetch_upstream_rejected' src/proxy/web-tools.js
 
 grep -Fq "export const PROGRESS_BLOCK_HEADER = '目前處理進度：';" src/proxy/progress.js
+grep -Fq "export function describeFinalAnthropicProgress" src/proxy/anthropic-sse.js
+grep -Fq "handoff_to_claude_code" src/proxy/anthropic-sse.js
+grep -Fq "returning_visible_response" src/proxy/anthropic-sse.js
 node - <<'NODE'
 const fs = require('node:fs');
 const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.14'
+test "$(node -p "require('./package.json').version")" = '0.2.15'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js

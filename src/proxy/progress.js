@@ -265,11 +265,12 @@ export class ProgressStream {
     await this.#emitUpdate(entry);
   }
 
-  async closeProgress(finalMessage = '') {
+  async closeProgress(finalMessage = '', { phase = 'progress_close', details = {} } = {}) {
     if (this.progressClosed) return;
     this.stopSemanticHeartbeat();
     this.#clearPending();
-    if (finalMessage && this.visible) await this.update(finalMessage, { force: true, details: { phase: 'progress_close' } });
+    const closeDetails = { ...details, phase };
+    if (finalMessage && this.visible) await this.update(finalMessage, { force: true, details: closeDetails });
     this.progressClosed = true;
     await this.#enqueue(async () => {
       if (this.visible) {
@@ -277,9 +278,9 @@ export class ProgressStream {
           type: 'content_block_delta',
           index: 0,
           delta: { type: 'text_delta', text: '\n\n' },
-        }), { kind: 'progress_close_delta', phase: 'progress_close' });
+        }), { kind: 'progress_close_delta', phase });
         await this.#write(event('content_block_stop', { type: 'content_block_stop', index: 0 }), {
-          kind: 'progress_block_stop', phase: 'progress_close',
+          kind: 'progress_block_stop', phase,
         });
       }
     });

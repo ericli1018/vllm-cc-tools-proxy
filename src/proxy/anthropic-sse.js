@@ -1,6 +1,91 @@
 import { formatSseEvent } from './progress.js';
 import { findControlTags } from './protocol-sanitizer.js';
 
+function safeToolName(value) {
+  return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
+}
+
+function responseContent(response) {
+  return Array.isArray(response?.content) ? response.content : [];
+}
+
+export function describeFinalAnthropicProgress(response) {
+  const blocks = responseContent(response);
+  const toolNames = blocks
+    .filter((block) => block?.type === 'tool_use')
+    .map((block) => safeToolName(block?.name))
+    .filter(Boolean);
+  const common = {
+    terminal_for_proxy: true,
+    terminal_for_claude_task: false,
+    tool_names: toolNames,
+  };
+
+  if (toolNames.length > 0) {
+    return {
+      message: toolNames.length === 1
+        ? `主模型已產生下一步 ${toolNames[0]}；正在交還 Claude Code 執行…`
+        : '主模型已產生下一步工具；正在交還 Claude Code 執行…',
+      phase: 'handoff_to_claude_code',
+      details: { ...common, response_disposition: 'tool_handoff' },
+    };
+  }
+
+  const hasVisibleText = blocks.some((block) => block?.type === 'text'
+    && typeof block.text === 'string' && block.text.trim());
+  if (hasVisibleText) {
+    return {
+      message: '主模型已完成本輪回答；正在回傳結果…',
+      phase: 'returning_visible_response',
+      details: { ...common, response_disposition: 'visible_response' },
+    };
+  }
+
+  return {
+    message: '主模型已完成本輪輸出；正在回傳結果…',
+    phase: 'returning_model_output',
+    details: { ...common, response_disposition: 'model_output' },
+  };
+}
+
+function describeStreamingAnthropicProgress(payload) {
+  const block = payload?.content_block;
+  const type = String(block?.type || '');
+  const toolName = type === 'tool_use' ? safeToolName(block?.name) : '';
+  const common = {
+    terminal_for_proxy: false,
+    terminal_for_claude_task: false,
+    tool_names: toolName ? [toolName] : [],
+  };
+
+  if (type === 'tool_use') {
+    return {
+      message: '主模型已開始回傳下一步工具…',
+      phase: 'streaming_tool_action',
+      details: { ...common, response_disposition: 'tool_handoff' },
+    };
+  }
+  if (type === 'text') {
+    return {
+      message: '主模型已開始回傳本輪回答…',
+      phase: 'streaming_visible_response',
+      details: { ...common, response_disposition: 'visible_response' },
+    };
+  }
+  if (type === 'thinking') {
+    return {
+      message: '主模型已開始回傳思考內容…',
+      phase: 'streaming_thinking',
+      details: { ...common, response_disposition: 'thinking' },
+    };
+  }
+  return {
+    message: '主模型已開始回傳本輪輸出…',
+    phase: 'streaming_model_output',
+    details: { ...common, response_disposition: 'model_output' },
+  };
+}
+
 async function emitTextBlock(progress, index, block) {
   await progress.writeRaw(formatSseEvent('content_block_start', {
     type: 'content_block_start', index, content_block: { type: 'text', text: '' },
@@ -39,7 +124,11 @@ async function emitToolUseBlock(progress, index, block) {
 }
 
 export async function emitFinalAnthropicResponse(progress, response) {
-  await progress.closeProgress('處理完成；正在回傳模型結果…');
+  const finalProgress = describeFinalAnthropicProgress(response);
+  await progress.closeProgress(finalProgress.message, {
+    phase: finalProgress.phase,
+    details: finalProgress.details,
+  });
   let index = progress.visible ? 1 : 0;
   for (const block of response.content || []) {
     if (block.type === 'text') await emitTextBlock(progress, index, block);
@@ -142,10 +231,11 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
     }
     diagnosticTail = combined.slice(-256);
   };
-  const closeProgressForModel = async () => {
+  const closeProgressForModel = async (payload = null) => {
     if (progressClosedForModel) return;
     progress.stopSemanticHeartbeat?.();
-    await progress.closeProgress('主模型已開始回傳結果…');
+    const state = describeStreamingAnthropicProgress(payload);
+    await progress.closeProgress(state.message, { phase: state.phase, details: state.details });
     progressClosedForModel = true;
     offset = progress.visible ? 1 : 0;
   };
@@ -161,8 +251,8 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
     const meaningful = parsed.name === 'content_block_start' || parsed.name === 'content_block_delta';
     if (meaningful && !firstModelEventObserved) {
       firstModelEventObserved = true;
-      await closeProgressForModel();
-      await onFirstEvent({ event: parsed.name, type: payload?.type || '' });
+      await closeProgressForModel(payload);
+      await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: payload?.content_block?.type || '' });
     }
     if (parsed.name === 'message_stop' && !progressClosedForModel) await closeProgressForModel();
     if (parsed.name === 'message_stop') progress.stopKeepalive();

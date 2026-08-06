@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.15 - 2026-08-06
+
+- Replaced the ambiguous `處理完成；正在回傳模型結果…` managed-stream message with response-aware proxy-turn states.
+- Added buffered response classification for Claude Code tool handoff, visible turn answers and conservative model-output fallback.
+- Added structured phases `handoff_to_claude_code`, `returning_visible_response` and `returning_model_output` with separate proxy-turn and Claude-task terminal flags.
+- Added first-block-aware direct streaming progress for text, thinking, tool-use and unknown output.
+- Changed generic and file-aware semantic heartbeats to state that the base model is processing the current request turn.
+- Preserved V0.2.14 Managed Tool Routing, Recovery Routing, WebFetch processing and protocol diagnostics without new environment variables.
+- Added regression coverage for buffered and streaming response semantics, structured close phases and current-turn heartbeat wording.
+
 ## 0.2.14 - 2026-08-06
 
 - Split invalid no-tool Base responses into conservative `final_channel` and agent-safe `continuation` recovery routes.

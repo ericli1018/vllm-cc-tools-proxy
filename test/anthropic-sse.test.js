@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { pipeAnthropicUpstreamStream } from '../src/proxy/anthropic-sse.js';
+import {
+  describeFinalAnthropicProgress,
+  emitFinalAnthropicResponse,
+  pipeAnthropicUpstreamStream,
+} from '../src/proxy/anthropic-sse.js';
 
 function event(name, payload) {
   return `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -42,6 +46,114 @@ test('managed Anthropic stream diagnoses split control tags without rewriting up
       tagCount: 2,
       tags: ['function_result', 'tool_call'],
       channels: ['thinking', 'text'],
+    },
+  }]);
+});
+
+
+test('describeFinalAnthropicProgress distinguishes visible answers from Claude Code tool handoff', () => {
+  assert.deepEqual(describeFinalAnthropicProgress({
+    content: [{ type: 'text', text: 'Done' }],
+    stop_reason: 'end_turn',
+  }), {
+    message: '主模型已完成本輪回答；正在回傳結果…',
+    phase: 'returning_visible_response',
+    details: {
+      terminal_for_proxy: true,
+      terminal_for_claude_task: false,
+      response_disposition: 'visible_response',
+      tool_names: [],
+    },
+  });
+
+  assert.deepEqual(describeFinalAnthropicProgress({
+    content: [{ type: 'thinking', thinking: 'plan' }, { type: 'tool_use', id: 'w1', name: 'Write', input: {} }],
+    stop_reason: 'tool_use',
+  }), {
+    message: '主模型已產生下一步 Write；正在交還 Claude Code 執行…',
+    phase: 'handoff_to_claude_code',
+    details: {
+      terminal_for_proxy: true,
+      terminal_for_claude_task: false,
+      response_disposition: 'tool_handoff',
+      tool_names: ['Write'],
+    },
+  });
+
+  assert.equal(describeFinalAnthropicProgress({
+    content: [
+      { type: 'tool_use', id: 'r1', name: 'Read', input: {} },
+      { type: 'tool_use', id: 'b1', name: 'Bash', input: {} },
+    ],
+  }).message, '主模型已產生下一步工具；正在交還 Claude Code 執行…');
+
+  assert.equal(describeFinalAnthropicProgress({
+    content: [{ type: 'thinking', thinking: 'internal only' }],
+  }).phase, 'returning_model_output');
+});
+
+test('emitFinalAnthropicResponse closes progress with tool-handoff semantics', async () => {
+  const closes = [];
+  const writes = [];
+  const progress = {
+    visible: true,
+    closeProgress: async (message, options) => closes.push({ message, options }),
+    writeRaw: async (chunk) => writes.push(chunk),
+    stopKeepalive: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  await emitFinalAnthropicResponse(progress, {
+    content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: '/tmp/x' } }],
+    stop_reason: 'tool_use',
+    usage: { output_tokens: 5 },
+  });
+  assert.deepEqual(closes, [{
+    message: '主模型已產生下一步 Write；正在交還 Claude Code 執行…',
+    options: {
+      phase: 'handoff_to_claude_code',
+      details: {
+        terminal_for_proxy: true,
+        terminal_for_claude_task: false,
+        response_disposition: 'tool_handoff',
+        tool_names: ['Write'],
+      },
+    },
+  }]);
+  assert.match(writes.join(''), /"name":"Write"/);
+});
+
+test('pipeAnthropicUpstreamStream closes visible progress according to the first model block type', async () => {
+  const closes = [];
+  const progress = {
+    visible: true,
+    closeProgress: async (message, options) => closes.push({ message, options }),
+    writeRaw: async () => {},
+    stopKeepalive: () => {},
+    stopSemanticHeartbeat: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  const chunks = [
+    event('message_start', { type: 'message_start' }),
+    event('content_block_start', {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: 'w1', name: 'Write', input: {} },
+    }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_stop', { type: 'message_stop' }),
+  ];
+  await pipeAnthropicUpstreamStream(progress, { body: Readable.from(chunks.map((chunk) => Buffer.from(chunk))) });
+  assert.deepEqual(closes, [{
+    message: '主模型已開始回傳下一步工具…',
+    options: {
+      phase: 'streaming_tool_action',
+      details: {
+        terminal_for_proxy: false,
+        terminal_for_claude_task: false,
+        response_disposition: 'tool_handoff',
+        tool_names: ['Write'],
+      },
     },
   }]);
 });

@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.14 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.15 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.14 architecture
+## V0.2.15 architecture
 
 ```text
 Claude Code
@@ -212,6 +212,59 @@ V0.2.14 no longer treats every thinking-only response as a completed final answe
 After upgrading from a session that already displayed raw `</function_result>`, `</function_results>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. Structured thinking history is sanitized on later requests, but intentionally does not rewrite already-visible assistant text.
 
 
+
+## V0.2.15 proxy-turn progress semantics
+
+Progress text describes the current proxy/model turn. It does not claim that the complete Claude Code task has finished.
+
+Buffered managed responses are classified before the progress block closes:
+
+```text
+response contains one non-managed tool call
+  -> 主模型已產生下一步 Write；正在交還 Claude Code 執行…
+  -> phase: handoff_to_claude_code
+
+response contains multiple non-managed tool calls
+  -> 主模型已產生下一步工具；正在交還 Claude Code 執行…
+  -> phase: handoff_to_claude_code
+
+response contains visible text and no tool call
+  -> 主模型已完成本輪回答；正在回傳結果…
+  -> phase: returning_visible_response
+
+other valid model output
+  -> 主模型已完成本輪輸出；正在回傳結果…
+  -> phase: returning_model_output
+```
+
+Structured state distinguishes the two completion scopes:
+
+```text
+terminal_for_proxy=true
+  the current proxy API turn can be returned
+
+terminal_for_claude_task=false
+  the proxy does not claim Claude Code's outer task is finished
+```
+
+For direct upstream streaming, the first model content block closes visible progress with a non-terminal streaming phase:
+
+```text
+text      -> streaming_visible_response
+thinking  -> streaming_thinking
+tool_use  -> streaming_tool_action
+other     -> streaming_model_output
+```
+
+Generic semantic heartbeats use:
+
+```text
+主模型仍在處理本輪請求，已等待 30 秒…
+```
+
+File-aware heartbeats retain the safe filename while using the same current-turn wording. V0.2.15 changes only progress copy and structured progress phases; V0.2.14 Tool Routing and Recovery Routing remain unchanged.
+
+
 ## V0.2.14 recovery routing
 
 The proxy remains subordinate to Claude Code's outer agent loop. It executes only proxy-owned WebSearch/WebFetch calls and must not decide that the complete Claude Code task is finished merely because one Base-model turn ended in `thinking`.
@@ -402,7 +455,7 @@ The visible heartbeat remains active while the proxy is parsing media, waiting f
 ```text
 正在將內容送往主模型…
 主模型已接受請求，正在準備輸出…
-主模型已開始回傳結果…
+主模型已開始回傳本輪回答…
 ```
 
 The heartbeat stops before the first upstream thinking, text or tool-use content block is forwarded.
@@ -414,7 +467,7 @@ File-aware progress uses only a safe basename. When Claude Code includes a `Read
 檔案：GW305_N101_20260519-board.pdf｜圖片 4/15｜狀態：正在使用視覺模型分析圖片…
 檔案：GW305_N101_20260519-board.pdf｜頁面 8/15（53%）｜批次 2/4｜狀態：視覺模型已完成 8/15 頁…
 檔案：GW305_N101_20260519-board.pdf｜處理進度 15/15（100%）｜狀態：文件與圖片內容已就緒；正在交給主模型分析…
-檔案：GW305_N101_20260519-board.pdf｜狀態：主模型仍在處理中，已等待 30 秒…
+檔案：GW305_N101_20260519-board.pdf｜狀態：主模型仍在處理本輪請求，已等待 30 秒…
 ```
 
 If filename metadata and the corresponding Read tool call are both unavailable, the proxy falls back to `PDF #N` or `圖片 #N`. Multiple media blocks associated with one Read call are shown as image or document-segment progress instead of unrelated generic messages.
@@ -638,7 +691,7 @@ The default visual PDF batch size is four pages.
 
 The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.14 limits
+## V0.2.15 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

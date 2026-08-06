@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.14, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.15, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.14', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.15', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -624,7 +624,7 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   const stream = await response.text();
   assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
   assert.match(stream, /圖片 1\/1/);
-  assert.match(stream, /主模型仍在處理中/);
+  assert.match(stream, /主模型仍在處理本輪請求/);
   assert.match(stream, /FINAL/);
   assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
   for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
@@ -723,7 +723,7 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
   const stream = await response.text();
   const requestStart = stream.indexOf('正在將內容送往主模型');
   const headersReceived = stream.indexOf('主模型已接受請求');
-  const firstEvent = stream.indexOf('主模型已開始回傳結果');
+  const firstEvent = stream.indexOf('主模型已開始回傳本輪回答');
   assert.ok(requestStart >= 0);
   assert.ok(headersReceived > requestStart);
   assert.ok(firstEvent > headersReceived);

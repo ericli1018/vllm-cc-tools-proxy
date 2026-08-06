@@ -169,10 +169,10 @@ export class MediaProgressTracker {
     const seconds = Math.max(0, Math.floor((this.now() - reference) / 1000));
     if (this.mediaReadyAt !== null) {
       const prefix = this.current ? this.#fileLabel(this.current) : '目前任務';
-      return `${prefix}｜狀態：主模型仍在處理中，已等待 ${seconds} 秒…`;
+      return `${prefix}｜狀態：主模型仍在處理本輪請求，已等待 ${seconds} 秒…`;
     }
     const prefix = this.current ? this.#fileLabel(this.current) : '目前任務';
-    return `${prefix}｜狀態：目前步驟仍在處理中，已等待 ${seconds} 秒…`;
+    return `${prefix}｜狀態：目前處理步驟仍在進行，已等待 ${seconds} 秒…`;
   }
 }
 
