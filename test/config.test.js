@@ -169,3 +169,49 @@ test('Base upstream timeout defaults and overrides are explicit', () => {
   });
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_BASE_CONNECT_TIMEOUT_MS: '999' }), /VLLM_BASE_CONNECT_TIMEOUT_MS/);
 });
+
+test('WebFetch Processor defaults inherit Base vLLM and expose only five simple controls', () => {
+  const config = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000/v1/messages',
+    VLLM_BASE_API_KEY: 'base-secret',
+  });
+  assert.deepEqual(config.webFetchProcessor, {
+    enabled: true,
+    url: 'http://vllm:8000/v1/chat/completions',
+    model: '',
+    apiKey: 'base-secret',
+    think: false,
+  });
+});
+
+test('WebFetch Processor supports explicit URL model key and strict THINK', () => {
+  const config = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_API_KEY: 'base-secret',
+    WEB_FETCH_PROCESSOR_ENABLED: 'false',
+    WEB_FETCH_PROCESSOR_URL: 'http://processor:9000/custom/chat',
+    WEB_FETCH_PROCESSOR_MODEL: 'processor-model',
+    WEB_FETCH_PROCESSOR_API_KEY: 'processor-secret',
+    WEB_FETCH_PROCESSOR_THINK: 'true',
+  });
+  assert.deepEqual(config.webFetchProcessor, {
+    enabled: false,
+    url: 'http://processor:9000/custom/chat',
+    model: 'processor-model',
+    apiKey: 'processor-secret',
+    think: true,
+  });
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_THINK: 'yes',
+  }), /WEB_FETCH_PROCESSOR_THINK/);
+});
+
+test('explicit WebFetch Processor URL does not inherit the Base API key across hosts', () => {
+  const config = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_API_KEY: 'base-secret',
+    WEB_FETCH_PROCESSOR_URL: 'http://processor:9000/v1/chat/completions',
+  });
+  assert.equal(config.webFetchProcessor.apiKey, '');
+});

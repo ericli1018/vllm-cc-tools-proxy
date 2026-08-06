@@ -39,6 +39,18 @@ function booleanValue(value, fallback, name) {
   throw new Error(`${name} must be true or false`);
 }
 
+
+function derivedChatCompletionsUrl(baseValue) {
+  const url = new URL(baseValue);
+  const clean = url.pathname.replace(/\/+$/, '');
+  if (clean.endsWith('/v1/messages')) url.pathname = `${clean.slice(0, -'/messages'.length)}/chat/completions`;
+  else if (clean.endsWith('/v1')) url.pathname = `${clean}/chat/completions`;
+  else url.pathname = `${clean}/v1/chat/completions`.replace(/\/{2,}/g, '/');
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
 function normalizedUrl(value, fallback, name, { required = false } = {}) {
   const candidate = value || fallback;
   if (!candidate) {
@@ -55,6 +67,21 @@ export function loadConfig(env = process.env) {
   const profileName = env.RESOURCE_PROFILE || 'default';
   const profile = PROFILE_LIMITS[profileName];
   if (!profile) throw new Error(`Unsupported RESOURCE_PROFILE: ${profileName}`);
+
+  const vllmBaseUrl = normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true });
+  const vllmBaseApiKey = env.VLLM_BASE_API_KEY || '';
+  const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
+  const webFetchProcessor = Object.freeze({
+    enabled: booleanValue(env.WEB_FETCH_PROCESSOR_ENABLED, true, 'WEB_FETCH_PROCESSOR_ENABLED'),
+    url: normalizedUrl(
+      env.WEB_FETCH_PROCESSOR_URL,
+      derivedChatCompletionsUrl(vllmBaseUrl),
+      'WEB_FETCH_PROCESSOR_URL',
+    ),
+    model: env.WEB_FETCH_PROCESSOR_MODEL || '',
+    apiKey: env.WEB_FETCH_PROCESSOR_API_KEY || (hasExplicitWebFetchProcessorUrl ? '' : vllmBaseApiKey),
+    think: booleanValue(env.WEB_FETCH_PROCESSOR_THINK, false, 'WEB_FETCH_PROCESSOR_THINK'),
+  });
 
   const vllmVisionUrl = normalizedUrl(env.VLLM_VISION_URL, '', 'VLLM_VISION_URL');
   const vllmVisionModel = env.VLLM_VISION_MODEL || '';
@@ -108,8 +135,8 @@ export function loadConfig(env = process.env) {
     limits,
     concurrency,
     cache,
-    vllmBaseUrl: normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true }),
-    vllmBaseApiKey: env.VLLM_BASE_API_KEY || '',
+    vllmBaseUrl,
+    vllmBaseApiKey,
     vllmBaseTimeouts: Object.freeze({
       connectTimeoutMs: intValue(env.VLLM_BASE_CONNECT_TIMEOUT_MS, 10000, 'VLLM_BASE_CONNECT_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
       headersTimeoutMs: intValue(env.VLLM_BASE_HEADERS_TIMEOUT_MS, 900000, 'VLLM_BASE_HEADERS_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
@@ -124,6 +151,7 @@ export function loadConfig(env = process.env) {
     searxngUrl: normalizedUrl(env.SEARXNG_URL, '', 'SEARXNG_URL'),
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),
     webFetchApiKey: env.WEB_FETCH_API_KEY || '',
+    webFetchProcessor,
     logLevel: env.LOG_LEVEL || 'info',
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),

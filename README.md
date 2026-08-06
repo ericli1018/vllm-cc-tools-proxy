@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.10 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.11 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.10 architecture
+## V0.2.11 architecture
 
 ```text
 Claude Code
@@ -10,7 +10,8 @@ Claude Code
        ├─ local Poppler: PDF metadata, native text, page rendering
        ├─ local ImageMagick: validation, normalization, bounded crops
        ├─ visual provider: vLLM OpenAI-compatible or Ollama native multimodal analysis
-       ├─ SearXNG / awesome-web-fetch: managed WebSearch and WebFetch
+       ├─ SearXNG / awesome-web-fetch: managed WebSearch and raw page retrieval
+       ├─ WebFetch Processor: isolated prompt-directed page extraction
        └─ base vLLM: final reasoning and Claude Code tool calling
 ```
 
@@ -121,7 +122,7 @@ VLLM_VISION_PROVIDER=vllm
 VLLM_VISION_THINK=false
 ```
 
-`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. V0.2.10 uses explicit upstream timeouts instead of Node.js fetch defaults:
+`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. The proxy uses explicit upstream timeouts instead of Node.js fetch defaults:
 
 ```text
 VLLM_BASE_CONNECT_TIMEOUT_MS
@@ -435,23 +436,34 @@ The health endpoint exposes only aggregate counters:
 SEARXNG_URL=http://host.docker.internal:8088
 WEB_FETCH_URL=http://host.docker.internal:8090/
 WEB_FETCH_API_KEY=
+
+WEB_FETCH_PROCESSOR_ENABLED=true
+WEB_FETCH_PROCESSOR_URL=
+WEB_FETCH_PROCESSOR_MODEL=
+WEB_FETCH_PROCESSOR_API_KEY=
+WEB_FETCH_PROCESSOR_THINK=false
 ```
 
-- `WebSearch` and `web_search` call SearXNG.
+- `WebSearch` and `web_search` call SearXNG and return a readable multiline result list.
 - `WebFetch` and `web_fetch` POST to the exact configured `WEB_FETCH_URL`; the proxy does not append `/v1/fetch`.
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
-- Array responses using `page_content` and `metadata` are normalized into the proxy's bounded WebFetch result; the older object response shape remains accepted.
-- All returned strings are scanned and control-tag-neutralized before Anthropic `tool_result` serialization. The original page content is never written to diagnostics.
+- Array responses using `page_content` and `metadata` are normalized; the older object response shape remains accepted.
+- Raw page content is deterministically cleaned and protocol-neutralized, then an isolated WebFetch Processor applies the tool's `prompt` through `/v1/chat/completions` with no tools or Claude Code history.
+- Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`.
+- Successful WebSearch/WebFetch results are readable multiline VCC evidence blocks rather than JSON-stringified objects. One short idempotent System supplement explains the result fields to the Base model.
+- Processor timeout, HTTP failure, invalid response, tool-call output or protocol-tag leakage degrades to a bounded cleaned excerpt; the complete raw page is not forwarded as fallback.
 - HTTP rejection, robots denial and other expected fetch-service failures become correlated `tool_result` blocks with `is_error: true`. The Base model may choose another source instead of terminating the complete Claude Code request.
-- Unexpected proxy programming failures still abort the request.
-- Managed loops remain bounded to six rounds by default.
+- Unexpected proxy programming failures still abort the request. Managed loops remain bounded to six rounds by default.
 - WebFetch applies URL and SSRF validation before contacting the backend.
-- Safe diagnostics record backend host, target host, status and response field names only:
+- Safe diagnostics never contain API keys, fetched page text, extraction prompts or Processor output:
 
 ```text
 web_fetch_upstream_request
 web_fetch_upstream_response
 web_fetch_upstream_rejected
+web_fetch_processor_request
+web_fetch_processor_response
+web_fetch_processor_fallback
 ```
 
 ## Resource profiles
@@ -481,9 +493,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.10 limits
+## V0.2.11 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

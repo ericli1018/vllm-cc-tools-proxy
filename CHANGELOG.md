@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.11 - 2026-08-06
+
+- Added an isolated prompt-directed WebFetch Content Processor using an OpenAI-compatible `/v1/chat/completions` request with no Claude Code history or tools.
+- Added five simple Processor settings: `WEB_FETCH_PROCESSOR_ENABLED`, `URL`, `MODEL`, `API_KEY`, and `THINK`; the Base API key is inherited only when the Processor URL is derived from Base.
+- Applied deterministic source cleanup, protocol and reserved-boundary neutralization, repeated-content removal, bounded input and a bounded cleaned-excerpt fallback.
+- Changed successful WebSearch/WebFetch `tool_result` content from JSON-stringified objects to readable multiline VCC evidence blocks with source and processing metadata.
+- Added one short idempotent Managed Web Results system supplement explaining `source`, `processing`, `result`, and `selected_evidence` without embedding tool-protocol tags.
+- Added Processor output validation and safe fallback for timeout, HTTP failure, malformed JSON, empty output, tool calls, or protocol-tag leakage.
+- Added safe Processor request/response/fallback diagnostics without logging API keys, source content, extraction prompts, or generated summaries.
+- Added end-to-end regression coverage proving raw page noise is processed before the second Base-model round and the WebFetch `prompt`, current model, API key and THINK setting are honored.
+
 ## 0.2.10 - 2026-08-06
 
 - Added protocol provenance inventories for incoming Claude Code system/history, managed tool results and managed final Base-model responses without logging source content.

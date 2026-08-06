@@ -211,3 +211,34 @@ test('runManagedLoop can defer initial visible progress until a real tool call',
   assert.equal(toolProgress[0].details.phase, 'managed_tool_start');
   assert.equal(toolProgress[0].details.force, true);
 });
+
+test('runManagedLoop sends readable multiline WebFetch evidence and one System supplement to the next Base round', async () => {
+  const requests = [];
+  const result = await runManagedLoop({
+    model: 'm',
+    system: 'Original system',
+    messages: [{ role: 'user', content: 'news' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) {
+        return response([{ type: 'tool_use', id: 'fetch-1', name: 'WebFetch', input: { url: 'https://example.com', prompt: 'Extract facts' } }], 'tool_use');
+      }
+      const toolResult = request.messages.at(-1).content[0];
+      assert.match(toolResult.content, /^\[VCC_WEB_FETCH_RESULT_BEGIN version=2\]/);
+      assert.match(toolResult.content, /\nresult:\n\nFact one\nFact two\n/);
+      assert.equal(toolResult.content.includes('\\n'), false);
+      assert.doesNotMatch(toolResult.content, /^\{/);
+      assert.equal((String(request.system).match(/Managed Web Results/g) || []).length, 1);
+      return response([{ type: 'text', text: 'done' }]);
+    },
+    executeTool: async () => ({
+      requested_url: 'https://example.com', final_url: 'https://example.com', status: 200,
+      title: 'Title', content_type: 'text/html', retrieved_at: '2026-08-06T06:00:00.000Z', browser_rendered: false,
+      processing: { mode: 'prompt_directed', truncated: false, warnings: [] },
+      result: 'Fact one\nFact two', selected_evidence: [],
+    }),
+  });
+  assert.equal(result.content[0].text, 'done');
+  assert.equal(requests.length, 2);
+});

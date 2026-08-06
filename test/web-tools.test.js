@@ -86,7 +86,9 @@ test('WebFetch uses the exact configured endpoint, awesome-web-fetch urls contra
     contentType: 'application/json',
     body: { urls: ['https://example.com/article'] },
   });
-  assert.deepEqual(result, {
+  const { retrieved_at: retrievedAt, ...stableResult } = result;
+  assert.match(retrievedAt, /^2026-|^20\d{2}-/);
+  assert.deepEqual(stableResult, {
     requested_url: 'https://example.com/article',
     final_url: 'https://example.com/final',
     status: 200,
@@ -167,4 +169,67 @@ test('WebFetch rejection emits a safe rejected diagnostic', async (t) => {
   assert.equal(events.at(-1).fields.http_status, 403);
   assert.deepEqual(events.at(-1).fields.response_keys, ['detail', 'private_body']);
   assert.doesNotMatch(JSON.stringify(events), /do not log/);
+});
+
+test('WebFetch uses prompt-directed Processor with the current Base request model', async (t) => {
+  let processorRequest;
+  const fetchBackend = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{
+      page_content: 'NAVIGATION JUNK\n\nVerified source fact',
+      metadata: {
+        final_url: 'https://example.com/final',
+        title: 'Fetched title',
+        content_type: 'text/html',
+        status_code: 200,
+      },
+    }]));
+  });
+  const processor = await startServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    processorRequest = {
+      authorization: req.headers.authorization,
+      body: JSON.parse(Buffer.concat(chunks).toString()),
+    };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'Processed verified fact' } }] }));
+  });
+  t.after(() => fetchBackend.server.close());
+  t.after(() => processor.server.close());
+  const events = [];
+
+  const result = await executeManagedTool({
+    name: 'WebFetch',
+    input: { url: 'https://example.com/article', prompt: 'Extract only verified facts.' },
+  }, {
+    searxngUrl: '',
+    webFetchUrl: fetchBackend.url,
+    webFetchApiKey: '',
+    webFetchProcessor: {
+      enabled: true,
+      url: processor.url,
+      model: '',
+      apiKey: 'processor-key',
+      think: false,
+    },
+    limits: { maxOutputChars: 10000 },
+  }, undefined, {
+    model: 'main-model',
+    onEvent: (event, fields) => events.push({ event, fields }),
+  });
+
+  assert.equal(processorRequest.authorization, 'Bearer processor-key');
+  assert.equal(processorRequest.body.model, 'main-model');
+  assert.match(processorRequest.body.messages[1].content, /Extract only verified facts/);
+  assert.match(processorRequest.body.messages[1].content, /Verified source fact/);
+  assert.equal(result.processing.mode, 'prompt_directed');
+  assert.equal(result.result, 'Processed verified fact');
+  assert.equal('markdown' in result, false);
+  assert.deepEqual(events.map((entry) => entry.event), [
+    'web_fetch_upstream_request',
+    'web_fetch_upstream_response',
+    'web_fetch_processor_request',
+    'web_fetch_processor_response',
+  ]);
 });

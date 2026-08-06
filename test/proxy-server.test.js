@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.10, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.11, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.10', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.11', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -792,4 +792,99 @@ test('managed request logs protocol provenance and repairs malformed final outpu
   assert.ok(logs.some((entry) => entry.event === 'managed_final_response_repair_success'));
   assert.equal(JSON.stringify(logs).includes('Claude dialect'), false);
   assert.equal(JSON.stringify(logs).includes('final in thinking'), false);
+});
+
+test('managed WebFetch processes raw page content before sending readable evidence to the Base model', async (t) => {
+  const logs = [];
+  let processorPayload;
+  let secondBasePayload;
+  let baseCalls = 0;
+
+  const fetchBackend = await startJsonServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{
+      page_content: 'NAVIGATION JUNK\n\nSource fact 42',
+      metadata: {
+        final_url: 'https://example.com/final',
+        title: 'Example article',
+        content_type: 'text/html',
+        status_code: 200,
+        browser_rendered: true,
+      },
+    }]));
+  });
+
+  const vllm = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/chat/completions') {
+      processorPayload = payload;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ choices: [{ message: { content: 'Verified summary: fact 42.' } }] }));
+      return;
+    }
+    assert.equal(req.url, '/v1/messages');
+    baseCalls += 1;
+    if (baseCalls === 1) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'tool', type: 'message', role: 'assistant', model: 'main-model',
+        content: [{
+          type: 'tool_use', id: 'fetch-1', name: 'WebFetch',
+          input: { url: 'https://example.com/article', prompt: 'Extract the verified number.' },
+        }],
+        stop_reason: 'tool_use', usage: {},
+      }));
+      return;
+    }
+    secondBasePayload = payload;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'main-model',
+      content: [{ type: 'text', text: 'FINAL 42' }], stop_reason: 'end_turn', usage: {},
+    }));
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    webFetchUrl: fetchBackend.url,
+    webFetchProcessor: {
+      enabled: true,
+      url: `${vllmUrl}/v1/chat/completions`,
+      model: '',
+      apiKey: 'processor-secret',
+      think: false,
+    },
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => fetchBackend.server.close());
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'main-model', stream: false,
+      tools: [{ name: 'WebFetch', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'Read the page.' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'FINAL 42');
+  assert.equal(processorPayload.model, 'main-model');
+  assert.equal(processorPayload.chat_template_kwargs.enable_thinking, false);
+  assert.equal('tools' in processorPayload, false);
+  assert.match(processorPayload.messages[1].content, /Extract the verified number/);
+  assert.match(processorPayload.messages[1].content, /Source fact 42/);
+
+  const toolResult = secondBasePayload.messages.at(-1).content[0].content;
+  assert.match(toolResult, /^\[VCC_WEB_FETCH_RESULT_BEGIN version=2\]/);
+  assert.match(toolResult, /Verified summary: fact 42\./);
+  assert.doesNotMatch(toolResult, /NAVIGATION JUNK/);
+  assert.equal(toolResult.includes('\\n'), false);
+  assert.match(String(secondBasePayload.system), /Managed Web Results/);
+  assert.ok(logs.some((entry) => entry.event === 'web_fetch_processor_response'));
+  assert.equal(JSON.stringify(logs).includes('processor-secret'), false);
+  assert.equal(JSON.stringify(logs).includes('Source fact 42'), false);
 });

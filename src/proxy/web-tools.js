@@ -1,4 +1,5 @@
 import { HttpError } from '../lib/http.js';
+import { processWebFetchContent } from '../services/web-fetch-processor.js';
 import { boundedText, fetchJson, serviceEndpoint } from '../lib/media.js';
 
 const MANAGED = new Map([
@@ -91,10 +92,11 @@ function normalizeWebFetchPayload(payload, targetUrl, maxChars) {
     warnings: Array.isArray(item.warnings) ? item.warnings : [],
     browser_rendered: Boolean(metadata.browser_rendered || item.browser_rendered),
     fetch_backend: item.fetch_backend || 'awesome-web-fetch',
+    retrieved_at: new Date().toISOString(),
   };
 }
 
-async function webFetch(input, config, signal, onEvent = () => {}) {
+async function webFetch(input, config, signal, onEvent = () => {}, { model = '' } = {}) {
   if (!config.webFetchUrl) throw new HttpError(422, 'WEB_FETCH_URL is not configured.', { code: 'web_fetch_unavailable' });
   const targetUrl = validateFetchTarget(input?.url);
   const target = new URL(targetUrl);
@@ -186,12 +188,19 @@ async function webFetch(input, config, signal, onEvent = () => {}) {
     content_chars: normalized.markdown.length,
     truncated: normalized.truncated,
   });
-  return normalized;
+  if (!config.webFetchProcessor) return normalized;
+  return processWebFetchContent(normalized, {
+    prompt: String(input?.prompt || ''),
+    model,
+    processor: config.webFetchProcessor,
+    signal,
+    onEvent,
+  });
 }
 
-export async function executeManagedTool(block, config, signal, { onEvent = () => {} } = {}) {
+export async function executeManagedTool(block, config, signal, { onEvent = () => {}, model = '' } = {}) {
   const name = normalizeManagedToolName(block?.name);
   if (!name) throw new HttpError(422, `Unsupported managed tool: ${block?.name || 'unknown'}`, { code: 'unsupported_managed_tool' });
   if (name === 'WebSearch') return webSearch(block.input || {}, config, signal);
-  return webFetch(block.input || {}, config, signal, onEvent);
+  return webFetch(block.input || {}, config, signal, onEvent, { model });
 }

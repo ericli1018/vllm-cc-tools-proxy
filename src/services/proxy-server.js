@@ -238,7 +238,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.10', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.11', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -509,7 +509,13 @@ export function createProxyServer(config, dependencies = {}) {
         const result = await runManagedLoop(request, {
           upstream,
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
-            onEvent: (event, fields) => log(config, event.endsWith('_rejected') ? 'warn' : 'info', event, { requestId, ...fields }),
+            model: request.model || '',
+            onEvent: (event, fields) => log(
+              config,
+              event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',
+              event,
+              { requestId, ...fields },
+            ),
           }),
           maxRounds: config.maxToolRounds,
           onProgress,

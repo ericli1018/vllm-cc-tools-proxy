@@ -2,6 +2,7 @@ import { HttpError } from '../lib/http.js';
 import { buildManagedFinalRepairRequest, inspectManagedFinalResponse } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
+import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 
 function progressMessage(name, input, phase) {
   const normalized = normalizeManagedToolName(name);
@@ -12,7 +13,7 @@ function progressMessage(name, input, phase) {
   if (normalized === 'WebFetch') {
     let host = '網頁';
     try { host = new URL(input?.url).host; } catch {}
-    if (phase === 'start') return `正在讀取 ${host}…`;
+    if (phase === 'start') return `正在讀取並整理 ${host}…`;
     if (phase === 'error') return `${host} 讀取失敗；正在交由主模型改用其他來源。`;
     return `${host} 內容已就緒。`;
   }
@@ -135,7 +136,7 @@ export async function runManagedLoop(initialRequest, {
         results.push({
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: JSON.stringify(neutralOutput),
+          content: renderManagedToolResult(toolUse.name, neutralOutput),
         });
       } catch (error) {
         if (!(error instanceof HttpError)) throw error;
@@ -154,6 +155,7 @@ export async function runManagedLoop(initialRequest, {
 
     request.messages.push({ role: 'assistant', content: structuredClone(response.content) });
     request.messages.push({ role: 'user', content: results });
+    injectManagedWebResultInstruction(request);
   }
 
   throw new HttpError(422, 'Reached the maximum managed tool rounds.', {
