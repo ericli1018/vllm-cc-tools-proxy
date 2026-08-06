@@ -44,3 +44,127 @@ test('WebFetch rejects loopback targets before calling fetch backend', async () 
     /not allowed/,
   );
 });
+
+test('WebFetch uses the exact configured endpoint, awesome-web-fetch urls contract and Bearer auth', async (t) => {
+  let observed;
+  const backend = await startServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    observed = {
+      method: req.method,
+      url: req.url,
+      authorization: req.headers.authorization,
+      contentType: req.headers['content-type'],
+      body: JSON.parse(Buffer.concat(chunks).toString()),
+    };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{
+      page_content: '# Headline\n\nStory body',
+      metadata: {
+        source: 'https://example.com/article',
+        final_url: 'https://example.com/final',
+        title: 'Headline',
+        content_type: 'text/html',
+        status_code: 200,
+        browser_rendered: true,
+      },
+    }]));
+  });
+  t.after(() => backend.server.close());
+
+  const result = await executeManagedTool({ name: 'WebFetch', input: { url: 'https://example.com/article' } }, {
+    searxngUrl: '',
+    webFetchUrl: `${backend.url}/custom/fetch`,
+    webFetchApiKey: 'fetch-secret',
+    limits: { maxOutputChars: 10000 },
+  });
+
+  assert.deepEqual(observed, {
+    method: 'POST',
+    url: '/custom/fetch',
+    authorization: 'Bearer fetch-secret',
+    contentType: 'application/json',
+    body: { urls: ['https://example.com/article'] },
+  });
+  assert.deepEqual(result, {
+    requested_url: 'https://example.com/article',
+    final_url: 'https://example.com/final',
+    status: 200,
+    title: 'Headline',
+    content_type: 'text/html',
+    markdown: '# Headline\n\nStory body',
+    truncated: false,
+    warnings: [],
+    browser_rendered: true,
+    fetch_backend: 'awesome-web-fetch',
+  });
+});
+
+test('WebFetch backend rejection preserves safe status and detail', async (t) => {
+  const backend = await startServer((_req, res) => {
+    res.writeHead(422, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ detail: 'urls is required' }));
+  });
+  t.after(() => backend.server.close());
+
+  await assert.rejects(
+    executeManagedTool({ name: 'WebFetch', input: { url: 'https://example.com/article' } }, {
+      searxngUrl: '', webFetchUrl: backend.url, webFetchApiKey: '', limits: { maxOutputChars: 10000 },
+    }),
+    (error) => {
+      assert.equal(error.code, 'web_fetch_error');
+      assert.equal(error.status, 422);
+      assert.equal(error.message, 'urls is required');
+      assert.deepEqual(error.details, { upstream_status: 422, upstream_code: '' });
+      return true;
+    },
+  );
+});
+
+test('WebFetch emits safe backend diagnostics without secrets or page content', async (t) => {
+  const backend = await startServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ page_content: 'PRIVATE PAGE BODY', metadata: { status_code: 200, title: 'Title' } }]));
+  });
+  t.after(() => backend.server.close());
+  const events = [];
+
+  await executeManagedTool({ name: 'WebFetch', input: { url: 'https://example.com/news' } }, {
+    searxngUrl: '', webFetchUrl: backend.url, webFetchApiKey: 'super-secret', limits: { maxOutputChars: 10000 },
+  }, undefined, {
+    onEvent: (event, fields) => events.push({ event, fields }),
+  });
+
+  assert.deepEqual(events.map((entry) => entry.event), [
+    'web_fetch_upstream_request',
+    'web_fetch_upstream_response',
+  ]);
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /super-secret/);
+  assert.doesNotMatch(serialized, /PRIVATE PAGE BODY/);
+  assert.match(serialized, /example\.com/);
+  assert.match(serialized, /127\.0\.0\.1/);
+});
+
+test('WebFetch rejection emits a safe rejected diagnostic', async (t) => {
+  const backend = await startServer((_req, res) => {
+    res.writeHead(403, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ detail: 'robots denied', private_body: 'do not log' }));
+  });
+  t.after(() => backend.server.close());
+  const events = [];
+
+  await assert.rejects(
+    executeManagedTool({ name: 'WebFetch', input: { url: 'https://example.com/news' } }, {
+      searxngUrl: '', webFetchUrl: backend.url, webFetchApiKey: '', limits: { maxOutputChars: 10000 },
+    }, undefined, {
+      onEvent: (event, fields) => events.push({ event, fields }),
+    }),
+    /robots denied/,
+  );
+
+  assert.equal(events.at(-1).event, 'web_fetch_upstream_rejected');
+  assert.equal(events.at(-1).fields.http_status, 403);
+  assert.deepEqual(events.at(-1).fields.response_keys, ['detail', 'private_body']);
+  assert.doesNotMatch(JSON.stringify(events), /do not log/);
+});

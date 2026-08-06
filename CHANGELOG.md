@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.9 - 2026-08-06
+
+- Aligned the awesome-web-fetch integration with its HTTP contract: exact configured endpoint, `urls[]` request body, optional Bearer API key and `page_content` / `metadata` response normalization.
+- Changed expected WebFetch HTTP, robots and backend rejections into correlated `tool_result` errors so the Base model can select another source without terminating the complete Claude Code request.
+- Added safe WebFetch diagnostics for request, response and rejection boundaries without logging API keys or fetched page content.
+- Replaced the implicit Node.js fetch timeout on Base vLLM requests with configurable connect, response-header and response-body-idle timeouts.
+- Added stage-specific Base vLLM timeout and network error codes plus `base_upstream_request_failed` diagnostics.
+- Changed managed progress to retain the latest pre-visibility state and immediately emit every state revision; the 30-second semantic heartbeat now represents only unchanged work.
+- Added immediate Base vLLM lifecycle progress for request submission, response-header receipt and first model content.
+- Added progress revision and delivery-latency diagnostics and regression coverage for WebFetch recovery, delayed Base headers and immediate Claude Code progress delivery.
+
 ## 0.2.8 - 2026-08-06
 
 - Added request-scoped file-aware media progress with safe basename resolution from `source.filename`, block titles, and correlated Claude Code `Read` tool calls.

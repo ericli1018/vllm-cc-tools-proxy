@@ -83,7 +83,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, onWrite = () => {},
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, onWrite = () => {}, onStateChange = () => {},
   } = {}) {
     this.res = res;
     this.model = model;
@@ -92,14 +92,19 @@ export class ProgressStream {
     this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.drainTimeoutMs = drainTimeoutMs;
     this.onWrite = onWrite;
+    this.onStateChange = onStateChange;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
     this.progressClosed = false;
-    this.lastMessage = '';
+    this.lastStateKey = '';
+    this.lastHeartbeatMessage = '';
+    this.revision = 0;
     this.queue = Promise.resolve();
     this.sequence = 0;
     this.semanticHeartbeatTimer = null;
+    this.pendingTimer = null;
+    this.pendingUpdate = null;
     this.pingTimer = setInterval(() => {
       this.writeRaw(event('ping', { type: 'ping' }), { kind: 'ping' }).catch(() => {});
     }, pingIntervalMs);
@@ -109,7 +114,10 @@ export class ProgressStream {
   async #write(chunk, metadata = {}) {
     const result = await writeChunk(this.res, chunk, { drainTimeoutMs: this.drainTimeoutMs });
     this.sequence += 1;
-    try { await this.onWrite({ sequence: this.sequence, ...metadata, ...result }); } catch {}
+    const deliveryLatencyMs = Number.isFinite(metadata.changedAt)
+      ? Math.max(0, Date.now() - metadata.changedAt)
+      : 0;
+    try { await this.onWrite({ sequence: this.sequence, ...metadata, deliveryLatencyMs, ...result }); } catch {}
     return result;
   }
 
@@ -172,36 +180,95 @@ export class ProgressStream {
     this.semanticHeartbeatTimer = null;
   }
 
-  async update(message, { force = false, kind = 'progress_delta', details = {} } = {}) {
-    if (this.closed || this.progressClosed || !message || message === this.lastMessage) return;
-    if (!force && !this.visible && Date.now() - this.startedAt < this.visibleAfterMs) return;
-    this.lastMessage = message;
-    await this.#enqueue(async () => {
+  #clearPending() {
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = null;
+    this.pendingUpdate = null;
+  }
+
+  #stateKey(message, details) {
+    try { return JSON.stringify([message, details || {}]); } catch { return `${message}|${String(details?.phase || '')}`; }
+  }
+
+  #schedulePending() {
+    if (this.pendingTimer || !this.pendingUpdate) return;
+    const remaining = Math.max(0, this.visibleAfterMs - (Date.now() - this.startedAt));
+    this.pendingTimer = setTimeout(() => {
+      this.pendingTimer = null;
+      const pending = this.pendingUpdate;
+      this.pendingUpdate = null;
+      if (!pending || this.closed || this.progressClosed) return;
+      this.#emitUpdate(pending).catch(() => {});
+    }, remaining);
+    this.pendingTimer.unref?.();
+  }
+
+  #emitUpdate(entry) {
+    return this.#enqueue(async () => {
+      if (this.closed || this.progressClosed) return;
+      const metadata = {
+        kind: entry.kind,
+        phase: entry.details.phase,
+        revision: entry.revision,
+        changedAt: entry.changedAt,
+      };
       if (!this.visible) {
         this.visible = true;
         await this.#write(event('content_block_start', {
           type: 'content_block_start',
           index: 0,
           content_block: { type: 'text', text: '' },
-        }), { kind: 'progress_block_start', phase: details.phase });
+        }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt });
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${PROGRESS_BLOCK_HEADER}\n${message}` },
-        }), { kind, phase: details.phase });
+          delta: { type: 'text_delta', text: `${PROGRESS_BLOCK_HEADER}\n${entry.message}` },
+        }), metadata);
       } else {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `\n${message}` },
-        }), { kind, phase: details.phase });
+          delta: { type: 'text_delta', text: `\n${entry.message}` },
+        }), metadata);
       }
     });
+  }
+
+  async update(message, { force = false, kind = 'progress_delta', details = {} } = {}) {
+    if (this.closed || this.progressClosed || !message) return;
+    const changedAt = Date.now();
+    const isHeartbeat = kind === 'semantic_heartbeat';
+    let revision = this.revision;
+
+    if (isHeartbeat) {
+      if (message === this.lastHeartbeatMessage) return;
+      this.lastHeartbeatMessage = message;
+    } else {
+      const stateKey = this.#stateKey(message, details);
+      if (stateKey === this.lastStateKey) return;
+      this.lastStateKey = stateKey;
+      revision = ++this.revision;
+      try { await this.onStateChange({ revision, phase: details.phase, changedAt, message }); } catch {}
+    }
+
+    const entry = { message, kind, details, revision, changedAt };
+    const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
+    if (!force && belowThreshold) {
+      this.pendingUpdate = entry;
+      this.#schedulePending();
+      return;
+    }
+
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = null;
+    this.pendingUpdate = null;
+    await this.#emitUpdate(entry);
   }
 
   async closeProgress(finalMessage = '') {
     if (this.progressClosed) return;
     this.stopSemanticHeartbeat();
+    this.#clearPending();
     if (finalMessage && this.visible) await this.update(finalMessage, { force: true, details: { phase: 'progress_close' } });
     this.progressClosed = true;
     await this.#enqueue(async () => {
@@ -222,6 +289,7 @@ export class ProgressStream {
     this.closed = true;
     this.stopKeepalive();
     this.stopSemanticHeartbeat();
+    this.#clearPending();
     await this.queue;
   }
 }

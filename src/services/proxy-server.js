@@ -15,6 +15,7 @@ import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
+import { requestBaseUpstream } from './base-upstream.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -40,19 +41,19 @@ function upstreamHeaders(incomingHeaders, config) {
 }
 
 async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages') {
-  let response;
   try {
-    response = await fetch(upstreamEndpoint(config.vllmBaseUrl, path), {
+    return await requestBaseUpstream(upstreamEndpoint(config.vllmBaseUrl, path), {
       method: 'POST',
       headers: upstreamHeaders(incomingHeaders, config),
       body: JSON.stringify(request),
       signal,
-    });
+    }, config.vllmBaseTimeouts);
   } catch (error) {
-    if (error?.name === 'AbortError') throw error;
-    throw new HttpError(502, 'vLLM upstream is unavailable.', { code: 'vllm_unavailable', retryable: true });
+    if (error instanceof HttpError || error?.name === 'AbortError') throw error;
+    throw new HttpError(502, 'Base vLLM upstream is unavailable.', {
+      code: 'vllm_unavailable', retryable: true,
+    });
   }
-  return response;
 }
 
 async function callUpstreamJson(request, config, incomingHeaders, signal, path = '/v1/messages') {
@@ -237,7 +238,7 @@ export function createProxyServer(config, dependencies = {}) {
         const registryState = analysisRegistry.health();
         completed = true;
         return sendJson(res, 200, {
-          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.8', revision: config.gitRevision,
+          status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: '0.2.9', revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
           cache: { ...cacheState, ...registryState },
@@ -390,6 +391,14 @@ export function createProxyServer(config, dependencies = {}) {
           heartbeatIntervalMs: config.progressHeartbeatMs,
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
+          onStateChange: (entry) => {
+            log(config, 'info', 'progress_state_changed', {
+              requestId,
+              revision: entry.revision,
+              phase: entry.phase,
+              changed_at: new Date(entry.changedAt).toISOString(),
+            });
+          },
           onWrite: (entry) => {
             if (entry.backpressure) {
               log(config, 'warn', 'progress_sse_backpressure', {
@@ -408,6 +417,8 @@ export function createProxyServer(config, dependencies = {}) {
                 phase: entry.phase,
                 sequence: entry.sequence,
                 bytes: entry.bytes,
+                revision: entry.revision,
+                delivery_latency_ms: entry.deliveryLatencyMs,
                 writable_length: res.writableLength || 0,
               });
             }
@@ -467,7 +478,9 @@ export function createProxyServer(config, dependencies = {}) {
       if (hasManagedTools) {
         const result = await runManagedLoop(request, {
           upstream,
-          executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal),
+          executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
+            onEvent: (event, fields) => log(config, event.endsWith('_rejected') ? 'warn' : 'info', event, { requestId, ...fields }),
+          }),
           maxRounds: config.maxToolRounds,
           onProgress,
           signal: abortController.signal,
@@ -480,7 +493,23 @@ export function createProxyServer(config, dependencies = {}) {
         if (request.stream === true) {
           await streamManagedBase(progress, request, config, req.headers, abortController.signal, {
             onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
-            onLifecycle: (event, fields) => log(config, 'info', event, { requestId, ...fields }),
+            onLifecycle: async (event, fields) => {
+              log(config, 'info', event, { requestId, ...fields });
+              if (event === 'base_upstream_request_start') {
+                await onProgress('正在將內容送往主模型…', {
+                  phase: 'base_request_start',
+                  request_bytes: fields.request_bytes,
+                  message_count: fields.message_count,
+                  evidence_bytes: fields.evidence_bytes,
+                });
+              } else if (event === 'base_upstream_headers_received') {
+                await onProgress('主模型已接受請求，正在準備輸出…', {
+                  phase: 'base_headers_received',
+                  status: fields.status,
+                  header_wait_ms: fields.header_wait_ms,
+                });
+              }
+            },
           });
         } else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
       }
@@ -490,6 +519,16 @@ export function createProxyServer(config, dependencies = {}) {
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = ['proxy_queue_full', 'proxy_queue_timeout'].includes(error.code) ? 'warn' : 'error';
+      if (typeof error.code === 'string' && error.code.startsWith('vllm_')) {
+        log(config, failureLevel, 'base_upstream_request_failed', {
+          requestId,
+          code: error.code,
+          stage: error.details?.stage || (error.code.includes('headers') ? 'headers' : error.code.includes('body') ? 'body' : error.code.includes('connect') ? 'connect' : 'request'),
+          timeout_ms: error.details?.timeout_ms,
+          elapsed_ms: error.details?.elapsed_ms ?? error.details?.timeout_ms,
+          cause_code: error.details?.cause_code,
+        });
+      }
       log(config, failureLevel, 'request_failed', { requestId, method: req.method, path: url.pathname, code: error.code || 'internal_error', message: error.message });
       if (['proxy_queue_full', 'proxy_queue_timeout'].includes(error.code) && !res.headersSent) res.setHeader('retry-after', '10');
       if (progress) await emitSseError(progress, error);

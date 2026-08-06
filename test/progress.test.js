@@ -201,3 +201,48 @@ test('upstream progress remains open through first-event wait and heartbeat stop
   assert.ok(stream.indexOf('content_block_stop') < modelAt);
   assert.equal(progress.semanticHeartbeatTimer, null);
 });
+
+test('pre-threshold progress retains the latest pending state and reveals it at the visibility threshold', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 30,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.update('狀態 A', { details: { phase: 'a' } });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await progress.update('狀態 B', { details: { phase: 'b' } });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.equal(progress.visible, true);
+  assert.doesNotMatch(stream, /狀態 A/);
+  assert.match(stream, /狀態 B/);
+});
+
+test('equal progress text with different structured state revisions is delivered twice', async () => {
+  const response = new FakeResponse();
+  const writes = [];
+  const changes = [];
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    onWrite: (entry) => writes.push(entry),
+    onStateChange: (entry) => changes.push(entry),
+  });
+  await progress.open();
+  await progress.update('正在準備圖片…', { details: { phase: 'image_prepare', page: 1 } });
+  await progress.update('正在準備圖片…', { details: { phase: 'image_prepare', page: 2 } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.equal((stream.match(/正在準備圖片/g) || []).length, 2);
+  assert.deepEqual(changes.map((entry) => entry.revision), [1, 2]);
+  const stateWrites = writes.filter((entry) => entry.kind === 'progress_delta');
+  assert.deepEqual(stateWrites.map((entry) => entry.revision), [1, 2]);
+  assert.ok(stateWrites.every((entry) => Number.isInteger(entry.deliveryLatencyMs)));
+});

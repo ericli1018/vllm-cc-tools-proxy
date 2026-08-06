@@ -67,36 +67,131 @@ async function webSearch(input, config, signal) {
   return { query, result_count: results.length, results };
 }
 
-async function webFetch(input, config, signal) {
-  if (!config.webFetchUrl) throw new HttpError(422, 'WEB_FETCH_URL is not configured.', { code: 'web_fetch_unavailable' });
-  const targetUrl = validateFetchTarget(input?.url);
-  const payload = await fetchJson(serviceEndpoint(config.webFetchUrl, '/v1/fetch'), {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      url: targetUrl,
-      output: input?.output || 'markdown',
-      timeout_ms: input?.timeout_ms,
-    }),
-    signal,
-  }, { errorCode: 'web_fetch_error' });
-  const content = boundedText(payload.markdown || payload.content || payload.text || '', config.limits.maxOutputChars);
+function webFetchErrorMessage(payload) {
+  if (typeof payload?.detail === 'string' && payload.detail) return payload.detail;
+  if (typeof payload?.error === 'string' && payload.error) return payload.error;
+  if (typeof payload?.error?.message === 'string' && payload.error.message) return payload.error.message;
+  if (typeof payload?.message === 'string' && payload.message) return payload.message;
+  return 'Service rejected the request.';
+}
+
+function normalizeWebFetchPayload(payload, targetUrl, maxChars) {
+  const item = Array.isArray(payload) ? payload[0] || {} : payload || {};
+  const metadata = item.metadata && typeof item.metadata === 'object' ? item.metadata : {};
+  const rawContent = item.page_content ?? item.markdown ?? item.content ?? item.text ?? '';
+  const content = boundedText(rawContent, maxChars);
   return {
     requested_url: targetUrl,
-    final_url: payload.final_url || targetUrl,
-    status: payload.status || 200,
-    title: payload.title || '',
-    content_type: payload.content_type || '',
+    final_url: metadata.final_url || metadata.source || item.final_url || targetUrl,
+    status: metadata.status_code || item.status || 200,
+    title: metadata.title || item.title || '',
+    content_type: metadata.content_type || item.content_type || '',
     markdown: content.text,
-    truncated: Boolean(payload.truncated || content.truncated),
-    warnings: payload.warnings || [],
-    fetch_backend: payload.fetch_backend || 'awesome-web-fetch',
+    truncated: Boolean(item.truncated || content.truncated),
+    warnings: Array.isArray(item.warnings) ? item.warnings : [],
+    browser_rendered: Boolean(metadata.browser_rendered || item.browser_rendered),
+    fetch_backend: item.fetch_backend || 'awesome-web-fetch',
   };
 }
 
-export async function executeManagedTool(block, config, signal) {
+async function webFetch(input, config, signal, onEvent = () => {}) {
+  if (!config.webFetchUrl) throw new HttpError(422, 'WEB_FETCH_URL is not configured.', { code: 'web_fetch_unavailable' });
+  const targetUrl = validateFetchTarget(input?.url);
+  const target = new URL(targetUrl);
+  const backend = new URL(config.webFetchUrl);
+  const headers = { 'content-type': 'application/json' };
+  if (config.webFetchApiKey) headers.authorization = `Bearer ${config.webFetchApiKey}`;
+  const startedAt = Date.now();
+  await onEvent('web_fetch_upstream_request', {
+    target_host: target.host,
+    backend_host: backend.host,
+    endpoint_path: backend.pathname || '/',
+    authenticated: Boolean(config.webFetchApiKey),
+  });
+
+  let response;
+  try {
+    response = await fetch(config.webFetchUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ urls: [targetUrl] }),
+      signal,
+    });
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    await onEvent('web_fetch_upstream_rejected', {
+      target_host: target.host,
+      backend_host: backend.host,
+      endpoint_path: backend.pathname || '/',
+      http_status: 0,
+      elapsed_ms: Date.now() - startedAt,
+      response_content_type: '',
+      response_keys: [],
+      cause_code: String(error?.cause?.code || error?.code || 'unknown').slice(0, 120),
+    });
+    throw new HttpError(502, `Unable to reach service: ${backend.host}`, {
+      code: 'web_fetch_error', retryable: true,
+    });
+  }
+
+  const text = await response.text();
+  let payload;
+  try { payload = text ? JSON.parse(text) : {}; } catch {
+    await onEvent('web_fetch_upstream_rejected', {
+      target_host: target.host,
+      backend_host: backend.host,
+      endpoint_path: backend.pathname || '/',
+      http_status: response.status,
+      elapsed_ms: Date.now() - startedAt,
+      response_content_type: response.headers.get('content-type') || '',
+      response_keys: [],
+      cause_code: 'invalid_json',
+    });
+    throw new HttpError(502, 'Service returned invalid JSON.', {
+      code: 'web_fetch_error', retryable: true,
+      details: { upstream_status: response.status, upstream_code: '' },
+    });
+  }
+  if (!response.ok) {
+    const upstreamCode = typeof payload?.error?.type === 'string'
+      ? payload.error.type
+      : typeof payload?.code === 'string' ? payload.code : '';
+    await onEvent('web_fetch_upstream_rejected', {
+      target_host: target.host,
+      backend_host: backend.host,
+      endpoint_path: backend.pathname || '/',
+      http_status: response.status,
+      elapsed_ms: Date.now() - startedAt,
+      response_content_type: response.headers.get('content-type') || '',
+      response_keys: payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? Object.keys(payload).sort()
+        : [],
+      cause_code: upstreamCode,
+    });
+    throw new HttpError(response.status >= 500 ? 502 : response.status, webFetchErrorMessage(payload), {
+      code: 'web_fetch_error',
+      retryable: response.status >= 500,
+      details: { upstream_status: response.status, upstream_code: upstreamCode },
+    });
+  }
+  const normalized = normalizeWebFetchPayload(payload, targetUrl, config.limits.maxOutputChars);
+  await onEvent('web_fetch_upstream_response', {
+    target_host: target.host,
+    backend_host: backend.host,
+    endpoint_path: backend.pathname || '/',
+    http_status: response.status,
+    elapsed_ms: Date.now() - startedAt,
+    response_content_type: response.headers.get('content-type') || '',
+    result_count: Array.isArray(payload) ? payload.length : 1,
+    content_chars: normalized.markdown.length,
+    truncated: normalized.truncated,
+  });
+  return normalized;
+}
+
+export async function executeManagedTool(block, config, signal, { onEvent = () => {} } = {}) {
   const name = normalizeManagedToolName(block?.name);
   if (!name) throw new HttpError(422, `Unsupported managed tool: ${block?.name || 'unknown'}`, { code: 'unsupported_managed_tool' });
   if (name === 'WebSearch') return webSearch(block.input || {}, config, signal);
-  return webFetch(block.input || {}, config, signal);
+  return webFetch(block.input || {}, config, signal, onEvent);
 }

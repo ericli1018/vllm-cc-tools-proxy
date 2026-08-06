@@ -14,21 +14,21 @@ function config(overrides = {}) {
   return {
     host: '127.0.0.1', port: 0, resourceProfile: 'default',
     limits: { maxRequestBytes: 4*1024*1024, maxDecodedBytes: 4*1024*1024, maxPdfPages: 20, maxOutputChars: 100000, processTimeoutMs: 20000, nativeTextMinCharsPerPage: 80, maxImagePixels: 20_000_000, maxVisualPagesPerBatch: 4 },
-    vllmBaseApiKey: '', vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
-    searxngUrl: '', webFetchUrl: '', maxToolRounds: 6,
+    vllmBaseApiKey: '', vllmBaseTimeouts: { connectTimeoutMs: 10000, headersTimeoutMs: 900000, bodyTimeoutMs: 900000 }, vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+    searxngUrl: '', webFetchUrl: '', webFetchApiKey: '', maxToolRounds: 6,
     progressVisibleAfterMs: 0, progressPingIntervalMs: 10000, progressHeartbeatMs: 15000,
     concurrency: { profile: 'default', managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 },
     logLevel: 'error', gitRevision: 'test', ...overrides,
   };
 }
 
-test('proxy health endpoint reports V0.2.8, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.9, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.8', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.9', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -629,4 +629,105 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   }
   assert.ok(lifecycle.some((entry) => entry.event === 'managed_task_progress' && entry.delivery_status === 'requested'));
   assert.ok(lifecycle.some((entry) => entry.event === 'progress_sse_sent' && entry.kind === 'semantic_heartbeat'));
+});
+
+test('managed Base request uses configured response-header timeout and returns a stage-specific error', async (t) => {
+  const vllm = http.createServer((_req, res) => {
+    setTimeout(() => {
+      if (res.destroyed) return;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'late', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'too late' }], stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+    }, 80);
+  });
+  const vllmUrl = await listen(vllm);
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    vllmBaseTimeouts: { connectTimeoutMs: 200, headersTimeoutMs: 25, bodyTimeoutMs: 200 },
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'search current news' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /vllm_headers_timeout/);
+  assert.doesNotMatch(stream, /too late/);
+  const failed = logs.find((entry) => entry.event === 'base_upstream_request_failed');
+  assert.equal(failed.stage, 'headers');
+  assert.equal(failed.code, 'vllm_headers_timeout');
+  assert.equal(failed.timeout_ms, 25);
+});
+
+test('Base lifecycle state changes are delivered immediately instead of waiting for heartbeat', async (t) => {
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const logs = [];
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    setTimeout(() => {
+      if (res.destroyed) return;
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.flushHeaders();
+      setTimeout(() => {
+        if (res.destroyed) return;
+        res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+        res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+        res.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"DONE"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      }, 25);
+    }, 25);
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressHeartbeatMs: 60_000,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async () => ({
+        parser: 'test', page_count: 1, processed_pages: 1, visual_used: false,
+        markdown: 'PDF evidence', warnings: [], truncated: false,
+      }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      messages: [{ role: 'user', content: [{
+        type: 'document',
+        source: { type: 'base64', media_type: 'application/pdf', filename: '/secret/path/board.pdf', data: pdf.toString('base64') },
+      }] }],
+    }),
+  });
+  const stream = await response.text();
+  const requestStart = stream.indexOf('正在將內容送往主模型');
+  const headersReceived = stream.indexOf('主模型已接受請求');
+  const firstEvent = stream.indexOf('主模型已開始回傳結果');
+  assert.ok(requestStart >= 0);
+  assert.ok(headersReceived > requestStart);
+  assert.ok(firstEvent > headersReceived);
+  assert.match(stream, /DONE/);
+
+  const sent = logs.filter((entry) => entry.event === 'progress_sse_sent');
+  assert.ok(sent.some((entry) => entry.phase === 'base_request_start' && entry.delivery_latency_ms < 25));
+  assert.ok(sent.some((entry) => entry.phase === 'base_headers_received' && entry.delivery_latency_ms < 25));
+  assert.ok(logs.some((entry) => entry.event === 'progress_state_changed' && entry.phase === 'base_headers_received'));
 });

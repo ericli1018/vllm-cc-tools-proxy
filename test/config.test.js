@@ -134,3 +134,38 @@ test('semantic heartbeat and SSE drain timeout have bounded defaults and overrid
   assert.equal(custom.sseDrainTimeoutMs, 20000);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', SSE_DRAIN_TIMEOUT_MS: '999' }), /SSE_DRAIN_TIMEOUT_MS/);
 });
+
+test('WebFetch API key is optional and preserved without logging transformation', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', WEB_FETCH_URL: 'http://fetch:3000/api' });
+  assert.equal(defaults.webFetchApiKey, '');
+  assert.equal(defaults.webFetchUrl, 'http://fetch:3000/api');
+
+  const configured = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_URL: 'http://fetch:3000/api',
+    WEB_FETCH_API_KEY: 'fetch-secret',
+  });
+  assert.equal(configured.webFetchApiKey, 'fetch-secret');
+});
+
+test('Base upstream timeout defaults and overrides are explicit', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.deepEqual(defaults.vllmBaseTimeouts, {
+    connectTimeoutMs: 10000,
+    headersTimeoutMs: 900000,
+    bodyTimeoutMs: 900000,
+  });
+
+  const custom = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_CONNECT_TIMEOUT_MS: '15000',
+    VLLM_BASE_HEADERS_TIMEOUT_MS: '1200000',
+    VLLM_BASE_BODY_TIMEOUT_MS: '600000',
+  });
+  assert.deepEqual(custom.vllmBaseTimeouts, {
+    connectTimeoutMs: 15000,
+    headersTimeoutMs: 1200000,
+    bodyTimeoutMs: 600000,
+  });
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_BASE_CONNECT_TIMEOUT_MS: '999' }), /VLLM_BASE_CONNECT_TIMEOUT_MS/);
+});

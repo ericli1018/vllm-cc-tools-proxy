@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY; do
   grep -q "^${name}=" .env.example
 done
 grep -q '^CONCURRENCY_PROFILE=default$' .env.example
@@ -43,9 +43,19 @@ grep -q '^PROGRESS_HEARTBEAT_MS=30000$' .env.example
 grep -q '^SSE_DRAIN_TIMEOUT_MS=10000$' .env.example
 grep -Fq 'PROGRESS_HEARTBEAT_MS: ${PROGRESS_HEARTBEAT_MS:-30000}' compose.yaml
 grep -Fq 'SSE_DRAIN_TIMEOUT_MS: ${SSE_DRAIN_TIMEOUT_MS:-10000}' compose.yaml
+grep -q '^VLLM_BASE_CONNECT_TIMEOUT_MS=10000$' .env.example
+grep -q '^VLLM_BASE_HEADERS_TIMEOUT_MS=900000$' .env.example
+grep -q '^VLLM_BASE_BODY_TIMEOUT_MS=900000$' .env.example
+grep -Fq 'VLLM_BASE_CONNECT_TIMEOUT_MS: ${VLLM_BASE_CONNECT_TIMEOUT_MS:-10000}' compose.yaml
+grep -Fq 'VLLM_BASE_HEADERS_TIMEOUT_MS: ${VLLM_BASE_HEADERS_TIMEOUT_MS:-900000}' compose.yaml
+grep -Fq 'VLLM_BASE_BODY_TIMEOUT_MS: ${VLLM_BASE_BODY_TIMEOUT_MS:-900000}' compose.yaml
+grep -Fq 'WEB_FETCH_API_KEY: ${WEB_FETCH_API_KEY:-}' compose.yaml
 test -f src/proxy/media-progress.js
+test -f src/services/base-upstream.js
 grep -Fq 'base_upstream_first_event' src/services/proxy-server.js
 grep -Fq 'progress_sse_sent' src/services/proxy-server.js
+grep -Fq 'base_upstream_request_failed' src/services/proxy-server.js
+grep -Fq 'web_fetch_upstream_rejected' src/proxy/web-tools.js
 
 grep -Fq "export const PROGRESS_BLOCK_HEADER = '目前處理進度：';" src/proxy/progress.js
 node - <<'NODE'
@@ -54,7 +64,7 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.8'
+test "$(node -p "require('./package.json').version")" = '0.2.9'
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js
