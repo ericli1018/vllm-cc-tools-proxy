@@ -84,6 +84,8 @@ export function loadConfig(env = process.env) {
     model: env.WEB_FETCH_PROCESSOR_MODEL || '',
     apiKey: env.WEB_FETCH_PROCESSOR_API_KEY || (hasExplicitWebFetchProcessorUrl ? '' : vllmBaseApiKey),
     think: booleanValue(env.WEB_FETCH_PROCESSOR_THINK, false, 'WEB_FETCH_PROCESSOR_THINK'),
+    concurrency: intValue(env.WEB_FETCH_PROCESSOR_CONCURRENCY, 3, 'WEB_FETCH_PROCESSOR_CONCURRENCY', { min: 1, max: 3 }),
+    timeoutMs: intValue(env.WEB_FETCH_PROCESSOR_TIMEOUT_MS, 300000, 'WEB_FETCH_PROCESSOR_TIMEOUT_MS', { min: 1000, max: 3600000 }),
   });
 
   const vllmVisionUrl = normalizedUrl(env.VLLM_VISION_URL, '', 'VLLM_VISION_URL');
@@ -160,7 +162,8 @@ export function loadConfig(env = process.env) {
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
     usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
-    managedTaskTimeoutMs: intValue(env.MANAGED_TASK_TIMEOUT_MS, 600000, 'MANAGED_TASK_TIMEOUT_MS', { min: 60000, max: 3600000 }),
+    managedTaskTimeoutMs: intValue(env.MANAGED_TASK_TIMEOUT_MS, 1800000, 'MANAGED_TASK_TIMEOUT_MS', { min: 60000, max: 3600000 }),
+    managedModelRoundTimeoutMs: intValue(env.MANAGED_MODEL_ROUND_TIMEOUT_MS, 360000, 'MANAGED_MODEL_ROUND_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),
     progressHeartbeatMs: intValue(env.PROGRESS_HEARTBEAT_MS, 30000, 'PROGRESS_HEARTBEAT_MS', { min: 5000 }),

@@ -148,6 +148,7 @@ export async function processWebFetchContent(source, {
   processor = {},
   signal,
   onEvent = () => {},
+  acquireProcessor,
 } = {}) {
   const clean = cleanWebSource(source?.markdown || '');
   const selectedModel = processor.model || model;
@@ -183,6 +184,7 @@ export async function processWebFetchContent(source, {
     ],
   };
 
+  const releaseProcessor = acquireProcessor ? await acquireProcessor({ signal }) : () => {};
   await onEvent('web_fetch_processor_request', {
     backend_host: endpoint.host,
     endpoint_path: endpoint.pathname || '/',
@@ -193,7 +195,7 @@ export async function processWebFetchContent(source, {
   });
   const startedAt = Date.now();
   try {
-    const timeoutSignal = AbortSignal.timeout(PROCESSOR_TIMEOUT_MS);
+    const timeoutSignal = AbortSignal.timeout(processor.timeoutMs || PROCESSOR_TIMEOUT_MS);
     const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     const response = await fetch(processor.url, {
       method: 'POST', headers, body: JSON.stringify(body), signal: combinedSignal,
@@ -230,5 +232,7 @@ export async function processWebFetchContent(source, {
       clean_chars: clean.cleanChars,
     });
     return fallbackEnvelope(source, clean, `WebFetch Processor fallback: ${reason}.`);
+  } finally {
+    releaseProcessor();
   }
 }

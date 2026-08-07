@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK LOG_PROTOCOL_SNIPPETS; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS LOG_PROTOCOL_SNIPPETS; do
   grep -q "^${name}=" .env.example
 done
 grep -q '^CONCURRENCY_PROFILE=default$' .env.example
@@ -27,8 +27,10 @@ grep -Fq 'CONCURRENCY_PROFILE: ${CONCURRENCY_PROFILE:-default}' compose.yaml
 grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
 grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
-grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-600000}' compose.yaml
-grep -q '^MANAGED_TASK_TIMEOUT_MS=600000$' .env.example
+grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-1800000}' compose.yaml
+grep -q '^MANAGED_TASK_TIMEOUT_MS=1800000$' .env.example
+grep -Fq 'MANAGED_MODEL_ROUND_TIMEOUT_MS: ${MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000}' compose.yaml
+grep -q '^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$' .env.example
 grep -Fq 'VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MEDIA_CACHE_MAX_MB: ${MEDIA_CACHE_MAX_MB:-0}' compose.yaml
 grep -q '^MEDIA_CACHE_MAX_MB=0$' .env.example
@@ -57,9 +59,13 @@ grep -Fq 'WEB_FETCH_PROCESSOR_URL: ${WEB_FETCH_PROCESSOR_URL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_MODEL: ${WEB_FETCH_PROCESSOR_MODEL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_API_KEY: ${WEB_FETCH_PROCESSOR_API_KEY:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_THINK: ${WEB_FETCH_PROCESSOR_THINK:-false}' compose.yaml
+grep -Fq 'WEB_FETCH_PROCESSOR_CONCURRENCY: ${WEB_FETCH_PROCESSOR_CONCURRENCY:-3}' compose.yaml
+grep -Fq 'WEB_FETCH_PROCESSOR_TIMEOUT_MS: ${WEB_FETCH_PROCESSOR_TIMEOUT_MS:-300000}' compose.yaml
 grep -Fq 'LOG_PROTOCOL_SNIPPETS: ${LOG_PROTOCOL_SNIPPETS:-false}' compose.yaml
 grep -q '^WEB_FETCH_PROCESSOR_ENABLED=true$' .env.example
 grep -q '^WEB_FETCH_PROCESSOR_THINK=false$' .env.example
+grep -q '^WEB_FETCH_PROCESSOR_CONCURRENCY=3$' .env.example
+grep -q '^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$' .env.example
 test -f src/proxy/media-progress.js
 test -f src/services/base-upstream.js
 grep -Fq 'base_upstream_first_event' src/services/proxy-server.js
@@ -77,7 +83,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.19'
+test "$(node -p "require('./package.json').version")" = '0.2.19+hotfix.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.19.1'
 
 
 test -f src/proxy/native-web-tools.js

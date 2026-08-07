@@ -6,14 +6,14 @@ import {
   inspectManagedFinalResponse,
 } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
-import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
+import { isManagedToolName, normalizeManagedToolName, normalizeManagedToolUseBlock } from './web-tools.js';
 import { normalizeNativeWebToolResponse, isResponseSideNativeWebToolUse } from './native-web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
 
-const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 600_000;
-const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 240_000;
+const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 1_800_000;
+const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -330,6 +330,12 @@ export async function runManagedLoop(initialRequest, {
     });
     response = recovered.response;
     recovery = recovered.recovery;
+    if (Array.isArray(response?.content)) {
+      const normalizedContent = response.content.map((block) => normalizeManagedToolUseBlock(block));
+      if (normalizedContent.some((block, index) => block !== response.content[index])) {
+        response = { ...response, content: normalizedContent };
+      }
+    }
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
@@ -384,8 +390,7 @@ export async function runManagedLoop(initialRequest, {
       });
     }
 
-    const results = [];
-    for (const toolUse of toolUses) {
+    const results = await Promise.all(toolUses.map(async (toolUse) => {
       await onProgress(progressMessage(toolUse.name, toolUse.input, 'start'), {
         phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1, force: true,
       });
@@ -409,11 +414,11 @@ export async function runManagedLoop(initialRequest, {
         await onProgress(progressMessage(toolUse.name, toolUse.input, 'done'), {
           phase: 'managed_tool_done', name: normalizeManagedToolName(toolUse.name), round: round + 1,
         });
-        results.push({
+        return {
           type: 'tool_result',
           tool_use_id: toolUse.id,
           content: renderManagedToolResult(toolUse.name, neutralOutput),
-        });
+        };
       } catch (error) {
         if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
         if (!(error instanceof HttpError)) throw error;
@@ -421,18 +426,38 @@ export async function runManagedLoop(initialRequest, {
           phase: 'managed_tool_error', name: normalizeManagedToolName(toolUse.name), round: round + 1,
           code: error.code,
         });
-        results.push({
+        return {
           type: 'tool_result',
           tool_use_id: toolUse.id,
           is_error: true,
           content: JSON.stringify(neutralizeProtocolValue(safeToolError(error))),
-        });
+        };
       }
-    }
+    }));
 
     request.messages.push({ role: 'assistant', content: structuredClone(response.content) });
     request.messages.push({ role: 'user', content: results });
     injectManagedWebResultInstruction(request);
+
+    if (remainingTaskMs() <= modelRoundTimeoutMs && Array.isArray(request.tools)) {
+      const before = request.tools.length;
+      request.tools = request.tools.filter((tool) => !isManagedToolName(tool?.name));
+      const removed = before - request.tools.length;
+      if (removed > 0) {
+        if (request.tool_choice?.type === 'tool' && isManagedToolName(request.tool_choice?.name)) {
+          request.tool_choice = { type: 'auto' };
+        }
+        await onDiagnostic('managed_final_round_reserved', {
+          round: round + 1,
+          remaining_ms: Math.max(0, remainingTaskMs()),
+          reserve_ms: modelRoundTimeoutMs,
+          managed_tools_removed: removed,
+        });
+        await onProgress('研究工具預算已停止擴張；保留時間給主模型完成下一步…', {
+          phase: 'managed_final_round_reserved', round: round + 1,
+        });
+      }
+    }
   }
 
   throw new HttpError(422, 'Reached the maximum managed tool rounds.', {

@@ -22,15 +22,16 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.19, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.19.1, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.19', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.19.1', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
+    web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
   });
 });

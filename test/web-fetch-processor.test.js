@@ -163,3 +163,30 @@ test('processor prompt neutralizes untrusted metadata and reserved source-bounda
   assert.equal((userPrompt.match(/\[VCC_WEB_FETCH_RESULT_END\]/g) || []).length, 0);
   assert.match(userPrompt, /\[VCC_WEB_FETCH_RESULT_DATA_END\]/);
 });
+
+test('V0.2.19.1 WebFetch Processor uses the configured per-call timeout and falls back safely', async (t) => {
+  const backend = await startServer(async (_req, res) => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'late processor output' } }] }));
+  });
+  t.after(() => backend.server.close());
+  const events = [];
+  const startedAt = Date.now();
+  const result = await processWebFetchContent(source(), {
+    prompt: 'Extract facts.',
+    model: 'base-model',
+    processor: {
+      enabled: true,
+      url: `${backend.url}/v1/chat/completions`,
+      model: '',
+      apiKey: '',
+      think: false,
+      timeoutMs: 20,
+    },
+    onEvent: (event, fields) => events.push({ event, fields }),
+  });
+  assert.equal(result.processing.mode, 'fallback_excerpt');
+  assert.ok(Date.now() - startedAt < 70);
+  assert.ok(events.some((entry) => entry.event === 'web_fetch_processor_fallback' && entry.fields.reason === 'timeout'));
+});

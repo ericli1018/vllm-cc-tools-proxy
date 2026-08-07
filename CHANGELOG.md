@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.19.1 - 2026-08-07
+
+- Kept external release label `V0.2.19.1` while using npm-valid package metadata `0.2.19+hotfix.1`.
+- Added a proxy-wide WebFetch Processor semaphore with `WEB_FETCH_PROCESSOR_CONCURRENCY`, default 3 and bounded to 1..3.
+- Managed tool batches now execute independent tool calls concurrently while preserving correlated result order.
+- Added `WEB_FETCH_PROCESSOR_TIMEOUT_MS`, default 300000 ms, and preserved independent Processor `URL`, `API_KEY`, `MODEL`, and `THINK` routing.
+- Increased slow-model defaults to `MANAGED_TASK_TIMEOUT_MS=1800000` and added `MANAGED_MODEL_ROUND_TIMEOUT_MS=360000`.
+- Added final-round budget reservation: after managed evidence exists, WebSearch/WebFetch are removed from the next round when only one model-round budget remains; Claude Code client tools remain available.
+- Normalized string `allowed_domains` / `blocked_domains` arguments into arrays before managed execution or mixed Claude Code handoff.
+- Anthropic Native Web Search result/citation emulation remains out of scope for this hotfix.
+
 ## 0.2.19 - 2026-08-07
 
 - Applied managed final-response validation to every Base-model response, including responses that already contain structured `tool_use` blocks.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
-import { executeManagedTool, isManagedToolName, normalizeManagedToolName } from '../src/proxy/web-tools.js';
+import { executeManagedTool, isManagedToolName, normalizeManagedToolName, normalizeManagedToolUseBlock } from '../src/proxy/web-tools.js';
 
 async function startServer(handler) {
   const server = http.createServer(handler);
@@ -284,4 +284,20 @@ test('WebFetch applies max_content_tokens as a conservative output cap', async (
   });
   assert.equal(result.markdown.length, 40);
   assert.equal(result.truncated, true);
+});
+
+
+test('V0.2.19.1 normalizes WebSearch string domain filters into arrays', () => {
+  const normalized = normalizeManagedToolUseBlock({
+    type: 'tool_use',
+    id: 'search-1',
+    name: 'WebSearch',
+    input: {
+      query: 'openssl docs',
+      allowed_domains: 'docs.openssl.org',
+      blocked_domains: 'private.example.com',
+    },
+  });
+  assert.deepEqual(normalized.input.allowed_domains, ['docs.openssl.org']);
+  assert.deepEqual(normalized.input.blocked_domains, ['private.example.com']);
 });

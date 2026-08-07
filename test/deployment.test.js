@@ -28,7 +28,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -46,7 +46,8 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_MAX_CONCURRENCY:\s*\$\{MANAGED_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MANAGED_MAX_QUEUE:\s*\$\{MANAGED_MAX_QUEUE:-\}/);
   assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
-  assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-600000\}/);
+  assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-1800000\}/);
+  assert.match(compose, /MANAGED_MODEL_ROUND_TIMEOUT_MS:\s*\$\{MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
   assert.match(compose, /VLLM_VISION_PROVIDER:\s*\$\{VLLM_VISION_PROVIDER:-vllm\}/);
@@ -59,22 +60,27 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /WEB_FETCH_PROCESSOR_MODEL:\s*\$\{WEB_FETCH_PROCESSOR_MODEL:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_API_KEY:\s*\$\{WEB_FETCH_PROCESSOR_API_KEY:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_THINK:\s*\$\{WEB_FETCH_PROCESSOR_THINK:-false\}/);
+  assert.match(compose, /WEB_FETCH_PROCESSOR_CONCURRENCY:\s*\$\{WEB_FETCH_PROCESSOR_CONCURRENCY:-3\}/);
+  assert.match(compose, /WEB_FETCH_PROCESSOR_TIMEOUT_MS:\s*\$\{WEB_FETCH_PROCESSOR_TIMEOUT_MS:-300000\}/);
   assert.match(compose, /LOG_PROTOCOL_SNIPPETS:\s*\$\{LOG_PROTOCOL_SNIPPETS:-false\}/);
   assert.match(compose, /VLLM_BASE_CONNECT_TIMEOUT_MS:\s*\$\{VLLM_BASE_CONNECT_TIMEOUT_MS:-10000\}/);
   assert.match(compose, /VLLM_BASE_HEADERS_TIMEOUT_MS:\s*\$\{VLLM_BASE_HEADERS_TIMEOUT_MS:-900000\}/);
   assert.match(compose, /VLLM_BASE_BODY_TIMEOUT_MS:\s*\$\{VLLM_BASE_BODY_TIMEOUT_MS:-900000\}/);
   assert.match(envExample, /^PROGRESS_HEARTBEAT_MS=30000$/m);
   assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
-  assert.match(envExample, /^MANAGED_TASK_TIMEOUT_MS=600000$/m);
+  assert.match(envExample, /^MANAGED_TASK_TIMEOUT_MS=1800000$/m);
+  assert.match(envExample, /^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$/m);
+  assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
+  assert.match(envExample, /^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$/m);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.19', async () => {
+test('package version is V0.2.19.1', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.19');
-  assert.equal(lock.version, '0.2.19');
-  assert.equal(lock.packages[''].version, '0.2.19');
+  assert.equal(packageJson.version, '0.2.19+hotfix.1');
+  assert.equal(lock.version, '0.2.19+hotfix.1');
+  assert.equal(lock.packages[''].version, '0.2.19+hotfix.1');
 });
 
 
@@ -159,4 +165,15 @@ test('README documents V0.2.19 managed stability gates', () => {
   assert.match(readme, /laguna_runtime_contract_violation/);
   assert.match(readme, /poolside_v1/);
   assert.match(readme, /tool_result/);
+});
+
+
+test('README documents V0.2.19.1 parallel WebFetch and slow-model budgets', () => {
+  assert.match(readme, /V0\.2\.19\.1/);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_CONCURRENCY/);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_TIMEOUT_MS/);
+  assert.match(readme, /MANAGED_MODEL_ROUND_TIMEOUT_MS/);
+  assert.match(readme, /1800000/);
+  assert.match(readme, /managed_final_round_reserved/);
+  assert.match(readme, /allowed_domains/);
 });

@@ -171,7 +171,7 @@ test('Base upstream timeout defaults and overrides are explicit', () => {
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VLLM_BASE_CONNECT_TIMEOUT_MS: '999' }), /VLLM_BASE_CONNECT_TIMEOUT_MS/);
 });
 
-test('WebFetch Processor defaults inherit Base vLLM and expose only five simple controls', () => {
+test('WebFetch Processor defaults inherit Base vLLM with slow-model-friendly controls', () => {
   const config = loadConfig({
     VLLM_BASE_URL: 'http://vllm:8000/v1/messages',
     VLLM_BASE_API_KEY: 'base-secret',
@@ -182,10 +182,12 @@ test('WebFetch Processor defaults inherit Base vLLM and expose only five simple 
     model: '',
     apiKey: 'base-secret',
     think: false,
+    concurrency: 3,
+    timeoutMs: 300000,
   });
 });
 
-test('WebFetch Processor supports explicit URL model key and strict THINK', () => {
+test('WebFetch Processor supports explicit URL model key concurrency timeout and strict THINK', () => {
   const config = loadConfig({
     VLLM_BASE_URL: 'http://vllm:8000',
     VLLM_BASE_API_KEY: 'base-secret',
@@ -194,6 +196,8 @@ test('WebFetch Processor supports explicit URL model key and strict THINK', () =
     WEB_FETCH_PROCESSOR_MODEL: 'processor-model',
     WEB_FETCH_PROCESSOR_API_KEY: 'processor-secret',
     WEB_FETCH_PROCESSOR_THINK: 'true',
+    WEB_FETCH_PROCESSOR_CONCURRENCY: '2',
+    WEB_FETCH_PROCESSOR_TIMEOUT_MS: '420000',
   });
   assert.deepEqual(config.webFetchProcessor, {
     enabled: false,
@@ -201,11 +205,21 @@ test('WebFetch Processor supports explicit URL model key and strict THINK', () =
     model: 'processor-model',
     apiKey: 'processor-secret',
     think: true,
+    concurrency: 2,
+    timeoutMs: 420000,
   });
   assert.throws(() => loadConfig({
     VLLM_BASE_URL: 'http://vllm:8000',
     WEB_FETCH_PROCESSOR_THINK: 'yes',
   }), /WEB_FETCH_PROCESSOR_THINK/);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_CONCURRENCY: '4',
+  }), /WEB_FETCH_PROCESSOR_CONCURRENCY/);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_TIMEOUT_MS: '999',
+  }), /WEB_FETCH_PROCESSOR_TIMEOUT_MS/);
 });
 
 test('explicit WebFetch Processor URL does not inherit the Base API key across hosts', () => {
@@ -236,10 +250,17 @@ test('protocol diagnostics use an internal timestamped temporary directory witho
   assert.match(config.protocolDiagnosticsDir, /vllm-cc-tools-proxy[\\/]protocol-snippets$/);
 });
 
-test('V0.2.19 managed task timeout has one simple bounded override', () => {
+test('V0.2.19.1 managed time budgets favor slow local models with bounded overrides', () => {
   const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
-  assert.equal(defaults.managedTaskTimeoutMs, 600000);
-  const custom = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '900000' });
-  assert.equal(custom.managedTaskTimeoutMs, 900000);
+  assert.equal(defaults.managedTaskTimeoutMs, 1800000);
+  assert.equal(defaults.managedModelRoundTimeoutMs, 360000);
+  const custom = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    MANAGED_TASK_TIMEOUT_MS: '1200000',
+    MANAGED_MODEL_ROUND_TIMEOUT_MS: '480000',
+  });
+  assert.equal(custom.managedTaskTimeoutMs, 1200000);
+  assert.equal(custom.managedModelRoundTimeoutMs, 480000);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '1000' }), /MANAGED_TASK_TIMEOUT_MS/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_MODEL_ROUND_TIMEOUT_MS: '1000' }), /MANAGED_MODEL_ROUND_TIMEOUT_MS/);
 });

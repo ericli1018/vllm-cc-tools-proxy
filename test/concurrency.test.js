@@ -112,14 +112,39 @@ test('semaphore serializes visual calls and supports cancellation', async () => 
   assert.deepEqual(semaphore.health(), { active: 0, limit: 1, queued: 0 });
 });
 
-test('admission controller exposes managed and vision health', async () => {
-  const admission = new AdmissionController({ managedLimit: 2, queueLimit: 4, queueTimeoutMs: 1000, visionLimit: 1 });
+test('admission controller exposes managed vision and WebFetch Processor health', async () => {
+  const admission = new AdmissionController({ managedLimit: 2, queueLimit: 4, queueTimeoutMs: 1000, visionLimit: 1, webFetchProcessorLimit: 3 });
   const releaseManaged = await admission.acquireManaged({ requestId: 'A' });
   const releaseVision = await admission.acquireVision();
+  const releaseProcessor = await admission.acquireWebFetchProcessor();
   assert.deepEqual(admission.health(), {
     managed: { active: 1, limit: 2, queued: 0, queueLimit: 4 },
     vision: { active: 1, limit: 1, queued: 0 },
+    webFetchProcessor: { active: 1, limit: 3, queued: 0 },
   });
+  releaseProcessor();
   releaseVision();
   releaseManaged();
+});
+
+
+test('WebFetch Processor admission allows three global model calls and queues the fourth', async () => {
+  const admission = new AdmissionController({
+    managedLimit: 2, queueLimit: 4, queueTimeoutMs: 1000, visionLimit: 1, webFetchProcessorLimit: 3,
+  });
+  const releases = await Promise.all([
+    admission.acquireWebFetchProcessor(),
+    admission.acquireWebFetchProcessor(),
+    admission.acquireWebFetchProcessor(),
+  ]);
+  const fourth = admission.acquireWebFetchProcessor();
+  await expectPending(fourth);
+  assert.deepEqual(admission.health().webFetchProcessor, { active: 3, limit: 3, queued: 1 });
+  releases[0]();
+  const releaseFourth = await fourth;
+  assert.deepEqual(admission.health().webFetchProcessor, { active: 3, limit: 3, queued: 0 });
+  releaseFourth();
+  releases[1]();
+  releases[2]();
+  assert.deepEqual(admission.health().webFetchProcessor, { active: 0, limit: 3, queued: 0 });
 });

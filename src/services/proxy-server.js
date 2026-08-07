@@ -221,7 +221,10 @@ function diagnosticLogLevel(event) {
 }
 
 function defaultConcurrency(config) {
-  return config.concurrency || { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 };
+  return {
+    ...(config.concurrency || { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 }),
+    webFetchProcessorLimit: config.webFetchProcessor?.concurrency || 3,
+  };
 }
 
 export function createProxyServer(config, dependencies = {}) {
@@ -286,6 +289,7 @@ export function createProxyServer(config, dependencies = {}) {
           status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: VERSION, revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
           vision: { active: state.vision.active, limit: state.vision.limit },
+          web_fetch_processor: { active: state.webFetchProcessor.active, limit: state.webFetchProcessor.limit, queued: state.webFetchProcessor.queued },
           cache: { ...cacheState, ...registryState },
         });
       }
@@ -598,6 +602,7 @@ export function createProxyServer(config, dependencies = {}) {
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
             model: request.model || '',
             policy: managedWebPolicyEnforcer.consume(toolUse.name),
+            acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
             onEvent: (event, fields) => log(
               config,
               event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',
@@ -607,7 +612,7 @@ export function createProxyServer(config, dependencies = {}) {
           }),
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
-          modelRoundTimeoutMs: Math.min(240000, config.managedTaskTimeoutMs || 600000),
+          modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
           onProgress,
           onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,

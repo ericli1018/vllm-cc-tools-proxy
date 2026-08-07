@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.1 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.19 architecture
+## V0.2.19.1 architecture
 
 ```text
 Claude Code
@@ -49,6 +49,60 @@ Startup behavior:
 6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
+
+## V0.2.19.1 parallel WebFetch and slow-model budgets
+
+V0.2.19.1 is a stability hotfix for local models that are correct but slow. It keeps the V0.2.19 protocol validation/recovery gates and changes managed research scheduling rather than simply shortening timeouts.
+
+### Parallel WebFetch Processor
+
+Independent managed tool calls from the same model round execute concurrently and preserve tool-result order. WebFetch Processor inference is protected by one proxy-wide semaphore, so the total number of Processor model requests across all Claude Code sessions never exceeds:
+
+```env
+WEB_FETCH_PROCESSOR_CONCURRENCY=3
+```
+
+The value is strictly bounded to `1..3` and defaults to `3`. A fourth Processor request waits for a global slot. Web page downloads may overlap; the semaphore is acquired only for the Processor model request.
+
+Processor routing remains independently configurable:
+
+```env
+WEB_FETCH_PROCESSOR_URL=
+WEB_FETCH_PROCESSOR_API_KEY=
+WEB_FETCH_PROCESSOR_MODEL=
+WEB_FETCH_PROCESSOR_THINK=false
+WEB_FETCH_PROCESSOR_CONCURRENCY=3
+WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
+WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
+```
+
+A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
+
+### Slow-model managed budgets
+
+Defaults are increased to:
+
+```env
+MANAGED_TASK_TIMEOUT_MS=1800000
+MANAGED_MODEL_ROUND_TIMEOUT_MS=360000
+```
+
+This gives a managed workflow a 30-minute hard safety cap while allowing an individual Base-model round up to 6 minutes. Loop protection still comes from `MAX_TOOL_ROUNDS`, exact repeated-action detection, protocol validation and recovery, not from aggressively killing a slow but progressing model.
+
+When completed managed evidence exists and the remaining hard-cap budget falls to one model-round budget or less, the proxy removes only WebSearch/WebFetch from the next Base request and emits `managed_final_round_reserved`. Claude Code client tools such as Read/Write/Bash remain available, so the model can continue implementation or return a final response instead of spending the final budget on more research.
+
+### WebSearch argument normalization
+
+Some local models emit a single domain as a string even when Claude Code's WebSearch schema requires an array. Before proxy execution or mixed-tool handoff, V0.2.19.1 normalizes:
+
+```text
+allowed_domains: "docs.openssl.org" -> ["docs.openssl.org"]
+blocked_domains: "example.com"      -> ["example.com"]
+```
+
+Existing arrays are preserved. This prevents an otherwise valid WebSearch action from failing Claude Code input validation.
+
+V0.2.19.1 still does not emulate Anthropic Native Web Search result/citation counters; that remains planned separately.
 
 ## V0.2.19 managed stability gates
 
@@ -100,17 +154,17 @@ This prevents repeated WebSearch/WebFetch calls from consuming the remaining rou
 One additional simple override is available:
 
 ```env
-MANAGED_TASK_TIMEOUT_MS=600000
+MANAGED_TASK_TIMEOUT_MS=1800000
 ```
 
 Defaults:
 
 ```text
-entire managed task: 600000 ms (10 minutes)
-one Base-model managed round: 240000 ms (4 minutes, internal fixed cap)
+entire managed task: 1800000 ms (30 minutes)
+one Base-model managed round: 360000 ms (6 minutes)
 ```
 
-The per-round cap is intentionally internal so the ENV surface stays small. The effective round budget is always the smaller of 240 seconds and the remaining task budget.
+The model-round cap is configurable with `MANAGED_MODEL_ROUND_TIMEOUT_MS`. The effective round budget is always the smaller of that value and the remaining task budget.
 
 Timeout codes:
 
@@ -806,7 +860,7 @@ WEB_FETCH_PROCESSOR_THINK=false
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
 - Array responses using `page_content` and `metadata` are normalized; the older object response shape remains accepted.
 - Raw page content is deterministically cleaned and protocol-neutralized, then an isolated WebFetch Processor applies the tool's `prompt` through `/v1/chat/completions` with no tools or Claude Code history.
-- Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`.
+- Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`. `WEB_FETCH_PROCESSOR_CONCURRENCY` defaults to 3 and is bounded to 1..3; `WEB_FETCH_PROCESSOR_TIMEOUT_MS` defaults to 300000 ms.
 - Successful WebSearch/WebFetch results are readable multiline VCC evidence blocks rather than JSON-stringified objects. One short idempotent System supplement explains the result fields to the Base model.
 - Processor timeout, HTTP failure, invalid response, tool-call output or protocol-tag leakage degrades to a bounded cleaned excerpt; the complete raw page is not forwarded as fallback.
 - HTTP rejection, robots denial and other expected fetch-service failures become correlated `tool_result` blocks with `is_error: true`. The Base model may choose another source instead of terminating the complete Claude Code request.

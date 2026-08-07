@@ -18,6 +18,28 @@ export function isManagedToolName(name) {
   return MANAGED.has(name);
 }
 
+function normalizeDomainArgument(value) {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed ? [trimmed] : [];
+}
+
+export function normalizeManagedToolUseBlock(block) {
+  if (!block || block.type !== 'tool_use' || !isManagedToolName(block.name) || !block.input || typeof block.input !== 'object' || Array.isArray(block.input)) {
+    return block;
+  }
+  let changed = false;
+  const input = { ...block.input };
+  for (const field of ['allowed_domains', 'blocked_domains']) {
+    const normalized = normalizeDomainArgument(input[field]);
+    if (normalized !== input[field]) {
+      input[field] = normalized;
+      changed = true;
+    }
+  }
+  return changed ? { ...block, input } : block;
+}
+
 function searchQuery(input) {
   const query = input?.query ?? input?.q;
   if (typeof query !== 'string' || !query.trim()) {
@@ -104,7 +126,7 @@ function normalizeWebFetchPayload(payload, targetUrl, maxChars) {
   };
 }
 
-async function webFetch(input, config, signal, onEvent = () => {}, { model = '', policy = {} } = {}) {
+async function webFetch(input, config, signal, onEvent = () => {}, { model = '', policy = {}, acquireProcessor } = {}) {
   if (!config.webFetchUrl) throw new HttpError(422, 'WEB_FETCH_URL is not configured.', { code: 'web_fetch_unavailable' });
   const targetUrl = validateFetchTarget(input?.url);
   if (!isUrlAllowedByWebPolicy(targetUrl, policy)) {
@@ -212,12 +234,13 @@ async function webFetch(input, config, signal, onEvent = () => {}, { model = '',
     processor: config.webFetchProcessor,
     signal,
     onEvent,
+    acquireProcessor,
   });
 }
 
-export async function executeManagedTool(block, config, signal, { onEvent = () => {}, model = '', policy = {} } = {}) {
+export async function executeManagedTool(block, config, signal, { onEvent = () => {}, model = '', policy = {}, acquireProcessor } = {}) {
   const name = normalizeManagedToolName(block?.name);
   if (!name) throw new HttpError(422, `Unsupported managed tool: ${block?.name || 'unknown'}`, { code: 'unsupported_managed_tool' });
   if (name === 'WebSearch') return webSearch(block.input || {}, config, signal, policy);
-  return webFetch(block.input || {}, config, signal, onEvent, { model, policy });
+  return webFetch(block.input || {}, config, signal, onEvent, { model, policy, acquireProcessor });
 }

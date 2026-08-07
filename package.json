@@ -1,6 +1,6 @@
 {
   "name": "vllm-cc-tools-proxy",
-  "version": "0.2.19",
+  "version": "0.2.19+hotfix.1",
   "private": true,
   "type": "module",
   "description": "Transparent Claude Code gateway with bounded media, visual and managed-tool compatibility workflows",

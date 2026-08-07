@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 ROOT="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"
-VERSION="$(node -p "require('$ROOT/package.json').version")"
+VERSION="$(cd "$ROOT" && node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")"
 OUT="${1:-$ROOT/dist}"
 STAGE="$OUT/vllm-cc-tools-proxy-v$VERSION"
 rm -rf "$STAGE"

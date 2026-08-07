@@ -744,3 +744,91 @@ test('V0.2.19 bounds the entire managed task across otherwise progressing rounds
   }), (error) => error.code === 'managed_task_timeout');
   assert.ok(call >= 2);
 });
+
+test('V0.2.19.1 executes independent managed tool calls concurrently while preserving result order', async () => {
+  let upstreamCalls = 0;
+  const started = [];
+  let resolveBothStarted;
+  const bothStarted = new Promise((resolve) => { resolveBothStarted = resolve; });
+  let releaseTools;
+  const toolGate = new Promise((resolve) => { releaseTools = resolve; });
+
+  const run = runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'fetch two sources' }] }, {
+    upstream: async (request) => {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return response([
+          { type: 'tool_use', id: 'fetch-a', name: 'WebFetch', input: { url: 'https://a.example/' } },
+          { type: 'tool_use', id: 'fetch-b', name: 'WebFetch', input: { url: 'https://b.example/' } },
+        ], 'tool_use');
+      }
+      assert.deepEqual(request.messages.at(-1).content.map((item) => item.tool_use_id), ['fetch-a', 'fetch-b']);
+      return response([{ type: 'text', text: 'parallel complete' }]);
+    },
+    executeTool: async (toolUse) => {
+      started.push(toolUse.id);
+      if (started.length === 2) resolveBothStarted('both-started');
+      await toolGate;
+      return { result: toolUse.id };
+    },
+    taskTimeoutMs: 1000,
+    modelRoundTimeoutMs: 200,
+  });
+
+  const status = await Promise.race([
+    bothStarted,
+    new Promise((resolve) => setTimeout(() => resolve('timeout'), 40)),
+  ]);
+  releaseTools();
+  const result = await run;
+  assert.equal(status, 'both-started');
+  assert.deepEqual(started, ['fetch-a', 'fetch-b']);
+  assert.equal(result.content[0].text, 'parallel complete');
+});
+
+
+test('V0.2.19.1 normalizes mixed WebSearch domain arguments before Claude Code handoff', async () => {
+  const result = await runManagedLoop({ messages: [] }, {
+    upstream: async () => response([
+      {
+        type: 'tool_use', id: 'search-mixed', name: 'WebSearch',
+        input: { query: 'openssl', allowed_domains: 'docs.openssl.org' },
+      },
+      { type: 'tool_use', id: 'write-mixed', name: 'Write', input: { file_path: '/project/a.c', content: 'x' } },
+    ], 'tool_use'),
+    executeTool: async () => { throw new Error('mixed response must hand off'); },
+  });
+  assert.deepEqual(result.content[0].input.allowed_domains, ['docs.openssl.org']);
+  assert.equal(result.content[1].name, 'Write');
+});
+
+test('V0.2.19.1 reserves the last model-round budget by disabling only managed research tools after evidence exists', async () => {
+  let upstreamCalls = 0;
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [
+      { name: 'WebSearch', input_schema: { type: 'object' } },
+      { name: 'Read', input_schema: { type: 'object' } },
+    ],
+    messages: [{ role: 'user', content: 'research then continue implementation' }],
+  }, {
+    upstream: async (request) => {
+      upstreamCalls += 1;
+      if (upstreamCalls === 1) {
+        return response([{ type: 'tool_use', id: 'search-1', name: 'WebSearch', input: { query: 'docs' } }], 'tool_use');
+      }
+      assert.deepEqual(request.tools.map((tool) => tool.name), ['Read']);
+      return response([{ type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/project/a.c' } }], 'tool_use');
+    },
+    executeTool: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 55));
+      return { results: [{ title: 'evidence' }] };
+    },
+    taskTimeoutMs: 100,
+    modelRoundTimeoutMs: 60,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+  assert.equal(result.content[0].name, 'Read');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_final_round_reserved'));
+});
