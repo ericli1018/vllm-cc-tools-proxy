@@ -1,7 +1,6 @@
 import { formatSseEvent } from './progress.js';
 import { findControlTags } from './protocol-sanitizer.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
-import { containNativeWebResponseForClient } from './native-web-tools.js';
 
 function safeToolName(value) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
@@ -12,8 +11,7 @@ function responseContent(response) {
 }
 
 export function describeFinalAnthropicProgress(response) {
-  const contained = containNativeWebResponseForClient(response);
-  const blocks = responseContent(contained);
+  const blocks = responseContent(response);
   const toolNames = blocks
     .filter((block) => block?.type === 'tool_use')
     .map((block) => safeToolName(block?.name))
@@ -126,18 +124,65 @@ async function emitToolUseBlock(progress, index, block) {
   await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
 }
 
-export async function emitFinalAnthropicResponse(progress, response) {
-  const containedResponse = containNativeWebResponseForClient(response);
-  const finalProgress = describeFinalAnthropicProgress(containedResponse);
+
+async function emitServerToolUseBlock(progress, index, block) {
+  await progress.writeRaw(formatSseEvent('content_block_start', {
+    type: 'content_block_start', index,
+    content_block: { type: 'server_tool_use', id: block.id, name: block.name },
+  }));
+  const input = JSON.stringify(block.input ?? {});
+  await progress.writeRaw(formatSseEvent('content_block_delta', {
+    type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: input },
+  }));
+  await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+}
+
+async function emitServerResultBlock(progress, index, block) {
+  await progress.writeRaw(formatSseEvent('content_block_start', {
+    type: 'content_block_start', index, content_block: block,
+  }));
+  await progress.writeRaw(formatSseEvent('content_block_stop', { type: 'content_block_stop', index }));
+}
+
+export function createServerToolStreamBridge(progress) {
+  let nextIndex = null;
+  const ensureStarted = async () => {
+    if (nextIndex !== null) return;
+    await progress.closeProgress();
+    nextIndex = progress.visible ? 1 : 0;
+  };
+  return {
+    get nextIndex() {
+      return nextIndex === null ? (progress.visible ? 1 : 0) : nextIndex;
+    },
+    async emit(event) {
+      if (!event?.block) return;
+      await ensureStarted();
+      if (event.phase === 'use' && event.block.type === 'server_tool_use') {
+        await emitServerToolUseBlock(progress, nextIndex, event.block);
+      } else if (event.phase === 'result' && ['web_search_tool_result', 'web_fetch_tool_result'].includes(event.block.type)) {
+        await emitServerResultBlock(progress, nextIndex, event.block);
+      } else {
+        return;
+      }
+      nextIndex += 1;
+    },
+  };
+}
+
+export async function emitFinalAnthropicResponse(progress, response, { startIndex } = {}) {
+  const finalProgress = describeFinalAnthropicProgress(response);
   await progress.closeProgress(finalProgress.message, {
     phase: finalProgress.phase,
     details: finalProgress.details,
   });
-  let index = progress.visible ? 1 : 0;
-  for (const block of containedResponse.content || []) {
+  let index = Number.isInteger(startIndex) ? startIndex : (progress.visible ? 1 : 0);
+  for (const block of response.content || []) {
     if (block.type === 'text') await emitTextBlock(progress, index, block);
     else if (block.type === 'thinking') await emitThinkingBlock(progress, index, block);
     else if (block.type === 'tool_use') await emitToolUseBlock(progress, index, block);
+    else if (block.type === 'server_tool_use') await emitServerToolUseBlock(progress, index, block);
+    else if (['web_search_tool_result', 'web_fetch_tool_result'].includes(block.type)) await emitServerResultBlock(progress, index, block);
     else {
       await progress.writeRaw(formatSseEvent('content_block_start', {
         type: 'content_block_start', index, content_block: block,
@@ -149,11 +194,12 @@ export async function emitFinalAnthropicResponse(progress, response) {
   await progress.writeRaw(formatSseEvent('message_delta', {
     type: 'message_delta',
     delta: {
-      stop_reason: containedResponse.stop_reason ?? 'end_turn',
-      stop_sequence: containedResponse.stop_sequence ?? null,
+      stop_reason: response.stop_reason ?? 'end_turn',
+      stop_sequence: response.stop_sequence ?? null,
     },
     usage: {
-      output_tokens: containedResponse.usage?.output_tokens ?? 0,
+      output_tokens: response.usage?.output_tokens ?? 0,
+      ...(response.usage?.server_tool_use ? { server_tool_use: response.usage.server_tool_use } : {}),
     },
   }));
   progress.stopKeepalive();

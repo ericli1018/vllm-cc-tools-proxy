@@ -77,12 +77,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.19.3', async () => {
+test('package version is V0.2.20', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.19+hotfix.3');
-  assert.equal(lock.version, '0.2.19+hotfix.3');
-  assert.equal(lock.packages[''].version, '0.2.19+hotfix.3');
+  assert.equal(packageJson.version, '0.2.20');
+  assert.equal(lock.version, '0.2.20');
+  assert.equal(lock.packages[''].version, '0.2.20');
 });
 
 
@@ -196,4 +196,18 @@ test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
   assert.match(readme, /WEB_FETCH_PROCESSOR_PROVIDER/);
   assert.match(readme, /reasoning_effort/);
   assert.match(readme, /v1\/chat\/completions/);
+});
+
+
+test('README documents V0.2.20 unified WebSearch and WebFetch server-tool bridge', () => {
+  assert.match(readme, /V0\.2\.20 unified Web Server Tool Bridge/);
+  assert.match(readme, /server_tool_use/);
+  assert.match(readme, /web_search_tool_result/);
+  assert.match(readme, /web_fetch_tool_result/);
+  assert.match(readme, /web_search_requests/);
+  assert.match(readme, /web_fetch_requests/);
+  assert.match(readme, /web_search_YYYYMMDD/);
+  assert.match(readme, /web_fetch_YYYYMMDD/);
+  assert.match(readme, /mixed server \+ client tools/i);
+  assert.match(readme, /mcp__searxng__web_search/);
 });

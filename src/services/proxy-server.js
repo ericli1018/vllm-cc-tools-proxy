@@ -6,7 +6,7 @@ import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
 import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
-import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream } from '../proxy/anthropic-sse.js';
+import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
@@ -19,7 +19,7 @@ import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
-import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, containNativeWebResponseForClient } from '../proxy/native-web-tools.js';
+import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer } from '../proxy/native-web-tools.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -619,6 +619,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal);
+      const serverToolBridge = request.stream === true && progress ? createServerToolStreamBridge(progress) : null;
       if (hasManagedTools) {
         const result = await runManagedLoop(request, {
           upstream,
@@ -637,6 +638,8 @@ export function createProxyServer(config, dependencies = {}) {
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
           onProgress,
+          onServerToolEvent: serverToolBridge ? (event) => serverToolBridge.emit(event) : null,
+          materializeServerToolBlocks: request.stream !== true,
           onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),
@@ -656,8 +659,8 @@ export function createProxyServer(config, dependencies = {}) {
               - totalAnthropicInputTokens(initialStreamUsage),
             output_tokens: observedUsage.output_tokens || 0,
           });
-          await emitFinalAnthropicResponse(progress, result);
-        } else sendJson(res, 200, containNativeWebResponseForClient(result));
+          await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex });
+        } else sendJson(res, 200, result);
       } else {
         releaseManaged(); releaseManaged = null;
         if (request.stream === true) {

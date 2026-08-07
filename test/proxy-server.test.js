@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.19.3, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.20, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.19.3', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.20', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -167,7 +167,7 @@ test('streamed managed request emits progress and final Anthropic blocks', async
   const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'WebSearch',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
   const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url,progressVisibleAfterMs:60_000}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'search'}]})});
-  const text=await response.text();assert.match(text,/目前處理進度/);assert.match(text,/正在搜尋/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
+  const text=await response.text();assert.match(text,/\"type\":\"server_tool_use\"/);assert.match(text,/\"type\":\"web_search_tool_result\"/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.match(text,/\"web_search_requests\":1/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
 });
 
 test('plain bypass strips the dedicated progress block before forwarding history to base vLLM', async (t) => {
@@ -873,7 +873,10 @@ test('managed WebFetch processes raw page content before sending readable eviden
     }),
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'FINAL 42');
+  const body = await response.json();
+  assert.equal(body.content.find((block) => block.type === 'text')?.text, 'FINAL 42');
+  assert.equal(body.content[0].type, 'server_tool_use');
+  assert.equal(body.content[1].type, 'web_fetch_tool_result');
   assert.equal(processorPayload.model, 'main-model');
   assert.equal(processorPayload.chat_template_kwargs.enable_thinking, false);
   assert.equal('tools' in processorPayload, false);
@@ -1226,7 +1229,7 @@ test('native web fetch is normalized and executed by the configured fetch backen
     }),
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'FETCH DONE');
+  { const body = await response.json(); assert.equal(body.content.find((block) => block.type === 'text')?.text, 'FETCH DONE'); assert.equal(body.content[0].type, 'server_tool_use'); assert.equal(body.content[1].type, 'web_fetch_tool_result'); }
   assert.equal(fetchCalls, 1);
   assert.equal(modelCalls, 2);
 });
@@ -1282,13 +1285,13 @@ test('native max_uses is enforced locally and returns a managed tool error witho
     }),
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'LIMIT HANDLED');
+  { const body = await response.json(); assert.equal(body.content.find((block) => block.type === 'text')?.text, 'LIMIT HANDLED'); }
   assert.equal(searchCalls, 1);
   assert.equal(modelCalls, 3);
   assert.match(JSON.stringify(finalRequest.messages), /max_uses_exceeded/);
 });
 
-test('response-side native web search is contained and never reaches Claude Code SSE', async (t) => {
+test('V0.2.20 response-side native web search is surfaced as server-tool lifecycle in Claude Code SSE', async (t) => {
   let searchCalls = 0;
   let modelCalls = 0;
   const logs = [];
@@ -1356,11 +1359,104 @@ test('response-side native web search is contained and never reaches Claude Code
   assert.equal(searchCalls, 1);
   assert.equal(modelCalls, 2);
   assert.match(stream, /LOCAL SEARCH COMPLETE/);
-  assert.doesNotMatch(stream, /server_tool_use|web_search_tool_result|Did 0 searches/);
+  assert.match(stream, /server_tool_use/);
+  assert.match(stream, /web_search_tool_result/);
+  assert.match(stream, /web_search_requests/);
+  assert.doesNotMatch(stream, /Did 0 searches/);
   const contained = logs.find((entry) => entry.event === 'native_web_response_contained');
   assert.ok(contained);
   assert.equal(contained.server_tool_use_count, 1);
   assert.equal(contained.stripped_result_count, 1);
+});
+
+test('V0.2.20 preserves mixed WebSearch plus Read across two Claude Code requests', async (t) => {
+  let searchCalls = 0;
+  let modelCalls = 0;
+  let secondModelPayload;
+  const searx = await startJsonServer((req, res) => {
+    searchCalls += 1;
+    const url = new URL(req.url, 'http://localhost');
+    assert.equal(url.searchParams.get('q'), 'tls docs');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'TLS Docs', url: 'https://example.com/tls', content: 'verified evidence' }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    modelCalls += 1;
+    if (modelCalls === 1) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'mixed', type: 'message', role: 'assistant', model: 'm',
+        content: [
+          { type: 'tool_use', id: 'search-original', name: 'WebSearch', input: { query: 'tls docs' } },
+          { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/project/a.c' } },
+        ],
+        stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 4 },
+      }));
+      return;
+    }
+    secondModelPayload = payload;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'BOTH COMPLETE' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 40, output_tokens: 5 },
+    }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const tools = [
+    { name: 'WebSearch', description: 'search', input_schema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] } },
+    { name: 'Read', description: 'read', input_schema: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } },
+  ];
+  const first = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, tools, messages: [{ role: 'user', content: 'search and read' }] }),
+  });
+  assert.equal(first.status, 200);
+  const firstBody = await first.json();
+  assert.equal(searchCalls, 0);
+  assert.equal(firstBody.stop_reason, 'tool_use');
+  assert.equal(firstBody.content[0].type, 'server_tool_use');
+  assert.equal(firstBody.content[0].name, 'web_search');
+  assert.equal(firstBody.content[1].type, 'tool_use');
+  assert.equal(firstBody.content[1].name, 'Read');
+  const serverId = firstBody.content[0].id;
+
+  const second = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false, tools,
+      messages: [
+        { role: 'user', content: 'search and read' },
+        { role: 'assistant', content: firstBody.content },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'int main(void){}' }] },
+      ],
+    }),
+  });
+  assert.equal(second.status, 200);
+  const secondBody = await second.json();
+  assert.equal(searchCalls, 1);
+  assert.equal(modelCalls, 2);
+  assert.equal(secondBody.content[0].type, 'web_search_tool_result');
+  assert.equal(secondBody.content[0].tool_use_id, serverId);
+  assert.equal(secondBody.content.find((block) => block.type === 'text')?.text, 'BOTH COMPLETE');
+  assert.equal(secondBody.usage.server_tool_use.web_search_requests, 1);
+
+  const assistant = secondModelPayload.messages.at(-2);
+  const user = secondModelPayload.messages.at(-1);
+  assert.equal(assistant.content[0].type, 'tool_use');
+  assert.equal(assistant.content[0].id, serverId);
+  assert.equal(assistant.content[0].name, 'web_search');
+  assert.equal(assistant.content[1].type, 'tool_use');
+  assert.equal(assistant.content[1].name, 'Read');
+  assert.equal(user.content[0].tool_use_id, 'read-1');
+  assert.equal(user.content[1].tool_use_id, serverId);
+  assert.match(user.content[1].content, /TLS Docs/);
 });
 
 test('V0.2.19 quarantines contaminated Claude Code tool_result history before Base vLLM', async (t) => {

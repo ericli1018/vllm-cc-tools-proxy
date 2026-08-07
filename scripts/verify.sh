@@ -85,8 +85,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.19+hotfix.3'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.19.3'
+test "$(node -p "require('./package.json').version")" = '0.2.20'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.20'
 
 
 test -f src/proxy/native-web-tools.js
@@ -97,9 +97,12 @@ grep -Fq 'web_fetch_' src/proxy/native-web-tools.js
 grep -Fq 'max_uses_exceeded' src/proxy/native-web-tools.js
 
 grep -Fq 'normalizeNativeWebToolResponse' src/proxy/managed-loop.js
-grep -Fq 'containNativeWebResponseForClient' src/proxy/anthropic-sse.js
+grep -Fq 'createServerToolStreamBridge' src/proxy/anthropic-sse.js
 grep -Fq 'native_web_response_contained' src/proxy/managed-loop.js
-grep -Fq 'native_web_mixed_tool_deferred' src/proxy/managed-loop.js
+grep -Fq 'server_web_mixed_tool_deferred' src/proxy/managed-loop.js
+grep -Fq 'sanitizeCompletedServerWebHistory' src/proxy/managed-loop.js
+grep -Fq 'web_search_requests' src/proxy/managed-loop.js
+grep -Fq 'web_fetch_requests' src/proxy/managed-loop.js
 
 test -f src/proxy/anthropic-usage.js
 grep -Fq 'managed_usage_preflight_succeeded' src/services/proxy-server.js

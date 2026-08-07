@@ -5,6 +5,7 @@ import {
   describeFinalAnthropicProgress,
   emitFinalAnthropicResponse,
   pipeAnthropicUpstreamStream,
+  createServerToolStreamBridge,
 } from '../src/proxy/anthropic-sse.js';
 
 function event(name, payload) {
@@ -216,11 +217,12 @@ test('pipeAnthropicUpstreamStream observes upstream usage without forwarding a s
 });
 
 
-test('emitFinalAnthropicResponse never emits native web result blocks to Claude Code', async () => {
+test('V0.2.20 emits server web lifecycle blocks and server-tool usage to Claude Code', async () => {
   const writes = [];
+  const closes = [];
   const progress = {
     visible: false,
-    closeProgress: async () => {},
+    closeProgress: async (message, options) => closes.push({ message, options }),
     writeRaw: async (chunk) => writes.push(chunk),
     stopKeepalive: () => {},
     stop: async () => {},
@@ -228,13 +230,40 @@ test('emitFinalAnthropicResponse never emits native web result blocks to Claude 
   };
   await emitFinalAnthropicResponse(progress, {
     content: [
-      { type: 'web_search_tool_result', tool_use_id: 's1', content: [] },
-      { type: 'web_fetch_tool_result', tool_use_id: 'f1', content: {} },
+      { type: 'server_tool_use', id: 'srvtoolu_s1', name: 'web_search', input: { query: 'news' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_s1', content: [{ type: 'web_search_result', title: 'A', url: 'https://example.com' }] },
       { type: 'text', text: 'VISIBLE' },
     ],
-    stop_reason: 'end_turn', usage: { output_tokens: 3 },
+    stop_reason: 'end_turn', usage: { output_tokens: 3, server_tool_use: { web_search_requests: 1 } },
   });
   const stream = writes.join('');
+  assert.match(stream, /server_tool_use/);
+  assert.match(stream, /web_search_tool_result/);
+  assert.match(stream, /web_search_requests/);
   assert.match(stream, /VISIBLE/);
-  assert.doesNotMatch(stream, /web_search_tool_result|web_fetch_tool_result|Did 0 searches/);
+});
+
+test('V0.2.20 live server-tool bridge closes progress once and advances final content indexes', async () => {
+  const writes = [];
+  let closeCount = 0;
+  const progress = {
+    visible: true,
+    closeProgress: async () => { closeCount += 1; },
+    writeRaw: async (chunk) => writes.push(chunk),
+    stopKeepalive: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  const bridge = createServerToolStreamBridge(progress);
+  await bridge.emit({ phase: 'use', block: { type: 'server_tool_use', id: 'srvtoolu_s', name: 'web_search', input: { query: 'q' } } });
+  await bridge.emit({ phase: 'result', block: { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_s', content: [] } });
+  assert.equal(bridge.nextIndex, 3);
+  await emitFinalAnthropicResponse(progress, {
+    content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { output_tokens: 1, server_tool_use: { web_search_requests: 1 } },
+  }, { startIndex: bridge.nextIndex });
+  assert.ok(closeCount >= 1);
+  const stream = writes.join('');
+  assert.match(stream, /"index":1/);
+  assert.match(stream, /"index":2/);
+  assert.match(stream, /"index":3/);
 });

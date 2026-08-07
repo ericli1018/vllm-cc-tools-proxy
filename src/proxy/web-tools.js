@@ -1,21 +1,14 @@
 import { HttpError } from '../lib/http.js';
 import { processWebFetchContent } from '../services/web-fetch-processor.js';
 import { boundedText, fetchJson, serviceEndpoint } from '../lib/media.js';
-import { isUrlAllowedByWebPolicy } from './native-web-tools.js';
-
-const MANAGED = new Map([
-  ['WebSearch', 'WebSearch'],
-  ['web_search', 'WebSearch'],
-  ['WebFetch', 'WebFetch'],
-  ['web_fetch', 'WebFetch'],
-]);
+import { canonicalWebToolName, isUrlAllowedByWebPolicy } from './native-web-tools.js';
 
 export function normalizeManagedToolName(name) {
-  return MANAGED.get(name) || '';
+  return canonicalWebToolName(name);
 }
 
 export function isManagedToolName(name) {
-  return MANAGED.has(name);
+  return Boolean(normalizeManagedToolName(name));
 }
 
 function normalizeDomainArgument(value) {

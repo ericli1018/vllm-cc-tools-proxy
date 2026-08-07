@@ -6,6 +6,9 @@ import {
   createManagedWebPolicyEnforcer,
   normalizeNativeWebToolResponse,
   containsNativeWebResponseBlocks,
+  createServerWebToolUse,
+  createServerWebToolResult,
+  sanitizeCompletedServerWebHistory,
 } from '../src/proxy/native-web-tools.js';
 
 test('detects dated native web search and web fetch tool definitions', () => {
@@ -169,4 +172,75 @@ test('leaves unrelated server tools and ordinary tool blocks unchanged', () => {
   const result = normalizeNativeWebToolResponse(original);
   assert.equal(result.changed, false);
   assert.equal(result.response, original);
+});
+
+test('V0.2.20 builds Anthropic-compatible server web use and result blocks', () => {
+  const searchUse = createServerWebToolUse({ id: 'toolu_local_search', name: 'web_search_20260318', input: { query: 'latest news' } });
+  assert.match(searchUse.id, /^srvtoolu_/);
+  assert.deepEqual(searchUse.block, {
+    type: 'server_tool_use', id: searchUse.id, name: 'web_search', input: { query: 'latest news' },
+  });
+  const searchResult = createServerWebToolResult('WebSearch', searchUse.id, {
+    query: 'latest news', result_count: 1,
+    results: [{ title: 'A', url: 'https://example.com/a', published_date: '2026-08-07', snippet: 'x' }],
+  });
+  assert.deepEqual(searchResult, {
+    type: 'web_search_tool_result', tool_use_id: searchUse.id,
+    content: [{ type: 'web_search_result', title: 'A', url: 'https://example.com/a', page_age: '2026-08-07' }],
+  });
+
+  const fetchUse = createServerWebToolUse({ id: 'toolu_local_fetch', name: 'WebFetch', input: { url: 'https://example.com/a' } });
+  const fetchResult = createServerWebToolResult('WebFetch', fetchUse.id, {
+    final_url: 'https://example.com/a', title: 'Article', result: 'Processed body', retrieved_at: '2026-08-07T00:00:00Z',
+  });
+  assert.equal(fetchResult.type, 'web_fetch_tool_result');
+  assert.equal(fetchResult.tool_use_id, fetchUse.id);
+  assert.equal(fetchResult.content.type, 'web_fetch_result');
+  assert.equal(fetchResult.content.url, 'https://example.com/a');
+  assert.equal(fetchResult.content.content.type, 'document');
+  assert.equal(fetchResult.content.content.source.data, 'Processed body');
+});
+
+test('V0.2.20 builds safe server web error blocks', () => {
+  const search = createServerWebToolResult('WebSearch', 'srvtoolu_s', null, { code: 'max_uses_exceeded' });
+  assert.deepEqual(search, {
+    type: 'web_search_tool_result', tool_use_id: 'srvtoolu_s',
+    content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' },
+  });
+  const fetch = createServerWebToolResult('WebFetch', 'srvtoolu_f', null, { code: 'blocked_fetch_target' });
+  assert.deepEqual(fetch, {
+    type: 'web_fetch_tool_result', tool_use_id: 'srvtoolu_f',
+    content: { type: 'web_fetch_tool_result_error', error_code: 'url_not_allowed' },
+  });
+});
+
+
+test('V0.2.20 converts completed server web lifecycle history into bounded model-readable evidence', () => {
+  const original = [
+    { role: 'assistant', content: [
+      { type: 'server_tool_use', id: 'srvtoolu_search_done', name: 'web_search', input: { query: 'tls docs' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_search_done', content: [
+        { type: 'web_search_result', title: 'TLS Docs', url: 'https://example.com/tls', page_age: '2026-08-07' },
+      ] },
+      { type: 'text', text: 'Earlier final answer.' },
+    ] },
+    { role: 'user', content: 'Follow up.' },
+  ];
+  const result = sanitizeCompletedServerWebHistory(original);
+  assert.equal(result.changed, true);
+  assert.equal(result.completed_count, 1);
+  assert.doesNotMatch(JSON.stringify(result.messages), /server_tool_use|web_search_tool_result/);
+  assert.match(JSON.stringify(result.messages), /TLS Docs/);
+  assert.match(JSON.stringify(result.messages), /https:\/\/example\.com\/tls/);
+  assert.match(JSON.stringify(result.messages), /Earlier final answer/);
+});
+
+test('V0.2.20 keeps unresolved server web use intact for mixed-tool continuation', () => {
+  const original = [{ role: 'assistant', content: [
+    { type: 'server_tool_use', id: 'srvtoolu_pending', name: 'web_search', input: { query: 'tls docs' } },
+    { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/project/a.c' } },
+  ] }];
+  const result = sanitizeCompletedServerWebHistory(original);
+  assert.equal(result.changed, false);
+  assert.deepEqual(result.messages, original);
 });

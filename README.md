@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.3 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.20 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, surfaces proxy-owned web activity as Anthropic-style server tools, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.19.3 architecture
+## V0.2.20 architecture
 
 ```text
 Claude Code
@@ -49,6 +49,58 @@ Startup behavior:
 6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
+
+## V0.2.20 unified Web Server Tool Bridge
+
+V0.2.20 changes Proxy-owned WebSearch and WebFetch from hidden/internal client-tool handling into an Anthropic-compatible server-tool lifecycle. The model still chooses the web action, Claude Code can see that the action exists, but the Proxy owns execution and Claude Code does not execute the web tool a second time.
+
+Explicit aliases are canonicalized before dispatch:
+
+```text
+WebSearch
+web_search
+web_search_YYYYMMDD
+    -> canonical web_search
+
+WebFetch
+web_fetch
+web_fetch_YYYYMMDD
+    -> canonical web_fetch
+```
+
+The dated form requires exactly eight decimal digits. Third-party/client tools are intentionally not captured by substring matching; names such as `mcp__searxng__web_search`, `company_web_search_v2`, `my_web_fetch` remain Claude Code/MCP tools.
+
+For a pure Proxy-owned web action the external lifecycle is:
+
+```text
+model chooses web_search / web_fetch
+  -> server_tool_use streamed or returned to Claude Code
+  -> Proxy executes SearXNG / awesome-web-fetch (+ optional WebFetch Processor)
+  -> web_search_tool_result / web_fetch_tool_result
+  -> Base model continues with the verified result
+  -> final text/tool decision
+```
+
+Streaming responses expose the server-tool block before execution and the result block when it is ready. Final Anthropic usage carries `server_tool_use.web_search_requests` and/or `server_tool_use.web_fetch_requests`, so the frontend does not see a Proxy-owned search as an uncounted client-side WebSearch.
+
+### Mixed server + client tools
+
+When one model response contains a Proxy-owned web action together with a Claude Code tool such as Read, Write or Bash, V0.2.20 preserves both intentions instead of executing one and dropping/reissuing the other:
+
+```text
+model: WebSearch + Read
+  -> Proxy returns server_tool_use(web_search) + tool_use(Read)
+  -> WebSearch remains deferred; SearXNG has not run yet
+  -> Claude Code executes Read and sends its tool_result
+  -> Proxy reconstructs the unresolved server_tool_use from request history
+  -> Proxy executes WebSearch
+  -> web_search_tool_result is emitted first in the continuation
+  -> Base model receives both correlated results and continues
+```
+
+No Redis or hidden session store is required for this continuation; the unresolved server-tool state is reconstructed from the Claude Code message history. Completed `server_tool_use + web_*_tool_result` history is converted into bounded model-readable evidence before later Base-model turns, while unresolved server uses remain intact until their client-tool dependency returns.
+
+The same bridge handles WebFetch. Existing `WEB_FETCH_PROCESSOR_PROVIDER=vllm|ollama`, independent Processor URL/API key/model, maximum three Processor slots, Processor timeout, deterministic final promotion and managed-loop stability gates remain unchanged.
 
 ## V0.2.19.2 deterministic final promotion and tool-description isolation
 

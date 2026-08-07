@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.20 - 2026-08-07
+
+- Added a unified Proxy-owned Web Server Tool Bridge for WebSearch and WebFetch.
+- Canonicalized explicit aliases `WebSearch`, `web_search`, `web_search_YYYYMMDD`, `WebFetch`, `web_fetch`, and `web_fetch_YYYYMMDD` while deliberately excluding substring/MCP/custom names.
+- Surfaced Proxy-owned web calls to Claude Code as `server_tool_use` blocks and returned `web_search_tool_result` / `web_fetch_tool_result` blocks after local execution.
+- Added Anthropic-style `usage.server_tool_use.web_search_requests` and `web_fetch_requests` counters.
+- Added streaming server-tool lifecycle emission so the frontend can observe a search/fetch without being responsible for executing it.
+- Reworked mixed server + client tool handling: server web calls are deferred when emitted beside Read/Write/Bash or another client tool, then resumed after Claude Code returns the correlated client `tool_result`.
+- Reconstructed deferred server-tool state from request history instead of adding Redis or process-session state.
+- Added bounded sanitation of completed server-web lifecycle history before later Base-model turns, while keeping unresolved server calls intact.
+- Preserved SearXNG, awesome-web-fetch, WebFetch Processor vLLM/Ollama routing, 3-slot Processor concurrency, managed stability gates, deterministic final promotion, and tool-description protocol isolation.
+
 ## 0.2.19.3 - 2026-08-07
 
 - Kept external release label `V0.2.19.3` while using npm-valid package metadata `0.2.19+hotfix.3`.

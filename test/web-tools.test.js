@@ -301,3 +301,13 @@ test('V0.2.19.1 normalizes WebSearch string domain filters into arrays', () => {
   assert.deepEqual(normalized.input.allowed_domains, ['docs.openssl.org']);
   assert.deepEqual(normalized.input.blocked_domains, ['private.example.com']);
 });
+
+test('V0.2.20 captures dated explicit web aliases but not MCP or substring tools', () => {
+  assert.equal(isManagedToolName('web_search_20260318'), true);
+  assert.equal(normalizeManagedToolName('web_search_20260318'), 'WebSearch');
+  assert.equal(isManagedToolName('web_fetch_20260318'), true);
+  assert.equal(normalizeManagedToolName('web_fetch_20260318'), 'WebFetch');
+  assert.equal(isManagedToolName('mcp__searxng__web_search'), false);
+  assert.equal(isManagedToolName('company_web_search_v2'), false);
+  assert.equal(isManagedToolName('my_web_fetch'), false);
+});

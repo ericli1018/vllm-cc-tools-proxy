@@ -8,7 +8,13 @@ import {
 } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName, normalizeManagedToolUseBlock } from './web-tools.js';
-import { normalizeNativeWebToolResponse, isResponseSideNativeWebToolUse } from './native-web-tools.js';
+import {
+  normalizeNativeWebToolResponse,
+  canonicalWebToolName,
+  createServerWebToolUse,
+  createServerWebToolResult,
+  sanitizeCompletedServerWebHistory,
+} from './native-web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
@@ -287,12 +293,84 @@ async function recoverInvalidResponse(request, response, {
   });
 }
 
+
+function toolResultOnlyMessage(message) {
+  return message?.role === 'user'
+    && Array.isArray(message.content)
+    && message.content.length > 0
+    && message.content.every((block) => block?.type === 'tool_result');
+}
+
+function findPendingServerContinuation(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  let assistantIndex = -1;
+  let userIndex = -1;
+  const lastIndex = messages.length - 1;
+  if (toolResultOnlyMessage(messages[lastIndex]) && messages[lastIndex - 1]?.role === 'assistant') {
+    assistantIndex = lastIndex - 1;
+    userIndex = lastIndex;
+  } else if (messages[lastIndex]?.role === 'assistant') {
+    assistantIndex = lastIndex;
+  } else {
+    return null;
+  }
+  const content = Array.isArray(messages[assistantIndex]?.content) ? messages[assistantIndex].content : [];
+  const completedIds = new Set(content
+    .filter((block) => ['web_search_tool_result', 'web_fetch_tool_result'].includes(block?.type))
+    .map((block) => block?.tool_use_id)
+    .filter(Boolean));
+  const pending = content.filter((block) => block?.type === 'server_tool_use'
+    && canonicalWebToolName(block?.name)
+    && typeof block?.id === 'string'
+    && !completedIds.has(block.id));
+  if (pending.length === 0) return null;
+  if (userIndex >= 0) {
+    const clientIds = new Set(content.filter((block) => block?.type === 'tool_use').map((block) => block?.id).filter(Boolean));
+    const returned = messages[userIndex].content.map((block) => block?.tool_use_id).filter(Boolean);
+    if (!returned.some((id) => clientIds.has(id))) return null;
+  }
+  return { assistantIndex, userIndex, pending };
+}
+
+function addServerUsage(response, counts) {
+  const webSearchRequests = counts.WebSearch || 0;
+  const webFetchRequests = counts.WebFetch || 0;
+  if (!webSearchRequests && !webFetchRequests) return response;
+  const usage = { ...(response?.usage || {}) };
+  usage.server_tool_use = { ...(usage.server_tool_use || {}) };
+  if (webSearchRequests) usage.server_tool_use.web_search_requests = (usage.server_tool_use.web_search_requests || 0) + webSearchRequests;
+  if (webFetchRequests) usage.server_tool_use.web_fetch_requests = (usage.server_tool_use.web_fetch_requests || 0) + webFetchRequests;
+  return { ...response, usage };
+}
+
+function withExternalServerPrefix(response, prefixBlocks, counts, liveServerEvents, materializeServerToolBlocks) {
+  let result = addServerUsage(response, counts);
+  if (materializeServerToolBlocks && !liveServerEvents && prefixBlocks.length > 0) {
+    result = { ...result, content: [...prefixBlocks.map((block) => structuredClone(block)), ...(result.content || [])] };
+  }
+  return result;
+}
+
+function deferMixedServerTools(response) {
+  let changed = false;
+  const content = (response.content || []).map((block) => {
+    if (block?.type !== 'tool_use' || !isManagedToolName(block?.name)) return block;
+    const server = createServerWebToolUse(block);
+    if (!server) return block;
+    changed = true;
+    return server.block;
+  });
+  return changed ? { ...response, content, stop_reason: 'tool_use' } : response;
+}
+
 export async function runManagedLoop(initialRequest, {
   upstream,
   executeTool,
   maxRounds = 6,
   onProgress = () => {},
   onDiagnostic = () => {},
+  onServerToolEvent = null,
+  materializeServerToolBlocks = false,
   showInitialModelProgress = true,
   logProtocolSnippets = false,
   writeProtocolDiagnostics,
@@ -306,6 +384,14 @@ export async function runManagedLoop(initialRequest, {
   const taskStartedAt = Date.now();
   let activeRound = 0;
   let previousManagedActionSignature = null;
+  const externalServerPrefix = [];
+  const serverUsageCounts = { WebSearch: 0, WebFetch: 0 };
+  const liveServerEvents = typeof onServerToolEvent === 'function';
+
+  const publishServerBlock = async (phase, block) => {
+    if (liveServerEvents) await onServerToolEvent({ phase, block: structuredClone(block) });
+    else externalServerPrefix.push(structuredClone(block));
+  };
 
   const remainingTaskMs = () => taskTimeoutMs - (Date.now() - taskStartedAt);
   const containedUpstream = async (body, upstreamSignal) => {
@@ -330,6 +416,77 @@ export async function runManagedLoop(initialRequest, {
     }
     return normalized.response;
   };
+
+
+  const pendingContinuation = findPendingServerContinuation(request.messages);
+  if (pendingContinuation) {
+    const syntheticResults = [];
+    for (const pendingBlock of pendingContinuation.pending) {
+      const canonical = canonicalWebToolName(pendingBlock.name);
+      const internalToolUse = {
+        type: 'tool_use', id: pendingBlock.id,
+        name: canonical === 'WebSearch' ? 'web_search' : 'web_fetch',
+        input: pendingBlock.input && typeof pendingBlock.input === 'object' ? structuredClone(pendingBlock.input) : {},
+      };
+      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, 'start'), {
+        phase: 'managed_server_tool_resume_start', name: canonical, round: 0, force: true,
+      });
+      let output = null;
+      let error = null;
+      try {
+        const remaining = remainingTaskMs();
+        if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
+        output = await runWithBoundedTime(
+          (boundedSignal) => executeTool(internalToolUse, boundedSignal),
+          { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
+        );
+        serverUsageCounts[canonical] += 1;
+      } catch (caught) {
+        if (caught instanceof HttpError && caught.code === 'managed_task_timeout') throw caught;
+        if (!(caught instanceof HttpError)) throw caught;
+        error = caught;
+      }
+      const serverResult = createServerWebToolResult(canonical, pendingBlock.id, output, error);
+      await publishServerBlock('result', serverResult);
+      const neutralOutput = error ? safeToolError(error) : neutralizeProtocolValue(output);
+      syntheticResults.push({
+        type: 'tool_result',
+        tool_use_id: pendingBlock.id,
+        ...(error ? { is_error: true } : {}),
+        content: error
+          ? JSON.stringify(neutralizeProtocolValue(neutralOutput))
+          : renderManagedToolResult(internalToolUse.name, neutralOutput),
+      });
+      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, error ? 'error' : 'done'), {
+        phase: error ? 'managed_server_tool_resume_error' : 'managed_server_tool_resume_done',
+        name: canonical, round: 0,
+      });
+    }
+    const assistant = request.messages[pendingContinuation.assistantIndex];
+    assistant.content = assistant.content.map((block) => {
+      if (block?.type !== 'server_tool_use' || !pendingContinuation.pending.some((pending) => pending.id === block.id)) return block;
+      const canonical = canonicalWebToolName(block.name);
+      return {
+        type: 'tool_use', id: block.id,
+        name: canonical === 'WebSearch' ? 'web_search' : 'web_fetch',
+        input: block.input && typeof block.input === 'object' ? structuredClone(block.input) : {},
+      };
+    });
+    if (pendingContinuation.userIndex >= 0) {
+      request.messages[pendingContinuation.userIndex].content.push(...syntheticResults);
+    } else {
+      request.messages.push({ role: 'user', content: syntheticResults });
+    }
+    injectManagedWebResultInstruction(request);
+  }
+
+  const completedServerHistory = sanitizeCompletedServerWebHistory(request.messages);
+  if (completedServerHistory.changed) {
+    request.messages = completedServerHistory.messages;
+    await onDiagnostic('server_web_completed_history_sanitized', {
+      completed_count: completedServerHistory.completed_count,
+    });
+  }
 
   for (let round = 0; round < maxRounds; round += 1) {
     activeRound = round + 1;
@@ -356,34 +513,27 @@ export async function runManagedLoop(initialRequest, {
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
-    if (toolUses.length === 0) return response;
+    if (toolUses.length === 0) return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
     if (toolUses.some((block) => !isManagedToolName(block.name))) {
-      const hasResponseSideNativeWebCall = toolUses.some(isResponseSideNativeWebToolUse);
-      if (!hasResponseSideNativeWebCall) {
-        if (recovery) {
-          await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
-            round: round + 1,
-            recovery_route: recovery.route,
-            disposition: 'unmanaged',
-            tool_names: toolUses.map((block) => String(block?.name || '')),
-          });
-        }
-        return response;
+      const managedToolNames = toolUses.filter((block) => isManagedToolName(block.name)).map((block) => normalizeManagedToolName(block.name));
+      if (managedToolNames.length > 0) {
+        const deferred = deferMixedServerTools(response);
+        await onDiagnostic('server_web_mixed_tool_deferred', {
+          round: round + 1,
+          server_tool_names: managedToolNames,
+          client_tool_names: toolUses.filter((block) => !isManagedToolName(block.name)).map((block) => String(block?.name || '')),
+        });
+        return withExternalServerPrefix(deferred, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
       }
-
-      const deferredToolNames = toolUses
-        .filter((block) => !isManagedToolName(block.name))
-        .map((block) => String(block?.name || ''));
-      response = {
-        ...response,
-        content: response.content.filter((block) => block?.type !== 'tool_use' || isManagedToolName(block.name)),
-      };
-      toolUses = response.content.filter((block) => block?.type === 'tool_use');
-      await onDiagnostic('native_web_mixed_tool_deferred', {
-        round: round + 1,
-        deferred_tool_names: deferredToolNames,
-        managed_tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
-      });
+      if (recovery) {
+        await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
+          round: round + 1,
+          recovery_route: recovery.route,
+          disposition: 'unmanaged',
+          tool_names: toolUses.map((block) => String(block?.name || '')),
+        });
+      }
+      return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
     }
     const actionSignature = managedActionSignature(toolUses);
     if (previousManagedActionSignature === actionSignature) {
@@ -407,7 +557,12 @@ export async function runManagedLoop(initialRequest, {
       });
     }
 
-    const results = await Promise.all(toolUses.map(async (toolUse) => {
+    const serverCalls = toolUses.map((toolUse) => createServerWebToolUse(toolUse));
+    for (const serverCall of serverCalls) {
+      if (serverCall) await publishServerBlock('use', serverCall.block);
+    }
+
+    const results = await Promise.all(toolUses.map(async (toolUse, toolIndex) => {
       await onProgress(progressMessage(toolUse.name, toolUse.input, 'start'), {
         phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1, force: true,
       });
@@ -428,6 +583,13 @@ export async function runManagedLoop(initialRequest, {
           });
         }
         const neutralOutput = neutralizeProtocolValue(output);
+        const canonical = normalizeManagedToolName(toolUse.name);
+        const serverCall = serverCalls[toolIndex];
+        if (serverCall) {
+          const serverResult = createServerWebToolResult(canonical, serverCall.id, neutralOutput);
+          await publishServerBlock('result', serverResult);
+          serverUsageCounts[canonical] += 1;
+        }
         await onProgress(progressMessage(toolUse.name, toolUse.input, 'done'), {
           phase: 'managed_tool_done', name: normalizeManagedToolName(toolUse.name), round: round + 1,
         });
@@ -439,8 +601,14 @@ export async function runManagedLoop(initialRequest, {
       } catch (error) {
         if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
         if (!(error instanceof HttpError)) throw error;
+        const canonical = normalizeManagedToolName(toolUse.name);
+        const serverCall = serverCalls[toolIndex];
+        if (serverCall) {
+          const serverResult = createServerWebToolResult(canonical, serverCall.id, null, error);
+          await publishServerBlock('result', serverResult);
+        }
         await onProgress(progressMessage(toolUse.name, toolUse.input, 'error'), {
-          phase: 'managed_tool_error', name: normalizeManagedToolName(toolUse.name), round: round + 1,
+          phase: 'managed_tool_error', name: canonical, round: round + 1,
           code: error.code,
         });
         return {

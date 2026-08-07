@@ -1,7 +1,8 @@
+import crypto from 'node:crypto';
 import { HttpError } from '../lib/http.js';
 
-const NATIVE_SEARCH_PREFIX = 'web_search_';
-const NATIVE_FETCH_PREFIX = 'web_fetch_';
+const NATIVE_SEARCH_TYPE = /^web_search_[0-9]{8}$/;
+const NATIVE_FETCH_TYPE = /^web_fetch_[0-9]{8}$/;
 const KNOWN_NATIVE_FIELDS = new Set([
   'type', 'name', 'max_uses', 'allowed_domains', 'blocked_domains',
   'user_location', 'max_content_tokens', 'citations',
@@ -34,16 +35,22 @@ const FETCH_SCHEMA = Object.freeze({
   },
 });
 
-function canonicalName(value) {
+export function canonicalWebToolName(value) {
   if (value === 'WebSearch' || value === 'web_search') return 'WebSearch';
   if (value === 'WebFetch' || value === 'web_fetch') return 'WebFetch';
+  if (typeof value === 'string' && NATIVE_SEARCH_TYPE.test(value)) return 'WebSearch';
+  if (typeof value === 'string' && NATIVE_FETCH_TYPE.test(value)) return 'WebFetch';
   return '';
+}
+
+function canonicalName(value) {
+  return canonicalWebToolName(value);
 }
 
 function nativeCanonical(tool) {
   const type = typeof tool?.type === 'string' ? tool.type : '';
-  if (type.startsWith(NATIVE_SEARCH_PREFIX)) return 'WebSearch';
-  if (type.startsWith(NATIVE_FETCH_PREFIX)) return 'WebFetch';
+  if (NATIVE_SEARCH_TYPE.test(type)) return 'WebSearch';
+  if (NATIVE_FETCH_TYPE.test(type)) return 'WebFetch';
   return '';
 }
 
@@ -268,6 +275,156 @@ export function createManagedWebPolicyEnforcer(policies = {}) {
       return Object.fromEntries(uses);
     },
   };
+}
+
+
+function serverWebName(canonical) {
+  return canonical === 'WebSearch' ? 'web_search' : canonical === 'WebFetch' ? 'web_fetch' : '';
+}
+
+export function createServerWebToolUse(toolUse) {
+  const canonical = canonicalWebToolName(toolUse?.name);
+  if (!canonical) return null;
+  const id = `srvtoolu_${crypto.randomUUID().replaceAll('-', '')}`;
+  return {
+    id,
+    canonical,
+    originalId: typeof toolUse?.id === 'string' ? toolUse.id : '',
+    block: {
+      type: 'server_tool_use',
+      id,
+      name: serverWebName(canonical),
+      input: toolUse?.input && typeof toolUse.input === 'object' && !Array.isArray(toolUse.input)
+        ? structuredClone(toolUse.input)
+        : {},
+    },
+  };
+}
+
+function mapSearchErrorCode(code) {
+  if (['max_uses_exceeded', 'invalid_tool_input', 'query_too_long', 'request_too_large', 'too_many_requests'].includes(code)) return code;
+  return 'unavailable';
+}
+
+function mapFetchErrorCode(code) {
+  if (code === 'max_uses_exceeded') return code;
+  if (code === 'invalid_tool_input') return code;
+  if (['blocked_fetch_target', 'blocked_web_domain'].includes(code)) return 'url_not_allowed';
+  if (code === 'web_fetch_error') return 'url_not_accessible';
+  if (code === 'too_many_requests') return 'too_many_requests';
+  return 'unavailable';
+}
+
+export function createServerWebToolResult(canonicalInput, toolUseId, output, error = null) {
+  const canonical = canonicalWebToolName(canonicalInput) || canonicalInput;
+  if (canonical === 'WebSearch') {
+    if (error) {
+      return {
+        type: 'web_search_tool_result',
+        tool_use_id: toolUseId,
+        content: { type: 'web_search_tool_result_error', error_code: mapSearchErrorCode(String(error?.code || '')) },
+      };
+    }
+    const results = Array.isArray(output?.results) ? output.results : [];
+    return {
+      type: 'web_search_tool_result',
+      tool_use_id: toolUseId,
+      content: results.map((item) => ({
+        type: 'web_search_result',
+        title: String(item?.title || '').slice(0, 500),
+        url: String(item?.url || ''),
+        ...(item?.published_date ? { page_age: String(item.published_date).slice(0, 120) } : {}),
+      })),
+    };
+  }
+  if (canonical === 'WebFetch') {
+    if (error) {
+      return {
+        type: 'web_fetch_tool_result',
+        tool_use_id: toolUseId,
+        content: { type: 'web_fetch_tool_result_error', error_code: mapFetchErrorCode(String(error?.code || '')) },
+      };
+    }
+    const url = String(output?.final_url || output?.requested_url || '');
+    const data = String(output?.result ?? output?.markdown ?? '');
+    return {
+      type: 'web_fetch_tool_result',
+      tool_use_id: toolUseId,
+      content: {
+        type: 'web_fetch_result',
+        url,
+        content: {
+          type: 'document',
+          source: { type: 'text', media_type: 'text/plain', data },
+          ...(output?.title ? { title: String(output.title).slice(0, 500) } : {}),
+        },
+        ...(output?.retrieved_at ? { retrieved_at: String(output.retrieved_at) } : {}),
+      },
+    };
+  }
+  return null;
+}
+
+
+function renderCompletedServerWebEvidence(block, maxChars) {
+  if (block?.type === 'web_search_tool_result') {
+    if (!Array.isArray(block.content)) {
+      const code = String(block?.content?.error_code || 'unavailable');
+      return `[VCC_SERVER_WEB_SEARCH_RESULT]\nerror=${code}`.slice(0, maxChars);
+    }
+    const lines = ['[VCC_SERVER_WEB_SEARCH_RESULT]'];
+    for (const item of block.content) {
+      if (item?.type !== 'web_search_result') continue;
+      const title = String(item?.title || '').replace(/\s+/g, ' ').trim();
+      const url = String(item?.url || '').trim();
+      const age = item?.page_age ? ` | ${String(item.page_age).slice(0, 120)}` : '';
+      lines.push(`- ${title || '(untitled)'} | ${url}${age}`);
+      if (lines.join('\n').length >= maxChars) break;
+    }
+    return lines.join('\n').slice(0, maxChars);
+  }
+  if (block?.type === 'web_fetch_tool_result') {
+    const content = block?.content;
+    if (content?.type === 'web_fetch_tool_result_error') {
+      return `[VCC_SERVER_WEB_FETCH_RESULT]\nerror=${String(content.error_code || 'unavailable')}`.slice(0, maxChars);
+    }
+    const url = String(content?.url || '').trim();
+    const title = String(content?.content?.title || '').replace(/\s+/g, ' ').trim();
+    const data = String(content?.content?.source?.data || '');
+    return [`[VCC_SERVER_WEB_FETCH_RESULT]`, `url=${url}`, ...(title ? [`title=${title}`] : []), data]
+      .join('\n').slice(0, maxChars);
+  }
+  return '';
+}
+
+export function sanitizeCompletedServerWebHistory(messages, { maxEvidenceChars = 6000 } = {}) {
+  if (!Array.isArray(messages)) return { messages, changed: false, completed_count: 0 };
+  let changed = false;
+  let completedCount = 0;
+  const output = messages.map((message) => {
+    if (message?.role !== 'assistant' || !Array.isArray(message.content)) return structuredClone(message);
+    const resultIds = new Set(message.content
+      .filter((block) => NATIVE_WEB_RESULT_TYPES.has(block?.type) && typeof block?.tool_use_id === 'string')
+      .map((block) => block.tool_use_id));
+    if (resultIds.size === 0) return structuredClone(message);
+    const next = [];
+    for (const block of message.content) {
+      if (block?.type === 'server_tool_use' && resultIds.has(block?.id) && responseServerToolCanonical(block)) {
+        changed = true;
+        continue;
+      }
+      if (NATIVE_WEB_RESULT_TYPES.has(block?.type) && resultIds.has(block?.tool_use_id)) {
+        changed = true;
+        completedCount += 1;
+        const text = renderCompletedServerWebEvidence(block, Math.max(256, maxEvidenceChars));
+        if (text) next.push({ type: 'text', text });
+        continue;
+      }
+      next.push(structuredClone(block));
+    }
+    return { ...message, content: next };
+  });
+  return { messages: output, changed, completed_count: completedCount };
 }
 
 function splitRule(rule) {

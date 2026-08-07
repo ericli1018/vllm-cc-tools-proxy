@@ -31,7 +31,7 @@ test('runManagedLoop executes correlated managed tool results then continues', a
   assert.match(progress.join('\n'), /搜尋/);
 });
 
-test('runManagedLoop returns mixed managed and unmanaged tool calls unchanged', async () => {
+test('V0.2.20 defers mixed server web tools while preserving Claude Code client tool intent', async () => {
   const mixed = response([
     { type: 'tool_use', id: 'a', name: 'WebSearch', input: { query: 'abc' } },
     { type: 'tool_use', id: 'b', name: 'Read', input: { file_path: '/x' } },
@@ -42,8 +42,92 @@ test('runManagedLoop returns mixed managed and unmanaged tool calls unchanged', 
     executeTool: async () => { executeCount += 1; },
     maxRounds: 6,
   });
-  assert.deepEqual(result, mixed);
   assert.equal(executeCount, 0);
+  assert.equal(result.stop_reason, 'tool_use');
+  assert.equal(result.content[0].type, 'server_tool_use');
+  assert.match(result.content[0].id, /^srvtoolu_/);
+  assert.equal(result.content[0].name, 'web_search');
+  assert.deepEqual(result.content[0].input, { query: 'abc' });
+  assert.deepEqual(result.content[1], { type: 'tool_use', id: 'b', name: 'Read', input: { file_path: '/x' } });
+});
+
+test('V0.2.20 resumes deferred server web tool after Claude Code returns client tool_result', async () => {
+  const executions = [];
+  const requests = [];
+  const pendingId = 'srvtoolu_pending_search';
+  const initial = {
+    model: 'm',
+    tools: [
+      { name: 'web_search', input_schema: { type: 'object' } },
+      { name: 'Read', input_schema: { type: 'object' } },
+    ],
+    messages: [
+      { role: 'user', content: 'search and read' },
+      { role: 'assistant', content: [
+        { type: 'server_tool_use', id: pendingId, name: 'web_search', input: { query: 'tls docs' } },
+        { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/project/a.c' } },
+      ] },
+      { role: 'user', content: [
+        { type: 'tool_result', tool_use_id: 'read-1', content: 'int main(void){}' },
+      ] },
+    ],
+  };
+  const serverEvents = [];
+  const result = await runManagedLoop(initial, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      const assistant = request.messages.at(-2);
+      const user = request.messages.at(-1);
+      assert.equal(assistant.content[0].type, 'tool_use');
+      assert.equal(assistant.content[0].id, pendingId);
+      assert.equal(assistant.content[0].name, 'web_search');
+      assert.equal(user.content.length, 2);
+      assert.equal(user.content[1].type, 'tool_result');
+      assert.equal(user.content[1].tool_use_id, pendingId);
+      return response([{ type: 'text', text: 'continued after both tools' }]);
+    },
+    executeTool: async (toolUse) => {
+      executions.push(structuredClone(toolUse));
+      return { query: toolUse.input.query, result_count: 1, results: [{ title: 'Docs', url: 'https://example.com', snippet: 'evidence' }] };
+    },
+    onServerToolEvent: async (event) => serverEvents.push(structuredClone(event)),
+  });
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0].id, pendingId);
+  assert.deepEqual(serverEvents.map((entry) => entry.phase), ['result']);
+  assert.equal(serverEvents[0].block.type, 'web_search_tool_result');
+  assert.equal(result.content[0].text, 'continued after both tools');
+  assert.equal(requests.length, 1);
+});
+
+
+
+test('V0.2.20 removes completed server web lifecycle blocks from later Base-model history', async () => {
+  let observed;
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'web_search', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'news' },
+      { role: 'assistant', content: [
+        { type: 'server_tool_use', id: 'srvtoolu_done', name: 'web_search', input: { query: 'today news' } },
+        { type: 'web_search_tool_result', tool_use_id: 'srvtoolu_done', content: [
+          { type: 'web_search_result', title: 'News', url: 'https://example.com/news' },
+        ] },
+        { type: 'text', text: 'Earlier answer.' },
+      ] },
+      { role: 'user', content: 'What about that source?' },
+    ],
+  }, {
+    upstream: async (request) => {
+      observed = structuredClone(request);
+      return response([{ type: 'text', text: 'follow-up' }]);
+    },
+    executeTool: async () => { throw new Error('completed history must not execute again'); },
+  });
+  assert.equal(result.content[0].text, 'follow-up');
+  assert.doesNotMatch(JSON.stringify(observed.messages), /server_tool_use|web_search_tool_result/);
+  assert.match(JSON.stringify(observed.messages), /https:\/\/example\.com\/news/);
 });
 
 test('runManagedLoop rejects an unbounded managed-tool loop', async () => {
@@ -583,7 +667,7 @@ test('runManagedLoop contains response-side native web search and executes it in
   assert.equal(executions.length, 1);
   assert.equal(executions[0].name, 'web_search');
   assert.ok(diagnostics.some((entry) => entry.event === 'native_web_response_contained'));
-  assert.doesNotMatch(JSON.stringify(result), /server_tool_use|web_search_tool_result/);
+  assert.doesNotMatch(JSON.stringify(result.content), /server_tool_use|web_search_tool_result/);
 });
 
 test('runManagedLoop contains response-side native web fetch and executes it internally', async () => {
@@ -605,8 +689,7 @@ test('runManagedLoop contains response-side native web fetch and executes it int
   assert.equal(executions, 1);
 });
 
-test('runManagedLoop executes native web calls before handing off a mixed Claude Code tool action', async () => {
-  const requests = [];
+test('V0.2.20 preserves response-side native web call as deferred server_tool_use beside client tool', async () => {
   let webExecutions = 0;
   const result = await runManagedLoop({
     model: 'm',
@@ -616,28 +699,18 @@ test('runManagedLoop executes native web calls before handing off a mixed Claude
     ],
     messages: [{ role: 'user', content: 'research then read' }],
   }, {
-    upstream: async (request) => {
-      requests.push(structuredClone(request));
-      if (requests.length === 1) return response([
-        { type: 'server_tool_use', id: 'srv-search-mixed', name: 'web_search', input: { query: 'tls docs' } },
-        { type: 'tool_use', id: 'read-premature', name: 'Read', input: { file_path: '/project/a.c' } },
-      ], 'tool_use');
-      const assistant = request.messages.at(-2);
-      assert.deepEqual(assistant.content, [
-        { type: 'tool_use', id: 'srv-search-mixed', name: 'web_search', input: { query: 'tls docs' } },
-      ]);
-      return response([
-        { type: 'tool_use', id: 'read-after-search', name: 'Read', input: { file_path: '/project/a.c' } },
-      ], 'tool_use');
-    },
+    upstream: async () => response([
+      { type: 'server_tool_use', id: 'srv-search-mixed', name: 'web_search', input: { query: 'tls docs' } },
+      { type: 'tool_use', id: 'read-premature', name: 'Read', input: { file_path: '/project/a.c' } },
+    ], 'tool_use'),
     executeTool: async () => { webExecutions += 1; return { results: [] }; },
   });
 
-  assert.equal(webExecutions, 1);
-  assert.deepEqual(result.content, [
-    { type: 'tool_use', id: 'read-after-search', name: 'Read', input: { file_path: '/project/a.c' } },
-  ]);
-  assert.doesNotMatch(JSON.stringify(result), /web_search|server_tool_use/);
+  assert.equal(webExecutions, 0);
+  assert.equal(result.stop_reason, 'tool_use');
+  assert.equal(result.content[0].type, 'server_tool_use');
+  assert.equal(result.content[0].name, 'web_search');
+  assert.deepEqual(result.content[1], { type: 'tool_use', id: 'read-premature', name: 'Read', input: { file_path: '/project/a.c' } });
 });
 
 test('V0.2.19 validates tool-use responses and recovers leaked protocol markup before dispatch', async () => {
