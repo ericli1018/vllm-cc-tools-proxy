@@ -75,12 +75,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.19.1', async () => {
+test('package version is V0.2.19.2', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.19+hotfix.1');
-  assert.equal(lock.version, '0.2.19+hotfix.1');
-  assert.equal(lock.packages[''].version, '0.2.19+hotfix.1');
+  assert.equal(packageJson.version, '0.2.19+hotfix.2');
+  assert.equal(lock.version, '0.2.19+hotfix.2');
+  assert.equal(lock.packages[''].version, '0.2.19+hotfix.2');
 });
 
 
@@ -176,4 +176,13 @@ test('README documents V0.2.19.1 parallel WebFetch and slow-model budgets', () =
   assert.match(readme, /1800000/);
   assert.match(readme, /managed_final_round_reserved/);
   assert.match(readme, /allowed_domains/);
+});
+
+
+test('README documents V0.2.19.2 deterministic promotion and tool-description isolation', () => {
+  assert.match(readme, /V0\.2\.19\.2/);
+  assert.match(readme, /deterministic final promotion/i);
+  assert.match(readme, /managed_final_response_promoted/);
+  assert.match(readme, /protocol_tool_descriptions_sanitized/);
+  assert.match(readme, /fields named `description`/);
 });

@@ -84,6 +84,26 @@ export function inspectManagedFinalResponse(response) {
   };
 }
 
+export function promoteManagedFinalAnswer(response, inspection = inspectManagedFinalResponse(response)) {
+  if (response?.stop_reason !== 'end_turn') return null;
+  if (inspection.reasons.length !== 1 || inspection.reasons[0] !== 'final_answer_in_thinking') return null;
+  if (inspection.tool_use_count !== 0 || !inspection.thinking_text_present || inspection.visible_text_present) return null;
+  const content = Array.isArray(response?.content) ? response.content : [];
+  if (content.length === 0 || content.some((block) => block?.type !== 'thinking')) return null;
+
+  const recovery = classifyManagedRecovery(response, inspection);
+  if (recovery.route !== 'final_channel') return null;
+  const candidate = responseText(response, 'thinking', 'thinking').trim();
+  if (!candidate) return null;
+
+  return {
+    response: { ...structuredClone(response), content: [{ type: 'text', text: candidate }] },
+    route: 'deterministic_final_promotion',
+    source: 'thinking',
+    signals: recovery.signals,
+  };
+}
+
 export function classifyManagedRecovery(response, inspection = inspectManagedFinalResponse(response)) {
   const thinking = responseText(response, 'thinking', 'thinking');
   const visible = responseText(response, 'text', 'text');

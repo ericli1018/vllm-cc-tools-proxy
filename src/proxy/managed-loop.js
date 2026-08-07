@@ -4,6 +4,7 @@ import {
   buildManagedFinalChannelRecoveryRequest,
   classifyManagedRecovery,
   inspectManagedFinalResponse,
+  promoteManagedFinalAnswer,
 } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName, normalizeManagedToolUseBlock } from './web-tools.js';
@@ -204,6 +205,22 @@ async function recoverInvalidResponse(request, response, {
     await emitDetailedFinalDiagnostics(request, response, inspection, {
       onDiagnostic, writeProtocolDiagnostics, round, repair: false, includeInput: true,
     });
+  }
+
+  const promotion = promoteManagedFinalAnswer(response, inspection);
+  if (promotion) {
+    await onDiagnostic('managed_final_response_promoted', {
+      round,
+      route: promotion.route,
+      source: promotion.source,
+      text_bytes: Buffer.byteLength(promotion.response.content[0].text),
+      recovery_signals: promotion.signals,
+    });
+    return {
+      response: promotion.response,
+      recovered: true,
+      recovery: { route: promotion.route, tools_preserved: false, promoted: true },
+    };
   }
 
   const recovery = classifyManagedRecovery(response, inspection);

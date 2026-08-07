@@ -101,6 +101,44 @@ function collectProtocolTags(value) {
   return tags;
 }
 
+function sanitizeDescriptionFields(value, state, seen = new WeakMap()) {
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return seen.get(value);
+  if (Array.isArray(value)) {
+    const clone = [];
+    seen.set(value, clone);
+    for (const item of value) clone.push(sanitizeDescriptionFields(item, state, seen));
+    return clone;
+  }
+  const clone = {};
+  seen.set(value, clone);
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'description' && typeof item === 'string') {
+      const detected = scanControlTags(item);
+      if (detected.length > 0) {
+        state.changed = true;
+        state.tags.push(...detected);
+        clone[key] = neutralizeControlTags(item);
+      } else {
+        clone[key] = item;
+      }
+      continue;
+    }
+    clone[key] = sanitizeDescriptionFields(item, state, seen);
+  }
+  return clone;
+}
+
+export function sanitizeProtocolToolDefinitions(tools) {
+  if (!Array.isArray(tools)) return { tools, changed: false, tags: [] };
+  const state = { changed: false, tags: [] };
+  return {
+    tools: sanitizeDescriptionFields(tools, state),
+    changed: state.changed,
+    tags: state.tags,
+  };
+}
+
 export function sanitizeProtocolHistory(messages) {
   if (!Array.isArray(messages)) return { messages, changed: false, tags: [] };
   let changed = false;

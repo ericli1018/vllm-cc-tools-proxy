@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.19.2 - 2026-08-07
+
+- Kept external release label `V0.2.19.2` while using npm-valid package metadata `0.2.19+hotfix.2`.
+- Added deterministic promotion for a strict completed-answer case: `stop_reason=end_turn`, thinking-only content, no tool calls, no protocol tags, answer-like structure, and no continuation intent.
+- Promoted eligible reasoning-channel final answers directly into one visible `text` block without a second Base-model recovery call.
+- Preserved final-channel recovery for unsafe promotion cases such as `max_tokens`, protocol-tag contamination, ambiguous/unfinished reasoning, and continuation intent.
+- Added recursive protocol-tag neutralization for tool `description` fields, including nested JSON-schema property descriptions, before tool definitions enter the Base vLLM prompt.
+- Preserved schema-bearing values such as `enum`, `default`, tool names and non-description strings exactly; ordinary user text is not rewritten by tool-description isolation.
+- Added `protocol_tool_descriptions_sanitized` and `managed_final_response_promoted` content-free diagnostics.
+- Extended incoming protocol inventory with tool-definition tag counts.
+- Preserved V0.2.19.1 WebFetch Processor concurrency, slow-model budgets, domain normalization and V0.2.20 Native Web Search scope boundary.
+
 ## 0.2.19.1 - 2026-08-07
 
 - Kept external release label `V0.2.19.1` while using npm-valid package metadata `0.2.19+hotfix.1`.

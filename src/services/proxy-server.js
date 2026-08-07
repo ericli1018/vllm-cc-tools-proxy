@@ -11,7 +11,7 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
-import { inventoryProtocolTags, sanitizeProtocolHistory } from '../proxy/protocol-sanitizer.js';
+import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
@@ -319,21 +319,25 @@ export function createProxyServer(config, dependencies = {}) {
 
       const incomingSystemProtocolInventory = inventoryProtocolTags(original.system);
       const incomingMessageProtocolInventory = inventoryProtocolTags(original.messages);
+      const incomingToolProtocolInventory = inventoryProtocolTags(original.tools);
       const incomingProtocolInventory = {
-        total: incomingSystemProtocolInventory.total + incomingMessageProtocolInventory.total,
+        total: incomingSystemProtocolInventory.total + incomingMessageProtocolInventory.total + incomingToolProtocolInventory.total,
         counts: Object.fromEntries(
           [...new Set([
             ...Object.keys(incomingSystemProtocolInventory.counts),
             ...Object.keys(incomingMessageProtocolInventory.counts),
+            ...Object.keys(incomingToolProtocolInventory.counts),
           ])]
             .sort()
             .map((name) => [
               name,
               (incomingSystemProtocolInventory.counts[name] || 0)
-                + (incomingMessageProtocolInventory.counts[name] || 0),
+                + (incomingMessageProtocolInventory.counts[name] || 0)
+                + (incomingToolProtocolInventory.counts[name] || 0),
             ]),
         ),
       };
+      let requestRewritten = false;
       let historyRewritten = false;
       let cleanedMessages = original.messages;
       if (hasProgressHistory(cleanedMessages)) {
@@ -350,7 +354,21 @@ export function createProxyServer(config, dependencies = {}) {
           tags: [...new Set(protocolHistory.tags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))],
         });
       }
-      if (historyRewritten) original = { ...original, messages: cleanedMessages };
+      if (historyRewritten) {
+        original = { ...original, messages: cleanedMessages };
+        requestRewritten = true;
+      }
+
+      const protocolTools = sanitizeProtocolToolDefinitions(original.tools);
+      if (protocolTools.changed) {
+        original = { ...original, tools: protocolTools.tools };
+        requestRewritten = true;
+        log(config, 'warn', 'protocol_tool_descriptions_sanitized', {
+          requestId,
+          tag_count: protocolTools.tags.length,
+          tags: [...new Set(protocolTools.tags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))],
+        });
+      }
 
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
@@ -367,13 +385,18 @@ export function createProxyServer(config, dependencies = {}) {
           system_tag_counts: incomingSystemProtocolInventory.counts,
           message_tag_count: incomingMessageProtocolInventory.total,
           message_tag_counts: incomingMessageProtocolInventory.counts,
+          tool_tag_count: incomingToolProtocolInventory.total,
+          tool_tag_counts: incomingToolProtocolInventory.counts,
         });
       }
 
       if (!initiallyManaged) {
         releaseIngress(); releaseIngress = null;
-        if (historyRewritten) {
-          log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'history_sanitize', reason: 'malformed_protocol_history' });
+        if (requestRewritten) {
+          log(config, 'info', 'route_decision', {
+            requestId, method: req.method, path: url.pathname, decision: 'protocol_sanitize',
+            reason: historyRewritten ? 'malformed_protocol_history' : 'tool_description_protocol_tags',
+          });
           if (messagesPath === '/v1/messages/count_tokens') {
             const payload = await callUpstreamJson(original, config, req.headers, abortController.signal, messagesPath);
             completed = true;

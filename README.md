@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.1 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.2 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.19.1 architecture
+## V0.2.19.2 architecture
 
 ```text
 Claude Code
@@ -49,6 +49,14 @@ Startup behavior:
 6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
+
+## V0.2.19.2 deterministic final promotion and tool-description isolation
+
+V0.2.19.2 adds a strict fast path for Laguna/Poolside responses where the model has already completed the user answer but `poolside_v1` returns it only as a `thinking` block. If the response is `end_turn`, thinking-only, has no tool calls, no active protocol tags, has answer-like structure, and contains no continuation intent, the proxy promotes that text directly into one visible Anthropic `text` block. No second Base-model recovery call is made. Unsafe cases keep the existing final-channel or continuation recovery path.
+
+Claude Code tool documentation can itself contain literal protocol examples such as `<thinking>...</thinking>` and `<tool_call>`. Before tool definitions reach the Base vLLM, V0.2.19.2 recursively neutralizes active control tags only in fields named `description`, including nested JSON-schema descriptions. Tool names, enums, defaults, schema values and ordinary user text are preserved exactly.
+
+New content-free diagnostics are `managed_final_response_promoted` and `protocol_tool_descriptions_sanitized`; `incoming_protocol_inventory` also reports tool-definition tag counts.
 
 ## V0.2.19.1 parallel WebFetch and slow-model budgets
 

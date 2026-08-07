@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.19.1, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.19.2, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.19.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.19.2', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -1399,4 +1399,49 @@ test('V0.2.19 quarantines contaminated Claude Code tool_result history before Ba
   assert.doesNotMatch(resultText, /<tool_call>|<arg_key>|<\/think>/);
   assert.match(resultText, /&lt;tool_call&gt;/);
   assert.match(observed.messages[1].content[1].text, /<tool_call>/);
+});
+
+test('V0.2.19.2 neutralizes protocol tags only inside tool description fields before Base vLLM', async (t) => {
+  let observed;
+  const vllm = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'SAFE' }], stop_reason: 'end_turn', usage: {},
+    }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{
+        name: 'Agent',
+        description: 'Example assistant: <thinking>delegate research</thinking> Agent({...})',
+        input_schema: {
+          type: 'object',
+          properties: {
+            prompt: { type: 'string', description: 'Do not output <tool_call> examples.' },
+            literal: { type: 'string', enum: ['<tool_call>'], default: '<thinking>' },
+          },
+        },
+      }],
+      messages: [{ role: 'user', content: 'Discuss literal <thinking> syntax.' }],
+    }),
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'SAFE');
+  assert.doesNotMatch(observed.tools[0].description, /<thinking>|<\/thinking>/);
+  assert.match(observed.tools[0].description, /&lt;thinking&gt;/);
+  assert.doesNotMatch(observed.tools[0].input_schema.properties.prompt.description, /<tool_call>/);
+  assert.match(observed.tools[0].input_schema.properties.prompt.description, /&lt;tool_call&gt;/);
+  assert.deepEqual(observed.tools[0].input_schema.properties.literal.enum, ['<tool_call>']);
+  assert.equal(observed.tools[0].input_schema.properties.literal.default, '<thinking>');
+  assert.match(observed.messages[0].content, /<thinking>/);
 });

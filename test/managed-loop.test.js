@@ -379,7 +379,7 @@ test('runManagedLoop uses short final-channel recovery only for a structured com
   }, {
     upstream: async (request) => {
       requests.push(structuredClone(request));
-      if (requests.length === 1) return response([{ type: 'thinking', thinking: completedAnswer }]);
+      if (requests.length === 1) return response([{ type: 'thinking', thinking: completedAnswer }], 'max_tokens');
       assert.equal('tools' in request, false);
       assert.equal('tool_choice' in request, false);
       assert.notEqual(request.system, 'original system must not be copied into short recovery');
@@ -831,4 +831,36 @@ test('V0.2.19.1 reserves the last model-round budget by disabling only managed r
   });
   assert.equal(result.content[0].name, 'Read');
   assert.ok(diagnostics.some((entry) => entry.event === 'managed_final_round_reserved'));
+});
+
+test('V0.2.19.2 deterministically promotes a complete thinking-only end_turn answer without another model call', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  const completedAnswer = `# 今日新聞摘要
+
+- 第一則新聞已整理事件、日期與主要影響。
+- 第二則新聞已整理官方資訊與相關背景。
+- 第三則新聞已整理市場反應與後續觀察。
+
+整體而言，今日焦點集中在天候、公共政策與市場動態。`;
+
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'news' }],
+  }, {
+    upstream: async () => {
+      calls += 1;
+      return response([{ type: 'thinking', thinking: completedAnswer }]);
+    },
+    executeTool: async () => assert.fail('promotion must not execute tools'),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 1);
+  assert.deepEqual(result.content, [{ type: 'text', text: completedAnswer }]);
+  const promoted = diagnostics.find((entry) => entry.event === 'managed_final_response_promoted');
+  assert.ok(promoted);
+  assert.equal(promoted.details.route, 'deterministic_final_promotion');
+  assert.equal(promoted.details.source, 'thinking');
 });
