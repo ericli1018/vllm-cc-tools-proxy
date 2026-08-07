@@ -157,3 +157,60 @@ test('pipeAnthropicUpstreamStream closes visible progress according to the first
     },
   }]);
 });
+
+test('pipeAnthropicUpstreamStream observes upstream usage without forwarding a second message_start', async () => {
+  const writes = [];
+  const observed = [];
+  const progress = {
+    visible: false,
+    closeProgress: async () => {},
+    writeRaw: async (value) => writes.push(value),
+    stopKeepalive: () => {},
+    stopSemanticHeartbeat: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  const chunks = [
+    event('message_start', {
+      type: 'message_start',
+      message: {
+        usage: {
+          input_tokens: 180000,
+          cache_creation_input_tokens: 1200,
+          cache_read_input_tokens: 3400,
+          output_tokens: 0,
+        },
+      },
+    }),
+    event('content_block_start', {
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'text', text: '' },
+    }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', {
+      type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 25 },
+    }),
+    event('message_stop', { type: 'message_stop' }),
+  ];
+
+  await pipeAnthropicUpstreamStream(progress, {
+    body: Readable.from(chunks.map((chunk) => Buffer.from(chunk))),
+  }, {
+    onUsage: (entry) => observed.push(entry),
+  });
+
+  assert.equal((writes.join('').match(/event: message_start/g) || []).length, 0);
+  assert.deepEqual(observed, [
+    {
+      stage: 'message_start',
+      usage: {
+        input_tokens: 180000,
+        cache_creation_input_tokens: 1200,
+        cache_read_input_tokens: 3400,
+        output_tokens: 0,
+      },
+    },
+    { stage: 'message_delta', usage: { input_tokens: 0, output_tokens: 25 } },
+  ]);
+});

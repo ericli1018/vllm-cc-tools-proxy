@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.16 - 2026-08-07
+
+- Added a managed-stream token preflight through the existing Anthropic-compatible `/v1/messages/count_tokens` endpoint before the proxy emits its synthetic SSE `message_start`.
+- Replaced the fixed managed-stream `input_tokens: 0` with the preflight token count so Claude Code can observe realistic context usage and trigger automatic compaction.
+- Added normalized forwarding for `input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`, `output_tokens`, and bounded `server_tool_use` counters.
+- Added Direct Streaming observation of upstream `message_start` and `message_delta` usage without forwarding a duplicate `message_start` event.
+- Added safe `managed_usage_preflight_succeeded`, `managed_usage_preflight_failed`, `managed_response_usage_observed`, and `managed_stream_usage_observed` diagnostics containing token counts only.
+- Made token-count preflight failure non-fatal: the Claude Code turn continues with a zero-valued fallback usage object instead of aborting tool execution.
+- Preserved V0.2.15 progress semantics, V0.2.14 Recovery Routing, Managed Tool Routing, WebFetch processing, and protocol diagnostic files without adding environment variables.
+- Added regression coverage for non-zero initial usage, cache counters, direct-stream usage observation, auto-compact compatibility, and count-token endpoint failure fallback.
+
 ## 0.2.15 - 2026-08-06
 
 - Replaced the ambiguous `處理完成；正在回傳模型結果…` managed-stream message with response-aware proxy-turn states.

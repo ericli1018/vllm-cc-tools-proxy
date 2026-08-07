@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.15 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.16 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.15 architecture
+## V0.2.16 architecture
 
 ```text
 Claude Code
@@ -212,6 +212,71 @@ V0.2.14 no longer treats every thinking-only response as a completed final answe
 After upgrading from a session that already displayed raw `</function_result>`, `</function_results>`, `</thinking>` or `<tool_call>` text, start a new Claude Code session for that task. Structured thinking history is sanitized on later requests, but intentionally does not rewrite already-visible assistant text.
 
 
+
+
+## V0.2.16 Anthropic usage preservation
+
+Claude Code uses Anthropic `usage` metadata to estimate the current context and decide when automatic compaction should run. Earlier managed streams opened a synthetic Anthropic `message_start` immediately for progress reporting but set:
+
+```json
+{"usage":{"input_tokens":0,"output_tokens":0}}
+```
+
+Because Anthropic input usage belongs to the first `message_start`, a later Base-model response could not legally repair that value. V0.2.16 performs one lightweight token preflight before opening a streamed managed response:
+
+```text
+POST /v1/messages/count_tokens
+  -> input_tokens
+  -> synthetic message_start.usage.input_tokens
+  -> normal managed model/tool workflow
+```
+
+The downstream initial usage preserves the Anthropic-compatible fields when supplied:
+
+```text
+input_tokens
+cache_creation_input_tokens
+cache_read_input_tokens
+output_tokens
+server_tool_use
+```
+
+For local vLLM deployments without Anthropic prompt caching, the cache fields remain zero. The final `message_delta` continues to carry the real `output_tokens` from the Base-model response.
+
+Direct transformed streaming still emits exactly one downstream `message_start`. The proxy observes the upstream `message_start` and `message_delta` usage for diagnostics, compares the upstream input count with the preflight count, and forwards the upstream content events with their original indexes shifted only when a visible progress block exists.
+
+Safe token-only diagnostics:
+
+```text
+managed_usage_preflight_succeeded
+  input_tokens=...
+  cache_creation_input_tokens=...
+  cache_read_input_tokens=...
+  total_input_tokens=...
+
+managed_usage_preflight_failed
+  code=...
+  retryable=...
+
+managed_response_usage_observed
+managed_stream_usage_observed
+  preflight_input_tokens=...
+  upstream_input_tokens=...
+  input_token_delta=...
+  output_tokens=...
+```
+
+A missing or unsupported `/v1/messages/count_tokens` endpoint does not terminate the Claude Code turn. The proxy logs `managed_usage_preflight_failed`, emits a zero-valued fallback usage object, and continues the original model/tool workflow. For reliable Claude Code automatic compaction, the Base vLLM endpoint should implement the token-count route.
+
+For a 224,000-token local context with `CLAUDE_CODE_MAX_OUTPUT_TOKENS=16384`, a 200,000-token compact threshold leaves only 7,616 tokens for one large tool result before the next request can overflow. The recommended operational value is:
+
+```bash
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000
+```
+
+This leaves approximately 27,616 tokens of headroom for the requested output and a large Read/Bash/WebFetch result. V0.2.16 does not modify Claude Code history or invoke compaction itself; it restores the usage signal Claude Code needs to make that decision.
+
+No additional ENV setting is introduced.
 
 ## V0.2.15 proxy-turn progress semantics
 
@@ -689,9 +754,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers Anthropic usage normalization, managed `/v1/messages/count_tokens` preflight, auto-compact usage compatibility, non-fatal preflight fallback, direct-stream usage observation, transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.15 limits
+## V0.2.16 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

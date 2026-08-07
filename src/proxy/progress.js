@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
+import { normalizeAnthropicUsage } from './anthropic-usage.js';
 
 export const PROGRESS_BLOCK_HEADER = '目前處理進度：';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
@@ -83,7 +84,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, onWrite = () => {}, onStateChange = () => {},
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {},
   } = {}) {
     this.res = res;
     this.model = model;
@@ -92,6 +93,7 @@ export class ProgressStream {
     this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.drainTimeoutMs = drainTimeoutMs;
     this.onWrite = onWrite;
+    this.initialUsage = normalizeAnthropicUsage(initialUsage);
     this.onStateChange = onStateChange;
     this.startedAt = Date.now();
     this.visible = false;
@@ -138,7 +140,7 @@ export class ProgressStream {
         model: this.model,
         stop_reason: null,
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: 0 },
+        usage: this.initialUsage,
       },
     }), { kind: 'message_start' });
     await this.#write(event('ping', { type: 'ping' }), { kind: 'ping' });

@@ -270,3 +270,24 @@ test('closeProgress preserves response-aware phase and terminal scope metadata',
   assert.equal(changes.at(-1).phase, 'handoff_to_claude_code');
   assert.match(response.chunks.join(''), /正在交還 Claude Code 執行/);
 });
+
+test('ProgressStream message_start preserves preflight input and cache usage', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+    initialUsage: {
+      input_tokens: 180000,
+      cache_creation_input_tokens: 1200,
+      cache_read_input_tokens: 3400,
+      output_tokens: 0,
+    },
+  });
+  await progress.open();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.match(stream, /"input_tokens":180000/);
+  assert.match(stream, /"cache_creation_input_tokens":1200/);
+  assert.match(stream, /"cache_read_input_tokens":3400/);
+});

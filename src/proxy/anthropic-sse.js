@@ -1,5 +1,6 @@
 import { formatSseEvent } from './progress.js';
 import { findControlTags } from './protocol-sanitizer.js';
+import { normalizeAnthropicUsage } from './anthropic-usage.js';
 
 function safeToolName(value) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
@@ -197,7 +198,7 @@ function shiftEventIndex(payload, offset) {
 }
 
 export async function pipeAnthropicUpstreamStream(progress, upstream, {
-  onDiagnostic = () => {}, onFirstEvent = () => {}, onComplete = () => {},
+  onDiagnostic = () => {}, onFirstEvent = () => {}, onComplete = () => {}, onUsage = () => {},
 } = {}) {
   let offset = 0;
   let progressClosedForModel = false;
@@ -242,11 +243,27 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
   const processBlock = async (block) => {
     if (!block.trim()) return;
     const parsed = parseSseBlock(block);
-    if (parsed.name === 'message_start') return;
     let data = parsed.data;
     let payload = null;
     if (data) {
       try { payload = JSON.parse(data); } catch {}
+    }
+    if (parsed.name === 'message_start') {
+      try {
+        await onUsage({
+          stage: 'message_start',
+          usage: normalizeAnthropicUsage(payload?.message?.usage),
+        });
+      } catch {}
+      return;
+    }
+    if (parsed.name === 'message_delta' && payload?.usage) {
+      try {
+        await onUsage({
+          stage: 'message_delta',
+          usage: normalizeAnthropicUsage(payload.usage),
+        });
+      } catch {}
     }
     const meaningful = parsed.name === 'content_block_start' || parsed.name === 'content_block_delta';
     if (meaningful && !firstModelEventObserved) {

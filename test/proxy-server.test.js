@@ -18,17 +18,17 @@ function config(overrides = {}) {
     searxngUrl: '', webFetchUrl: '', webFetchApiKey: '', maxToolRounds: 6,
     progressVisibleAfterMs: 0, progressPingIntervalMs: 10000, progressHeartbeatMs: 15000,
     concurrency: { profile: 'default', managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 },
-    logLevel: 'error', gitRevision: 'test', ...overrides,
+    logLevel: 'error', gitRevision: 'test', usagePreflightEnabled: false, ...overrides,
   };
 }
 
-test('proxy health endpoint reports V0.2.15, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.16, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.15', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.16', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -960,4 +960,109 @@ test('managed final anomaly diagnostics are written to a complete temporary file
   assert.equal(raw.includes('system-secret'), false);
   assert.match(raw, /Bearer \[REDACTED\]/);
   assert.match(raw, /password=\[REDACTED\]/);
+});
+
+test('managed streaming preflights input tokens for Claude Code auto compact compatibility', async (t) => {
+  const paths = [];
+  let messageCalls = 0;
+  const logs = [];
+  const vllm = await startJsonServer(async (req, res) => {
+    paths.push(req.url);
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      assert.equal(payload.stream, false);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 197500 }));
+      return;
+    }
+    messageCalls += 1;
+    assert.equal(payload.stream, false);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'FINAL' }],
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 197500, output_tokens: 25 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    usagePreflightEnabled: true,
+    searxngUrl: 'http://127.0.0.1:9',
+    logLevel: 'debug',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'answer without searching' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.deepEqual(paths, ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.equal(messageCalls, 1);
+  assert.match(stream, /"input_tokens":197500/);
+  assert.match(stream, /"output_tokens":25/);
+  assert.ok(logs.some((entry) => entry.event === 'managed_usage_preflight_succeeded'
+    && entry.input_tokens === 197500));
+  assert.ok(logs.some((entry) => entry.event === 'managed_response_usage_observed'
+    && entry.preflight_input_tokens === 197500
+    && entry.upstream_input_tokens === 197500
+    && entry.input_token_delta === 0
+    && entry.output_tokens === 25));
+});
+
+test('managed usage preflight failure does not interrupt the Claude Code turn', async (t) => {
+  const logs = [];
+  const paths = [];
+  const vllm = await startJsonServer(async (req, res) => {
+    paths.push(req.url);
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'not_found', message: 'count unsupported' } }));
+      return;
+    }
+    assert.equal(payload.stream, false);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: '/tmp/x' } }],
+      stop_reason: 'tool_use', usage: { input_tokens: 190000, output_tokens: 8 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    usagePreflightEnabled: true,
+    searxngUrl: 'http://127.0.0.1:9',
+    logLevel: 'debug',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [
+        { name: 'WebSearch', description: 'search', input_schema: { type: 'object' } },
+        { name: 'Write', description: 'write', input_schema: { type: 'object' } },
+      ],
+      messages: [{ role: 'user', content: 'create a file' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.deepEqual(paths, ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.match(stream, /"input_tokens":0/);
+  assert.match(stream, /"name":"Write"/);
+  assert.ok(logs.some((entry) => entry.event === 'managed_usage_preflight_failed'
+    && entry.code === 'not_found'));
 });

@@ -158,6 +158,7 @@ export function loadConfig(env = process.env) {
     logLevel: env.LOG_LEVEL || 'info',
     logProtocolSnippets: booleanValue(env.LOG_PROTOCOL_SNIPPETS, false, 'LOG_PROTOCOL_SNIPPETS'),
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
+    usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),

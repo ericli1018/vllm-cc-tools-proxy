@@ -67,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.15', async () => {
+test('package version is V0.2.16', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.15');
-  assert.equal(lock.version, '0.2.15');
-  assert.equal(lock.packages[''].version, '0.2.15');
+  assert.equal(packageJson.version, '0.2.16');
+  assert.equal(lock.version, '0.2.16');
+  assert.equal(lock.packages[''].version, '0.2.16');
 });
 
 
@@ -114,4 +114,14 @@ test('README documents V0.2.15 proxy-turn progress semantics', () => {
   assert.match(readme, /terminal_for_claude_task/);
   const section = readme.slice(readme.indexOf('## V0.2.15 proxy-turn progress semantics'), readme.indexOf('## V0.2.14 recovery routing'));
   assert.doesNotMatch(section, /處理完成；正在回傳模型結果/);
+});
+
+
+test('README documents V0.2.16 Anthropic usage preservation and auto-compact compatibility', () => {
+  assert.match(readme, /V0\.2\.16 Anthropic usage preservation/);
+  assert.match(readme, /\/v1\/messages\/count_tokens/);
+  assert.match(readme, /managed_usage_preflight_succeeded/);
+  assert.match(readme, /managed_usage_preflight_failed/);
+  assert.match(readme, /CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000/);
+  assert.doesNotMatch(envExample, /^USAGE_PREFLIGHT_/m);
 });

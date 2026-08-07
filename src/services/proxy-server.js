@@ -18,6 +18,7 @@ import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
+import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -73,6 +74,35 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
+
+async function preflightManagedUsage(request, config, incomingHeaders, signal, onDiagnostic = () => {}) {
+  if (config.usagePreflightEnabled === false) return usageFromTokenCount({});
+  try {
+    const payload = await callUpstreamJson(request, config, incomingHeaders, signal, '/v1/messages/count_tokens');
+    if (!Number.isInteger(payload?.input_tokens) || payload.input_tokens < 0) {
+      throw new HttpError(502, 'Token count response did not contain input_tokens.', {
+        code: 'vllm_invalid_token_count',
+        retryable: true,
+      });
+    }
+    const usage = usageFromTokenCount(payload);
+    await onDiagnostic('managed_usage_preflight_succeeded', {
+      input_tokens: usage.input_tokens,
+      cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+      cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+      total_input_tokens: totalAnthropicInputTokens(usage),
+    });
+    return usage;
+  } catch (error) {
+    if (error?.name === 'AbortError') throw error;
+    await onDiagnostic('managed_usage_preflight_failed', {
+      code: typeof error?.code === 'string' ? error.code : 'vllm_token_count_failed',
+      retryable: Boolean(error?.retryable),
+    });
+    return usageFromTokenCount({});
+  }
+}
+
 function evidenceByteLength(value) {
   let total = 0;
   const walk = (item) => {
@@ -92,7 +122,7 @@ function evidenceByteLength(value) {
 }
 
 async function streamManagedBase(progress, request, config, incomingHeaders, signal, {
-  onDiagnostic = () => {}, onLifecycle = () => {},
+  onDiagnostic = () => {}, onLifecycle = () => {}, onUsage = () => {},
 } = {}) {
   const outbound = { ...request, stream: true };
   const requestStartedAt = Date.now();
@@ -121,6 +151,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
   }
   await pipeAnthropicUpstreamStream(progress, upstream, {
     onDiagnostic,
+    onUsage,
     onFirstEvent: async ({ event, type }) => onLifecycle('base_upstream_first_event', {
       upstream_event: event,
       upstream_type: type,
@@ -212,6 +243,7 @@ export function createProxyServer(config, dependencies = {}) {
     let releaseIngress = null;
     let preparedMedia = null;
     let mediaProgress = null;
+    let initialStreamUsage = usageFromTokenCount({});
     const url = new URL(req.url || '/', 'http://localhost');
 
     res.on('close', () => {
@@ -354,6 +386,9 @@ export function createProxyServer(config, dependencies = {}) {
 
       validateMessagesRequest(original);
       let request = { ...original, messages: cleanedMessages };
+      const usagePreflightRequest = request.stream === true
+        ? { ...request, messages: request.messages }
+        : null;
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
       const preloadedCache = new Map();
@@ -426,8 +461,18 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       if (request.stream === true) {
+        initialStreamUsage = await preflightManagedUsage(
+          usagePreflightRequest || request,
+          config,
+          req.headers,
+          abortController.signal,
+          (event, fields) => {
+            log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
+          },
+        );
         progress = new ProgressStream(res, {
           model: request.model || 'vllm',
+          initialUsage: initialStreamUsage,
           pingIntervalMs: config.progressPingIntervalMs,
           heartbeatIntervalMs: config.progressHeartbeatMs,
           drainTimeoutMs: config.sseDrainTimeoutMs,
@@ -540,13 +585,36 @@ export function createProxyServer(config, dependencies = {}) {
           signal: abortController.signal,
         });
         releaseManaged(); releaseManaged = null;
-        if (request.stream === true) await emitFinalAnthropicResponse(progress, result);
-        else sendJson(res, 200, result);
+        if (request.stream === true) {
+          const observedUsage = normalizeAnthropicUsage(result?.usage);
+          log(config, 'info', 'managed_response_usage_observed', {
+            requestId,
+            preflight_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
+            upstream_input_tokens: totalAnthropicInputTokens(observedUsage),
+            input_token_delta: totalAnthropicInputTokens(observedUsage)
+              - totalAnthropicInputTokens(initialStreamUsage),
+            output_tokens: observedUsage.output_tokens || 0,
+          });
+          await emitFinalAnthropicResponse(progress, result);
+        } else sendJson(res, 200, result);
       } else {
         releaseManaged(); releaseManaged = null;
         if (request.stream === true) {
           await streamManagedBase(progress, request, config, req.headers, abortController.signal, {
             onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+            onUsage: ({ stage, usage }) => log(config, 'info', 'managed_stream_usage_observed', {
+              requestId,
+              stage,
+              input_tokens: usage.input_tokens || 0,
+              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+              output_tokens: usage.output_tokens || 0,
+              total_input_tokens: totalAnthropicInputTokens(usage),
+              preflight_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
+              input_token_delta: stage === 'message_start'
+                ? totalAnthropicInputTokens(usage) - totalAnthropicInputTokens(initialStreamUsage)
+                : undefined,
+            }),
             onLifecycle: async (event, fields) => {
               log(config, 'info', event, { requestId, ...fields });
               if (event === 'base_upstream_request_start') {

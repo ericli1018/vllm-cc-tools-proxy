@@ -22,6 +22,7 @@ test('loadConfig exposes the five vLLM settings and one proxy mode', () => {
   assert.equal(config.cache.visualPromptVersion, 'visual-v4');
   assert.equal(config.cache.evidenceContractVersion, 'evidence-v1');
   assert.equal(config.port, 8080);
+  assert.equal(config.usagePreflightEnabled, true);
 });
 
 test('vision URL and model must be configured together', () => {

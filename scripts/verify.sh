@@ -75,7 +75,13 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.15'
+test "$(node -p "require('./package.json').version")" = '0.2.16'
+
+test -f src/proxy/anthropic-usage.js
+grep -Fq 'managed_usage_preflight_succeeded' src/services/proxy-server.js
+grep -Fq 'managed_usage_preflight_failed' src/services/proxy-server.js
+grep -Fq "'/v1/messages/count_tokens'" src/services/proxy-server.js
+grep -Fq 'initialUsage' src/proxy/progress.js
 
 test -f src/proxy/evidence-contract.js
 test -f src/proxy/protocol-sanitizer.js
