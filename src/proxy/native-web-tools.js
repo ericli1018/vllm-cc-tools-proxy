@@ -58,6 +58,35 @@ export function isNativeWebToolDefinition(tool) {
   return Boolean(nativeCanonical(tool));
 }
 
+export function detectServerWebUiDeclaration(request) {
+  const tools = Array.isArray(request?.tools) ? request.tools : [];
+  let search = false;
+  let fetch = false;
+  let nativeCount = 0;
+  let aliasCount = 0;
+  for (const tool of tools) {
+    const native = nativeCanonical(tool);
+    if (native) {
+      nativeCount += 1;
+      if (native === 'WebSearch') search = true;
+      if (native === 'WebFetch') fetch = true;
+      continue;
+    }
+    const alias = canonicalWebToolName(tool?.name);
+    if (!alias) continue;
+    aliasCount += 1;
+    if (alias === 'WebSearch') search = true;
+    if (alias === 'WebFetch') fetch = true;
+  }
+  return {
+    eligible: search || fetch,
+    search,
+    fetch,
+    native_count: nativeCount,
+    alias_count: aliasCount,
+  };
+}
+
 function positiveInteger(value, field, { nullable = true } = {}) {
   if (value === undefined || value === null) return nullable ? null : undefined;
   if (!Number.isInteger(value) || value <= 0) {
@@ -301,6 +330,15 @@ export function createServerWebToolUse(toolUse) {
   };
 }
 
+function localOpaqueSearchContent(item) {
+  const identity = JSON.stringify([
+    String(item?.title || ''),
+    String(item?.url || ''),
+    String(item?.published_date || item?.page_age || ''),
+  ]);
+  return `vcc_local_${crypto.createHash('sha256').update(identity).digest('base64url')}`;
+}
+
 function mapSearchErrorCode(code) {
   if (['max_uses_exceeded', 'invalid_tool_input', 'query_too_long', 'request_too_large', 'too_many_requests'].includes(code)) return code;
   return 'unavailable';
@@ -333,7 +371,10 @@ export function createServerWebToolResult(canonicalInput, toolUseId, output, err
         type: 'web_search_result',
         title: String(item?.title || '').slice(0, 500),
         url: String(item?.url || ''),
-        ...(item?.published_date ? { page_age: String(item.published_date).slice(0, 120) } : {}),
+        encrypted_content: localOpaqueSearchContent(item),
+        page_age: item?.published_date || item?.page_age
+          ? String(item.published_date || item.page_age).slice(0, 120)
+          : null,
       })),
     };
   }
@@ -347,6 +388,10 @@ export function createServerWebToolResult(canonicalInput, toolUseId, output, err
     }
     const url = String(output?.final_url || output?.requested_url || '');
     const data = String(output?.result ?? output?.markdown ?? '');
+    let fallbackTitle = 'Fetched document';
+    try { fallbackTitle = new URL(url).hostname || fallbackTitle; } catch {}
+    const title = String(output?.title || fallbackTitle).slice(0, 500);
+    const retrievedAt = output?.retrieved_at ? String(output.retrieved_at) : new Date().toISOString();
     return {
       type: 'web_fetch_tool_result',
       tool_use_id: toolUseId,
@@ -356,9 +401,9 @@ export function createServerWebToolResult(canonicalInput, toolUseId, output, err
         content: {
           type: 'document',
           source: { type: 'text', media_type: 'text/plain', data },
-          ...(output?.title ? { title: String(output.title).slice(0, 500) } : {}),
+          title,
         },
-        ...(output?.retrieved_at ? { retrieved_at: String(output.retrieved_at) } : {}),
+        retrieved_at: retrievedAt,
       },
     };
   }

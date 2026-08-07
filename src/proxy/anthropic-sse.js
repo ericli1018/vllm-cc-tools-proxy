@@ -128,7 +128,7 @@ async function emitToolUseBlock(progress, index, block) {
 async function emitServerToolUseBlock(progress, index, block) {
   await progress.writeRaw(formatSseEvent('content_block_start', {
     type: 'content_block_start', index,
-    content_block: { type: 'server_tool_use', id: block.id, name: block.name },
+    content_block: { type: 'server_tool_use', id: block.id, name: block.name, input: {} },
   }));
   const input = JSON.stringify(block.input ?? {});
   await progress.writeRaw(formatSseEvent('content_block_delta', {

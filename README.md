@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.20 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, surfaces proxy-owned web activity as Anthropic-style server tools, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.21 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, surfaces proxy-owned web activity as Anthropic-style server tools, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.20 architecture
+## V0.2.21 architecture
 
 ```text
 Claude Code
@@ -49,6 +49,45 @@ Startup behavior:
 6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
+
+## V0.2.21 Native Claude Code Web Tool UI Bridge
+
+V0.2.21 keeps the V0.2.20 Proxy-owned Server Tool execution model, but tightens the Claude Code-facing streaming contract so WebSearch/WebFetch can be rendered as native tool activity instead of disappearing while the Proxy works.
+
+For streaming requests the Proxy now detects explicit built-in declarations using only exact aliases or dated Anthropic forms:
+
+```text
+WebSearch / web_search / web_search_YYYYMMDD
+WebFetch  / web_fetch  / web_fetch_YYYYMMDD
+```
+
+Substring/MCP/custom names remain excluded. When an eligible declaration is present, diagnostics report:
+
+```text
+server_web_ui_bridge_selected
+mode=native_server_tool
+```
+
+If no eligible declaration exists, the Proxy uses the existing `visible_progress` path instead of pretending an unrelated tool is native.
+
+The live `server_tool_use` SSE start event now matches the Anthropic streaming shape and includes the required empty input object before `input_json_delta` streams the actual arguments:
+
+```json
+{"type":"server_tool_use","id":"srvtoolu_...","name":"web_search","input":{}}
+```
+
+Search result blocks also carry response-side metadata expected by Anthropic-compatible clients. Every synthetic `web_search_result` includes `title`, `url`, `page_age` (nullable), and an opaque `encrypted_content` token. The token is a Proxy-local identity marker only; the Proxy never claims it is Anthropic-encrypted source text and later turns convert completed server-web history into bounded local evidence before it reaches the Base model.
+
+WebFetch result blocks likewise always provide a document title and `retrieved_at` timestamp. Existing SearXNG execution, awesome-web-fetch, Ollama/vLLM WebFetch Processor routing, usage counters, mixed server + client continuation, and three-slot Processor concurrency are unchanged.
+
+The intended Claude Code presentation is the native tool row, for example:
+
+```text
+● Web Search("...")
+● Web Fetch("...")
+```
+
+The Proxy still owns execution; Claude Code should not execute the same WebSearch/WebFetch a second time.
 
 ## V0.2.20 unified Web Server Tool Bridge
 

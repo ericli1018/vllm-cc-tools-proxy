@@ -243,6 +243,22 @@ test('V0.2.20 emits server web lifecycle blocks and server-tool usage to Claude 
   assert.match(stream, /VISIBLE/);
 });
 
+test('V0.2.21 server_tool_use start block includes required empty input object', async () => {
+  const writes = [];
+  const progress = {
+    visible: false,
+    closeProgress: async () => {},
+    writeRaw: async (chunk) => writes.push(chunk),
+    stopKeepalive: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  const bridge = createServerToolStreamBridge(progress);
+  await bridge.emit({ phase: 'use', block: { type: 'server_tool_use', id: 'srvtoolu_schema', name: 'web_search', input: { query: 'taiwan news' } } });
+  const stream = writes.join('');
+  assert.match(stream, /\"content_block\":\{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_schema\",\"name\":\"web_search\",\"input\":\{\}\}/);
+});
+
 test('V0.2.20 live server-tool bridge closes progress once and advances final content indexes', async () => {
   const writes = [];
   let closeCount = 0;

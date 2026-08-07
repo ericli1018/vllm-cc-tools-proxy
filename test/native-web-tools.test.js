@@ -9,6 +9,7 @@ import {
   createServerWebToolUse,
   createServerWebToolResult,
   sanitizeCompletedServerWebHistory,
+  detectServerWebUiDeclaration,
 } from '../src/proxy/native-web-tools.js';
 
 test('detects dated native web search and web fetch tool definitions', () => {
@@ -17,6 +18,18 @@ test('detects dated native web search and web fetch tool definitions', () => {
   assert.equal(isNativeWebToolDefinition({ type: 'web_fetch_20250910', name: 'web_fetch' }), true);
   assert.equal(isNativeWebToolDefinition({ type: 'web_fetch_20260318', name: 'web_fetch' }), true);
   assert.equal(isNativeWebToolDefinition({ name: 'web_search', input_schema: { type: 'object' } }), false);
+});
+
+test('V0.2.21 detects explicit built-in web declarations for native Claude Code UI without matching third-party tools', () => {
+  assert.deepEqual(detectServerWebUiDeclaration({ tools: [{ type: 'web_search_20260318', name: 'web_search' }] }), {
+    eligible: true, search: true, fetch: false, native_count: 1, alias_count: 0,
+  });
+  assert.deepEqual(detectServerWebUiDeclaration({ tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }, { name: 'web_fetch', input_schema: { type: 'object' } }] }), {
+    eligible: true, search: true, fetch: true, native_count: 0, alias_count: 2,
+  });
+  assert.deepEqual(detectServerWebUiDeclaration({ tools: [{ name: 'mcp__searxng__web_search' }, { name: 'company_web_fetch_v2' }] }), {
+    eligible: false, search: false, fetch: false, native_count: 0, alias_count: 0,
+  });
 });
 
 test('normalizes native web tools into custom schemas and extracts local policy', () => {
@@ -184,10 +197,14 @@ test('V0.2.20 builds Anthropic-compatible server web use and result blocks', () 
     query: 'latest news', result_count: 1,
     results: [{ title: 'A', url: 'https://example.com/a', published_date: '2026-08-07', snippet: 'x' }],
   });
-  assert.deepEqual(searchResult, {
-    type: 'web_search_tool_result', tool_use_id: searchUse.id,
-    content: [{ type: 'web_search_result', title: 'A', url: 'https://example.com/a', page_age: '2026-08-07' }],
+  assert.equal(searchResult.type, 'web_search_tool_result');
+  assert.equal(searchResult.tool_use_id, searchUse.id);
+  assert.equal(searchResult.content.length, 1);
+  assert.deepEqual({ ...searchResult.content[0], encrypted_content: '<opaque>' }, {
+    type: 'web_search_result', title: 'A', url: 'https://example.com/a',
+    encrypted_content: '<opaque>', page_age: '2026-08-07',
   });
+  assert.match(searchResult.content[0].encrypted_content, /^vcc_local_[A-Za-z0-9_-]+$/);
 
   const fetchUse = createServerWebToolUse({ id: 'toolu_local_fetch', name: 'WebFetch', input: { url: 'https://example.com/a' } });
   const fetchResult = createServerWebToolResult('WebFetch', fetchUse.id, {
@@ -199,6 +216,24 @@ test('V0.2.20 builds Anthropic-compatible server web use and result blocks', () 
   assert.equal(fetchResult.content.url, 'https://example.com/a');
   assert.equal(fetchResult.content.content.type, 'document');
   assert.equal(fetchResult.content.content.source.data, 'Processed body');
+});
+
+test('V0.2.21 synthetic web fetch result always carries response-side title and retrieved_at metadata', () => {
+  const result = createServerWebToolResult('WebFetch', 'srvtoolu_fetch_meta', {
+    final_url: 'https://example.com/article', result: 'body',
+  });
+  assert.equal(result.content.type, 'web_fetch_result');
+  assert.equal(result.content.content.type, 'document');
+  assert.equal(result.content.content.title, 'example.com');
+  assert.match(result.content.retrieved_at, /^\d{4}-\d{2}-\d{2}T/);
+});
+
+test('V0.2.21 synthetic search results keep strict response metadata even when source age is unknown', () => {
+  const result = createServerWebToolResult('WebSearch', 'srvtoolu_unknown_age', {
+    results: [{ title: 'Untimed', url: 'https://example.com/no-age' }],
+  });
+  assert.equal(result.content[0].page_age, null);
+  assert.match(result.content[0].encrypted_content, /^vcc_local_[A-Za-z0-9_-]+$/);
 });
 
 test('V0.2.20 builds safe server web error blocks', () => {

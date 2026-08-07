@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.21 - 2026-08-07
+
+- Fixed Claude Code-facing Server Tool SSE shape by including `input: {}` in every streamed `server_tool_use` start block before `input_json_delta` events.
+- Added explicit Web UI declaration detection for `WebSearch`, `web_search`, `web_search_YYYYMMDD`, `WebFetch`, `web_fetch`, and `web_fetch_YYYYMMDD`, while continuing to exclude MCP/substring/custom names.
+- Added `server_web_ui_bridge_selected` diagnostics with `native_server_tool` vs `visible_progress` mode and declaration counts.
+- Added strict response metadata for synthetic WebSearch results: nullable `page_age` plus a stable Proxy-local opaque `encrypted_content` identity token.
+- Added guaranteed `title` and `retrieved_at` metadata for synthetic WebFetch result blocks.
+- Preserved V0.2.20 mixed server/client continuation, SearXNG, awesome-web-fetch, vLLM/Ollama WebFetch Processor routing, three-slot Processor concurrency, usage counters, managed-loop stability gates and protocol isolation.
+
 ## 0.2.20 - 2026-08-07
 
 - Added a unified Proxy-owned Web Server Tool Bridge for WebSearch and WebFetch.

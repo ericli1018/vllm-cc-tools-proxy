@@ -19,7 +19,7 @@ import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
-import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer } from '../proxy/native-web-tools.js';
+import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration } from '../proxy/native-web-tools.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -414,6 +414,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       validateMessagesRequest(original);
+      const serverWebUiDeclaration = detectServerWebUiDeclaration(original);
       const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
       let request = normalizedWebTools.request;
       const managedWebPolicyEnforcer = createManagedWebPolicyEnforcer(normalizedWebTools.policies);
@@ -433,6 +434,16 @@ export function createProxyServer(config, dependencies = {}) {
         : null;
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
+      if (hasManagedTools) {
+        log(config, 'info', 'server_web_ui_bridge_selected', {
+          requestId,
+          mode: request.stream === true && serverWebUiDeclaration.eligible ? 'native_server_tool' : 'visible_progress',
+          native_declaration_count: serverWebUiDeclaration.native_count,
+          alias_declaration_count: serverWebUiDeclaration.alias_count,
+          search: serverWebUiDeclaration.search,
+          fetch: serverWebUiDeclaration.fetch,
+        });
+      }
 
       if (messagesPath === '/v1/messages/count_tokens' && !hasMedia) {
         releaseIngress(); releaseIngress = null;
@@ -619,7 +630,9 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal);
-      const serverToolBridge = request.stream === true && progress ? createServerToolStreamBridge(progress) : null;
+      const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.eligible
+        ? createServerToolStreamBridge(progress)
+        : null;
       if (hasManagedTools) {
         const result = await runManagedLoop(request, {
           upstream,
@@ -639,7 +652,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
           onProgress,
           onServerToolEvent: serverToolBridge ? (event) => serverToolBridge.emit(event) : null,
-          materializeServerToolBlocks: request.stream !== true,
+          materializeServerToolBlocks: !serverToolBridge,
           onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),

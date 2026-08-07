@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.20, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.21, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.20', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.21', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -1363,6 +1363,13 @@ test('V0.2.20 response-side native web search is surfaced as server-tool lifecyc
   assert.match(stream, /web_search_tool_result/);
   assert.match(stream, /web_search_requests/);
   assert.doesNotMatch(stream, /Did 0 searches/);
+  const uiBridge = logs.find((entry) => entry.event === 'server_web_ui_bridge_selected');
+  assert.ok(uiBridge);
+  assert.equal(uiBridge.mode, 'native_server_tool');
+  assert.equal(uiBridge.native_declaration_count, 1);
+  assert.equal(uiBridge.alias_declaration_count, 0);
+  assert.equal(uiBridge.search, true);
+  assert.equal(uiBridge.fetch, false);
   const contained = logs.find((entry) => entry.event === 'native_web_response_contained');
   assert.ok(contained);
   assert.equal(contained.server_tool_use_count, 1);

@@ -77,12 +77,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.20', async () => {
+test('package version is V0.2.21', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.20');
-  assert.equal(lock.version, '0.2.20');
-  assert.equal(lock.packages[''].version, '0.2.20');
+  assert.equal(packageJson.version, '0.2.21');
+  assert.equal(lock.version, '0.2.21');
+  assert.equal(lock.packages[''].version, '0.2.21');
 });
 
 
@@ -198,6 +198,17 @@ test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
   assert.match(readme, /v1\/chat\/completions/);
 });
 
+
+test('README documents V0.2.21 native Claude Code web-tool UI bridge', () => {
+  assert.match(readme, /V0\.2\.21 Native Claude Code Web Tool UI Bridge/);
+  assert.match(readme, /\"input\":\{\}/);
+  assert.match(readme, /encrypted_content/);
+  assert.match(readme, /server_web_ui_bridge_selected/);
+  assert.match(readme, /native_server_tool/);
+  assert.match(readme, /visible_progress/);
+  assert.match(readme, /Web Search/);
+  assert.match(readme, /Web Fetch/);
+});
 
 test('README documents V0.2.20 unified WebSearch and WebFetch server-tool bridge', () => {
   assert.match(readme, /V0\.2\.20 unified Web Server Tool Bridge/);
