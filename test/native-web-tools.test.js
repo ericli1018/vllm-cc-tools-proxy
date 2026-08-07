@@ -279,3 +279,37 @@ test('V0.2.20 keeps unresolved server web use intact for mixed-tool continuation
   assert.equal(result.changed, false);
   assert.deepEqual(result.messages, original);
 });
+
+test('V0.2.23.2 forces exclusive native WebSearch child to the single normalized web_search tool', () => {
+  const result = normalizeNativeWebToolsRequest({
+    model: 'm',
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+    tool_choice: { type: 'auto' },
+    messages: [{ role: 'user', content: 'Perform a web search for the query:\n今日新聞 2026年8月8日' }],
+  });
+
+  assert.equal(result.changed, true);
+  assert.deepEqual(result.request.tools.map((tool) => tool.name), ['web_search']);
+  assert.deepEqual(result.request.tool_choice, { type: 'tool', name: 'web_search' });
+  assert.equal(result.forcedNativeSearchChoice, true);
+});
+
+test('V0.2.23.2 does not force tool_choice for native WebFetch or mixed native search requests', () => {
+  const fetch = normalizeNativeWebToolsRequest({
+    tools: [{ type: 'web_fetch_20250910', name: 'web_fetch' }],
+    messages: [],
+  });
+  assert.equal(fetch.forcedNativeSearchChoice, false);
+  assert.equal(fetch.request.tool_choice, undefined);
+
+  const mixed = normalizeNativeWebToolsRequest({
+    tools: [
+      { type: 'web_search_20250305', name: 'web_search' },
+      { name: 'Read', description: 'read', input_schema: { type: 'object' } },
+    ],
+    messages: [],
+  });
+  assert.equal(mixed.forcedNativeSearchChoice, false);
+  assert.deepEqual(mixed.request.tools.map((tool) => tool.name), ['web_search', 'Read']);
+  assert.equal(mixed.request.tool_choice, undefined);
+});

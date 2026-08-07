@@ -383,6 +383,7 @@ export async function runManagedLoop(initialRequest, {
   taskTimeoutMs = DEFAULT_MANAGED_TASK_TIMEOUT_MS,
   modelRoundTimeoutMs = DEFAULT_MODEL_ROUND_TIMEOUT_MS,
   locale = 'zh-TW',
+  releaseForcedManagedToolChoiceAfterUse = false,
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
@@ -671,6 +672,16 @@ export async function runManagedLoop(initialRequest, {
     request.messages.push({ role: 'assistant', content: structuredClone(response.content) });
     request.messages.push({ role: 'user', content: results });
     injectManagedWebResultInstruction(request);
+
+    if (releaseForcedManagedToolChoiceAfterUse
+      && request.tool_choice?.type === 'tool'
+      && isManagedToolName(request.tool_choice?.name)) {
+      request.tool_choice = { type: 'auto' };
+      await onDiagnostic('managed_forced_tool_choice_satisfied', {
+        round: round + 1,
+        tool_name: normalizeManagedToolName(toolUses[0]?.name),
+      });
+    }
 
     if (remainingTaskMs() <= modelRoundTimeoutMs && Array.isArray(request.tools)) {
       const before = request.tools.length;

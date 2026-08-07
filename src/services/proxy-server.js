@@ -678,6 +678,7 @@ export function createProxyServer(config, dependencies = {}) {
           has_domain_policy: Object.values(normalizedWebTools.policies).some((policy) => policy.allowedDomains.length || policy.blockedDomains.length),
           unsupported_field_count: Object.values(normalizedWebTools.policies)
             .reduce((total, policy) => total + policy.unsupportedFields.length, 0),
+          forced_tool_choice: normalizedWebTools.forcedNativeSearchChoice,
         });
       }
       const usagePreflightRequest = request.stream === true
@@ -911,6 +912,7 @@ export function createProxyServer(config, dependencies = {}) {
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
           locale: config.responseLanguage,
+          releaseForcedManagedToolChoiceAfterUse: normalizedWebTools.forcedNativeSearchChoice,
           onProgress,
           onServerToolEvent: serverToolBridge ? (event) => serverToolBridge.emit(event) : null,
           materializeServerToolBlocks: !serverToolBridge,

@@ -174,7 +174,7 @@ function customDefinition(canonical) {
 
 export function normalizeNativeWebToolsRequest(request) {
   if (!request || !Array.isArray(request.tools) || !request.tools.some(isNativeWebToolDefinition)) {
-    return { request, changed: false, nativeToolCount: 0, policies: {} };
+    return { request, changed: false, nativeToolCount: 0, policies: {}, forcedNativeSearchChoice: false };
   }
 
   const customCanonicalNames = new Set(
@@ -201,11 +201,19 @@ export function normalizeNativeWebToolsRequest(request) {
     emittedNative.add(canonical);
   }
 
+  const exclusiveNativeSearch = request.tools.length > 0
+    && request.tools.every((tool) => nativeCanonical(tool) === 'WebSearch');
+
   return {
-    request: { ...request, tools },
+    request: {
+      ...request,
+      tools,
+      ...(exclusiveNativeSearch ? { tool_choice: { type: 'tool', name: 'web_search' } } : {}),
+    },
     changed: true,
     nativeToolCount,
     policies,
+    forcedNativeSearchChoice: exclusiveNativeSearch,
   };
 }
 

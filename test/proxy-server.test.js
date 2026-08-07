@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.23.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.23.2', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -1132,6 +1132,12 @@ test('native web search is normalized for usage preflight and model calls then e
       return;
     }
     modelCalls += 1;
+    if (modelCalls === 1) {
+      assert.deepEqual(payload.tools.map((tool) => tool.name), ['web_search']);
+      assert.deepEqual(payload.tool_choice, { type: 'tool', name: 'web_search' });
+    } else {
+      assert.deepEqual(payload.tool_choice, { type: 'auto' });
+    }
     const body = modelCalls === 1
       ? {
         id: 'search', type: 'message', role: 'assistant', model: 'm',
@@ -1178,6 +1184,7 @@ test('native web search is normalized for usage preflight and model calls then e
   assert.equal(normalizationEvent.native_tool_count, 1);
   assert.equal(normalizationEvent.has_max_uses, true);
   assert.equal(normalizationEvent.has_domain_policy, true);
+  assert.equal(normalizationEvent.forced_tool_choice, true);
   assert.doesNotMatch(JSON.stringify(normalizationEvent), /example\.com/);
 });
 

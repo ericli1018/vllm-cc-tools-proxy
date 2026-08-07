@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.23.2 - 2026-08-08
+
+- Kept the external hotfix label `V0.2.23.2` while using npm-valid package metadata `0.2.23+hotfix.2`.
+- Forced exclusive Claude Code native `web_search_YYYYMMDD` child requests to expose only the normalized `web_search` tool and send `tool_choice={type:tool,name:web_search}` to the Base model.
+- Released the forced managed tool choice to `auto` immediately after the first successful Search tool round so the continuation can summarize evidence instead of repeatedly searching.
+- Added `forced_tool_choice` to native WebSearch normalization diagnostics and `managed_forced_tool_choice_satisfied` when the forced choice has been consumed.
+- Preserved ordinary main-agent WebSearch/WebFetch handoff, native WebFetch behavior, SearXNG execution, and V0.2.23.1 response-language behavior.
+
 ## 0.2.23.1 - 2026-08-08
 
 - Kept the external hotfix label `V0.2.23.1` while using npm-valid package metadata `0.2.23+hotfix.1`.

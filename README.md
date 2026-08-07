@@ -1,6 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23.1 is a focused response-language boundary hotfix on top of V0.2.23; it does not change the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23.2 is a focused native-WebSearch reliability hotfix on top of V0.2.23.1. It preserves the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22 and the response-language behavior from V0.2.23.1.
+
+## V0.2.23.2 native WebSearch forced-choice hotfix
+
+V0.2.23.2 fixes an intermittent Claude Code native WebSearch child failure where the child request declared only `web_search`, but the Base model could still return ordinary text with `stop_reason=end_turn`. Claude Code then displayed `Did 0 searches`, and the main agent could incorrectly infer that network access was unavailable.
+
+For an **exclusive native WebSearch child request** (`web_search_YYYYMMDD` only), normalization now sends the Base model exactly one managed tool and forces that tool for the first model round:
+
+```json
+{
+  "tools": [{ "name": "web_search", "input_schema": "..." }],
+  "tool_choice": { "type": "tool", "name": "web_search" }
+}
+```
+
+After that forced `web_search` call completes and SearXNG returns its tool result, the hidden managed continuation changes `tool_choice` to `{ "type": "auto" }` before the next Base-model round. This lets the model summarize the search evidence instead of being forced to search repeatedly.
+
+The forced-choice rule is intentionally narrow:
+
+- Exclusive native `web_search_YYYYMMDD` child -> single normalized `web_search` + forced tool choice.
+- Native WebFetch child -> unchanged.
+- Mixed native Search plus any other tool -> unchanged; no forced choice is injected.
+- Main-agent ordinary `WebSearch` / `WebFetch` handoff -> unchanged and still owned by Claude Code.
+
+Operational diagnostics add `forced_tool_choice=true` to `native_web_tools_normalized` for this path and emit `managed_forced_tool_choice_satisfied` when the first forced Search call has completed and the continuation is released to `auto`.
+
+The external release label is `0.2.23.2`; npm-valid package metadata is `0.2.23+hotfix.2`.
 
 ## V0.2.23.1 response-language boundary hotfix
 
