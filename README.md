@@ -1,6 +1,58 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.22 preserves Claude Code's own built-in WebSearch/WebFetch tool lifecycle on main-agent turns, while the Proxy owns the backend work only at the child/result boundaries proven by diagnostic traces.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23 adds one response-language policy for the main model, WebFetch Processor, and Proxy progress/status text while preserving the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22.
+
+## V0.2.23 response language localization
+
+V0.2.23 adds one runtime setting for the default language used by user-visible model responses and Proxy-generated status text:
+
+```env
+MODEL_RESPONSE_LANGUAGE=zh-TW
+```
+
+Supported values are:
+
+```text
+zh-TW  Traditional Chinese
+zh-CN  Simplified Chinese
+en-US  English
+ja-JP  Japanese
+ko-KP  Korean (ko-KP locale)
+```
+
+A missing, blank, or unsupported value resolves to `en-US`. No second language-mode ENV is required.
+
+The resolved locale controls three output surfaces:
+
+1. **Main/Base model** — the Proxy appends one short system instruction immediately before the request is sent upstream.
+2. **WebFetch Processor** — the independent processor receives a short locale-specific output instruction.
+3. **Proxy progress/status** — Search, Fetch, queue, media/PDF/image, heartbeat, recovery, handoff, and final-return status text uses the same locale.
+
+The main-model instruction is intentionally short. For example:
+
+```text
+Default to Traditional Chinese (zh-TW) for user-visible responses. Preserve technical literals verbatim.
+```
+
+The Processor instruction is shorter still:
+
+```text
+Write the result in Traditional Chinese (zh-TW).
+```
+
+Technical literals such as code, commands, paths, filenames, identifiers, URLs, hostnames, API/tool names, and tool arguments are preserved verbatim when appropriate. Dynamic literals embedded inside Proxy progress/status messages are likewise not translated.
+
+Because the policy is injected at the Proxy boundary, it does not depend on `CLAUDE.md` being present in every Claude Code child request. `/v1/messages/count_tokens` receives the same main-model policy so token accounting matches the transformed model request. Claude Code WebFetch 200-content processor children receive the Processor-specific instruction instead of being sent through the main Laguna model.
+
+Example locale behavior:
+
+```text
+zh-TW: 目前處理進度： / 正在搜尋：<query>…
+zh-CN: 当前处理进度： / 正在搜索：<query>…
+en-US: Current progress: / Searching: <query>…
+ja-JP: 現在の処理状況： / 検索中：<query>…
+ko-KP: 현재 처리 상태: / 검색 중: <query>…
+```
 
 ## V0.2.22 Claude Code-owned Web lifecycle
 

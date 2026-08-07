@@ -15,6 +15,8 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
+import { injectResponseLanguagePolicy } from '../proxy/response-language-policy.js';
+import { localizeProgressMessage, statusText } from '../i18n/response-language.js';
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
@@ -157,6 +159,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
     });
   }
   await pipeAnthropicUpstreamStream(progress, upstream, {
+    locale: config.responseLanguage,
     onDiagnostic,
     onUsage,
     onFirstEvent: async ({ event, type }) => onLifecycle('base_upstream_first_event', {
@@ -487,6 +490,7 @@ export function createProxyServer(config, dependencies = {}) {
         }, {
           prompt: webFetchProcessorChild.prompt,
           model: original.model || '',
+          language: config.responseLanguage,
           processor: config.webFetchProcessor || {},
           signal: abortController.signal,
           acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
@@ -519,9 +523,10 @@ export function createProxyServer(config, dependencies = {}) {
             heartbeatIntervalMs: config.progressHeartbeatMs,
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
+            locale: config.responseLanguage,
           });
           await progress.open();
-          await emitFinalAnthropicResponse(progress, childResponse);
+          await emitFinalAnthropicResponse(progress, childResponse, { locale: config.responseLanguage });
         } else {
           sendJson(res, 200, childResponse);
         }
@@ -604,6 +609,12 @@ export function createProxyServer(config, dependencies = {}) {
         });
       }
 
+      const languagePolicy = injectResponseLanguagePolicy(original, config.responseLanguage);
+      if (languagePolicy.changed) {
+        original = languagePolicy.request;
+        requestRewritten = true;
+      }
+
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
@@ -628,8 +639,14 @@ export function createProxyServer(config, dependencies = {}) {
         releaseIngress(); releaseIngress = null;
         if (requestRewritten) {
           log(config, 'info', 'route_decision', {
-            requestId, method: req.method, path: url.pathname, decision: 'protocol_sanitize',
-            reason: historyRewritten ? 'malformed_protocol_history' : 'tool_description_protocol_tags',
+            requestId, method: req.method, path: url.pathname,
+            decision: historyRewritten || protocolTools.changed ? 'protocol_sanitize' : 'response_language_policy',
+            reason: historyRewritten
+              ? 'malformed_protocol_history'
+              : protocolTools.changed
+                ? 'tool_description_protocol_tags'
+                : 'model_response_language',
+            response_language: config.responseLanguage || 'en-US',
           });
           if (messagesPath === '/v1/messages/count_tokens') {
             const payload = await callUpstreamJson(original, config, req.headers, abortController.signal, messagesPath);
@@ -719,7 +736,7 @@ export function createProxyServer(config, dependencies = {}) {
           },
         });
         request.messages = preparedMedia.messages;
-        mediaProgress = createMediaProgressTracker(request.messages);
+        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
         for (const entry of preparedMedia.mediaEntries) {
           const cached = await mediaCache.get(entry.key);
           if (cached?.block) {
@@ -786,6 +803,7 @@ export function createProxyServer(config, dependencies = {}) {
           heartbeatIntervalMs: config.progressHeartbeatMs,
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
+          locale: config.responseLanguage,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {
               requestId,
@@ -822,12 +840,13 @@ export function createProxyServer(config, dependencies = {}) {
         await progress.open();
         const semanticHeartbeatStartedAt = Date.now();
         progress.startSemanticHeartbeat(() => mediaProgress?.renderHeartbeat()
-          || `主模型仍在處理本輪請求，已等待 ${Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000)} 秒…`);
+          || statusText(config.responseLanguage, 'modelWaiting', { seconds: Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000) }));
       }
 
       const onProgress = async (message, details = {}) => {
         const { force = false, ...stateDetails } = details;
-        const rendered = mediaProgress?.render(message, stateDetails) || message;
+        const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
+        const rendered = mediaProgress?.render(localized, stateDetails) || localized;
         log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
         await progress?.update(rendered, { force, details: stateDetails });
       };
@@ -844,11 +863,11 @@ export function createProxyServer(config, dependencies = {}) {
         signal: abortController.signal,
         onPosition: (position) => {
           log(config, 'info', 'managed_job_enqueued', { requestId, position, queued: admission.health().managed.queued });
-          progress?.update(`任務正在排隊，目前前方有 ${position} 個任務…`, { force: true, details: { phase: 'queue_wait' } }).catch(() => {});
+          progress?.update(statusText(config.responseLanguage, 'queueWait', { position }), { force: true, details: { phase: 'queue_wait' } }).catch(() => {});
         },
       });
       if (beforeAcquire.active >= beforeAcquire.limit) {
-        await progress?.update('任務已開始處理…', { force: true, details: { phase: 'queue_admitted' } });
+        await progress?.update(statusText(config.responseLanguage, 'queueAdmitted'), { force: true, details: { phase: 'queue_admitted' } });
       }
       log(config, 'info', 'managed_job_admitted', { requestId, queue_wait_ms: Date.now() - queuedAt });
 
@@ -858,7 +877,7 @@ export function createProxyServer(config, dependencies = {}) {
         request = injectEvidenceContract(request);
         await preparedMedia.cleanup(); preparedMedia = null;
         const readyMessage = mediaProgress?.renderMediaReady()
-          || '文件與圖片內容已就緒；正在交給主模型分析…';
+          || statusText(config.responseLanguage, 'mediaReady');
         log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
       }
@@ -891,6 +910,7 @@ export function createProxyServer(config, dependencies = {}) {
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
+          locale: config.responseLanguage,
           onProgress,
           onServerToolEvent: serverToolBridge ? (event) => serverToolBridge.emit(event) : null,
           materializeServerToolBlocks: !serverToolBridge,
@@ -940,7 +960,7 @@ export function createProxyServer(config, dependencies = {}) {
               - totalAnthropicInputTokens(initialStreamUsage),
             output_tokens: observedUsage.output_tokens || 0,
           });
-          await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex });
+          await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex, locale: config.responseLanguage });
         } else sendJson(res, 200, result);
       } else {
         releaseManaged(); releaseManaged = null;

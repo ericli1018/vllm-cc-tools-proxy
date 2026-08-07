@@ -1,3 +1,4 @@
+import { statusText } from '../i18n/response-language.js';
 import { HttpError } from '../lib/http.js';
 import {
   buildManagedContinuationRecoveryRequest,
@@ -85,20 +86,20 @@ async function runWithBoundedTime(operation, {
   }
 }
 
-function progressMessage(name, input, phase) {
+function progressMessage(name, input, phase, locale = 'zh-TW') {
   const normalized = normalizeManagedToolName(name);
   if (normalized === 'WebSearch') {
     const query = String(input?.query ?? input?.q ?? '').slice(0, 160);
-    return phase === 'start' ? `正在搜尋：${query}…` : `搜尋完成：${query}。`;
+    return phase === 'start' ? statusText(locale, 'searchStart', { query }) : statusText(locale, 'searchDone', { query });
   }
   if (normalized === 'WebFetch') {
-    let host = '網頁';
+    let host = '';
     try { host = new URL(input?.url).host; } catch {}
-    if (phase === 'start') return `正在讀取並整理 ${host}…`;
-    if (phase === 'error') return `${host} 讀取失敗；正在交由主模型改用其他來源。`;
-    return `${host} 內容已就緒。`;
+    if (phase === 'start') return statusText(locale, 'fetchStart', { host });
+    if (phase === 'error') return statusText(locale, 'fetchError', { host });
+    return statusText(locale, 'fetchDone', { host });
   }
-  return '正在執行工具…';
+  return statusText(locale, 'genericProcessing');
 }
 
 function safeToolError(error) {
@@ -202,7 +203,7 @@ async function emitDetailedFinalDiagnostics(request, response, inspection, {
 
 async function recoverInvalidResponse(request, response, {
   upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
-  writeProtocolDiagnostics,
+  writeProtocolDiagnostics, locale = 'zh-TW',
 }) {
   const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
   if (inspection.valid) return { response, recovered: false, recovery: null };
@@ -241,8 +242,8 @@ async function recoverInvalidResponse(request, response, {
   });
   await onProgress(
     recovery.route === 'final_channel'
-      ? '主模型答案通道異常；正在進行一次短格式修正…'
-      : '主模型未產生有效下一步；正在進行一次受控續接…',
+      ? statusText(locale, 'finalChannelRecovery')
+      : statusText(locale, 'continuationRecovery'),
     {
       phase: recovery.route === 'final_channel'
         ? 'managed_final_channel_recovery_start'
@@ -381,6 +382,7 @@ export async function runManagedLoop(initialRequest, {
   signal,
   taskTimeoutMs = DEFAULT_MANAGED_TASK_TIMEOUT_MS,
   modelRoundTimeoutMs = DEFAULT_MODEL_ROUND_TIMEOUT_MS,
+  locale = 'zh-TW',
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
@@ -441,7 +443,7 @@ export async function runManagedLoop(initialRequest, {
         name: canonical === 'WebSearch' ? 'web_search' : 'web_fetch',
         input: pendingBlock.input && typeof pendingBlock.input === 'object' ? structuredClone(pendingBlock.input) : {},
       };
-      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, 'start'), {
+      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, 'start', locale), {
         phase: 'managed_server_tool_resume_start', name: canonical, round: 0, force: true,
       });
       let output = null;
@@ -470,7 +472,7 @@ export async function runManagedLoop(initialRequest, {
           ? JSON.stringify(neutralizeProtocolValue(neutralOutput))
           : renderManagedToolResult(internalToolUse.name, neutralOutput),
       });
-      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, error ? 'error' : 'done'), {
+      await onProgress(progressMessage(internalToolUse.name, internalToolUse.input, error ? 'error' : 'done', locale), {
         phase: error ? 'managed_server_tool_resume_error' : 'managed_server_tool_resume_done',
         name: canonical, round: 0,
       });
@@ -505,7 +507,7 @@ export async function runManagedLoop(initialRequest, {
     activeRound = round + 1;
     if (round > 0 || showInitialModelProgress) {
       await onProgress(
-        round === 0 ? '正在請主模型規劃下一步…' : '主模型正在整理工具結果…',
+        round === 0 ? statusText(locale, 'modelPlanning') : statusText(locale, 'modelToolResults'),
         { phase: 'managed_model_round_start', round: round + 1 },
       );
     }
@@ -513,7 +515,7 @@ export async function runManagedLoop(initialRequest, {
     let recovery = null;
     const recovered = await recoverInvalidResponse(request, response, {
       upstream: containedUpstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
-      writeProtocolDiagnostics,
+      writeProtocolDiagnostics, locale,
     });
     response = recovered.response;
     recovery = recovered.recovery;
@@ -609,7 +611,7 @@ export async function runManagedLoop(initialRequest, {
     }
 
     const results = await Promise.all(toolUses.map(async (toolUse, toolIndex) => {
-      await onProgress(progressMessage(toolUse.name, toolUse.input, 'start'), {
+      await onProgress(progressMessage(toolUse.name, toolUse.input, 'start', locale), {
         phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1, force: true,
       });
       try {
@@ -636,7 +638,7 @@ export async function runManagedLoop(initialRequest, {
           await publishServerBlock('result', serverResult);
           serverUsageCounts[canonical] += 1;
         }
-        await onProgress(progressMessage(toolUse.name, toolUse.input, 'done'), {
+        await onProgress(progressMessage(toolUse.name, toolUse.input, 'done', locale), {
           phase: 'managed_tool_done', name: normalizeManagedToolName(toolUse.name), round: round + 1,
         });
         return {
@@ -653,7 +655,7 @@ export async function runManagedLoop(initialRequest, {
           const serverResult = createServerWebToolResult(canonical, serverCall.id, null, error);
           await publishServerBlock('result', serverResult);
         }
-        await onProgress(progressMessage(toolUse.name, toolUse.input, 'error'), {
+        await onProgress(progressMessage(toolUse.name, toolUse.input, 'error', locale), {
           phase: 'managed_tool_error', name: canonical, round: round + 1,
           code: error.code,
         });
@@ -684,7 +686,7 @@ export async function runManagedLoop(initialRequest, {
           reserve_ms: modelRoundTimeoutMs,
           managed_tools_removed: removed,
         });
-        await onProgress('研究工具預算已停止擴張；保留時間給主模型完成下一步…', {
+        await onProgress(statusText(locale, 'finalRoundReserved'), {
           phase: 'managed_final_round_reserved', round: round + 1,
         });
       }

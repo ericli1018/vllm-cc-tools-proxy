@@ -1,4 +1,5 @@
 import { inventoryProtocolTags, neutralizeControlTags, neutralizeReservedResultMarkers } from '../proxy/protocol-sanitizer.js';
+import { languageProfile } from '../i18n/response-language.js';
 
 const PROCESSOR_TIMEOUT_MS = 180_000;
 const PROCESSOR_SOURCE_MAX_CHARS = 30_000;
@@ -145,6 +146,7 @@ function processorErrorCode(error) {
 export async function processWebFetchContent(source, {
   prompt = '',
   model = '',
+  language = 'en-US',
   processor = {},
   signal,
   onEvent = () => {},
@@ -179,7 +181,7 @@ export async function processWebFetchContent(source, {
     temperature: 0.1,
     max_tokens: 2500,
     messages: [
-      { role: 'system', content: PROCESSOR_SYSTEM_PROMPT },
+      { role: 'system', content: `${PROCESSOR_SYSTEM_PROMPT}\n${languageProfile(language).processorInstruction}` },
       { role: 'user', content: processorUserPrompt(source, prompt, clean.text) },
     ],
   };

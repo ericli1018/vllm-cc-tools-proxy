@@ -1,3 +1,4 @@
+import { resolveResponseLanguage } from './i18n/response-language.js';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -161,6 +162,7 @@ export function loadConfig(env = process.env) {
     port: intValue(env.PORT || env.PROXY_PORT, 8080, 'PORT', { min: 1, max: 65535 }),
     host: env.HOST || '0.0.0.0',
     resourceProfile: profileName,
+    responseLanguage: resolveResponseLanguage(env.MODEL_RESPONSE_LANGUAGE),
     limits,
     concurrency,
     cache,

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.23 - 2026-08-08
+
+- Added `MODEL_RESPONSE_LANGUAGE` as the single response-language setting for main-model user-visible answers, WebFetch Processor output, and Proxy progress/status text.
+- Added exact locale profiles for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`; missing, blank, case-variant, or unsupported values resolve deterministically to `en-US`.
+- Injected one short locale-specific system instruction at the Base-model boundary while preserving technical literals verbatim.
+- Added locale-specific WebFetch Processor output instructions without changing WebFetch 200-content child routing or redirect/error fallback behavior.
+- Localized Proxy-generated Search, Fetch, queue, media/PDF/image, heartbeat, recovery, handoff, streaming, and final-return progress/status text from the same registry.
+- Extended progress-history sanitation to recognize every supported localized progress header while retaining the historical Traditional Chinese headers for compatibility.
+- Preserved V0.2.22 Claude Code-owned WebSearch/WebFetch lifecycle and diagnostic tracing behavior.
+
 ## 0.2.22 - 2026-08-08
 
 - Replaced the V0.2.20/V0.2.21 main-agent synthetic Server Tool handoff with the Claude Code-owned built-in WebSearch/WebFetch lifecycle proven by diagnostic traces.

@@ -28,7 +28,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -63,6 +63,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /WEB_FETCH_PROCESSOR_THINK:\s*\$\{WEB_FETCH_PROCESSOR_THINK:-false\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_CONCURRENCY:\s*\$\{WEB_FETCH_PROCESSOR_CONCURRENCY:-3\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_TIMEOUT_MS:\s*\$\{WEB_FETCH_PROCESSOR_TIMEOUT_MS:-300000\}/);
+  assert.match(compose, /MODEL_RESPONSE_LANGUAGE:\s*\$\{MODEL_RESPONSE_LANGUAGE:-en-US\}/);
   assert.match(compose, /LOG_PROTOCOL_SNIPPETS:\s*\$\{LOG_PROTOCOL_SNIPPETS:-false\}/);
   assert.match(compose, /DIAGNOSTIC_WEB_TOOL_PASSTHROUGH:\s*\$\{DIAGNOSTIC_WEB_TOOL_PASSTHROUGH:-false\}/);
   assert.match(compose, /DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT:\s*\$\{DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT:-1\}/);
@@ -79,6 +80,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_PROVIDER=vllm$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$/m);
+  assert.match(envExample, /^MODEL_RESPONSE_LANGUAGE=en-US$/m);
   assert.match(envExample, /^DIAGNOSTIC_WEB_TOOL_PASSTHROUGH=false$/m);
   assert.match(envExample, /^DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT=1$/m);
   assert.match(envExample, /^DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT=1$/m);
@@ -87,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.22 release', async () => {
+test('package version is V0.2.23 release', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.22');
-  assert.equal(lock.version, '0.2.22');
-  assert.equal(lock.packages[''].version, '0.2.22');
+  assert.equal(packageJson.version, '0.2.23');
+  assert.equal(lock.version, '0.2.23');
+  assert.equal(lock.packages[''].version, '0.2.23');
 });
 
 
@@ -208,6 +210,18 @@ test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
   assert.match(readme, /v1\/chat\/completions/);
 });
 
+
+
+test('README documents V0.2.23 response language localization and English fallback', () => {
+  assert.match(readme, /V0\.2\.23 response language localization/);
+  assert.match(readme, /MODEL_RESPONSE_LANGUAGE=zh-TW/);
+  for (const locale of ['zh-TW', 'zh-CN', 'en-US', 'ja-JP', 'ko-KP']) assert.match(readme, new RegExp(locale));
+  assert.match(readme, /missing, blank, or unsupported/i);
+  assert.match(readme, /en-US/);
+  assert.match(readme, /Proxy progress\/status/i);
+  assert.match(readme, /WebFetch Processor/i);
+  assert.match(readme, /technical literals/i);
+});
 
 test('README documents V0.2.22 Claude Code-owned Web lifecycle', () => {
   assert.match(readme, /V0\.2\.22 Claude Code-owned Web lifecycle/);

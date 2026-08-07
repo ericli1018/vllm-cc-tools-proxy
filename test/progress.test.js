@@ -291,3 +291,18 @@ test('ProgressStream message_start preserves preflight input and cache usage', a
   assert.match(stream, /"cache_creation_input_tokens":1200/);
   assert.match(stream, /"cache_read_input_tokens":3400/);
 });
+
+test('V0.2.23 ProgressStream emits localized headers and strips every supported locale header', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { locale: 'ja-JP', visibleAfterMs: 0, pingIntervalMs: 60_000 });
+  await progress.open();
+  await progress.update('処理中…', { force: true });
+  await progress.stop();
+  assert.match(response.chunks.join(''), /現在の処理状況：/);
+
+  for (const header of ['目前處理進度：', '当前处理进度：', 'Current progress:', '現在の処理状況：', '현재 처리 상태:']) {
+    const messages = [{ role: 'assistant', content: [{ type: 'text', text: `${header}\nstatus` }, { type: 'text', text: 'answer' }] }];
+    assert.equal(hasProgressHistory(messages), true);
+    assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: 'answer' }]);
+  }
+});

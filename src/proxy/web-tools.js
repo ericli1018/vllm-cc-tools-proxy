@@ -224,6 +224,7 @@ async function webFetch(input, config, signal, onEvent = () => {}, { model = '',
   return processWebFetchContent(normalized, {
     prompt: String(input?.prompt || ''),
     model,
+    language: config.responseLanguage,
     processor: config.webFetchProcessor,
     signal,
     onEvent,

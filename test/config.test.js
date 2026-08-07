@@ -322,3 +322,13 @@ test('diagnostic web tool tracing is explicit, persistent, and separately bounde
     traceDir: '/data/trace',
   });
 });
+
+test('V0.2.23 response language defaults to en-US and canonicalizes supported locales', () => {
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' }).responseLanguage, 'en-US');
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MODEL_RESPONSE_LANGUAGE: '' }).responseLanguage, 'en-US');
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MODEL_RESPONSE_LANGUAGE: 'unknown' }).responseLanguage, 'en-US');
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MODEL_RESPONSE_LANGUAGE: 'zh-tw' }).responseLanguage, 'zh-TW');
+  for (const locale of ['zh-TW', 'zh-CN', 'en-US', 'ja-JP', 'ko-KP']) {
+    assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MODEL_RESPONSE_LANGUAGE: locale }).responseLanguage, locale);
+  }
+});

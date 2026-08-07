@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { languageProfile, mediaText, statusText } from '../i18n/response-language.js';
 
 function safeBasename(value, fallback = '') {
   if (typeof value !== 'string' || !value.trim()) return fallback;
@@ -36,7 +37,7 @@ function readToolFilenameMap(messages) {
   return result;
 }
 
-function collectDescriptors(messages) {
+function collectDescriptors(messages, locale = 'zh-TW') {
   const toolFilenames = readToolFilenameMap(messages);
   const descriptors = [];
   let documentFallback = 0;
@@ -54,7 +55,7 @@ function collectDescriptors(messages) {
       if (!resolved) {
         resolved = kind === 'document'
           ? `PDF #${++documentFallback}`
-          : `圖片 #${++imageFallback}`;
+          : mediaText(locale, 'imageFallback', { index: ++imageFallback });
       }
       descriptors.push({
         path: [...currentPath],
@@ -103,9 +104,11 @@ function percent(completed, total) {
 }
 
 export class MediaProgressTracker {
-  constructor(messages, { now = () => Date.now() } = {}) {
+  constructor(messages, { now = () => Date.now(), locale = 'zh-TW' } = {}) {
     this.now = now;
-    this.descriptors = collectDescriptors(messages);
+    this.locale = locale;
+    this.profile = languageProfile(locale);
+    this.descriptors = collectDescriptors(messages, locale);
     this.byPath = new Map(this.descriptors.map((entry) => [entry.pathKey, entry]));
     this.current = null;
     this.lastStatusAt = this.now();
@@ -118,8 +121,8 @@ export class MediaProgressTracker {
 
   #fileLabel(entry) {
     return entry.fileCount > 1
-      ? `檔案 ${entry.fileIndex}/${entry.fileCount}：${entry.filename}`
-      : `檔案：${entry.filename}`;
+      ? mediaText(this.locale, 'fileMultiple', { index: entry.fileIndex, count: entry.fileCount, filename: entry.filename })
+      : mediaText(this.locale, 'fileSingle', { filename: entry.filename });
   }
 
   render(message, details = {}) {
@@ -129,8 +132,8 @@ export class MediaProgressTracker {
     this.current = entry;
     const parts = [this.#fileLabel(entry)];
 
-    if (entry.kind === 'document' && entry.mediaCount > 1) parts.push(`區段 ${entry.mediaIndex}/${entry.mediaCount}`);
-    if (entry.kind === 'image') parts.push(`圖片 ${entry.mediaIndex}/${entry.mediaCount}`);
+    if (entry.kind === 'document' && entry.mediaCount > 1) parts.push(mediaText(this.locale, 'segment', { index: entry.mediaIndex, count: entry.mediaCount }));
+    if (entry.kind === 'image') parts.push(mediaText(this.locale, 'imagePart', { index: entry.mediaIndex, count: entry.mediaCount }));
 
     const completed = Number.isFinite(details.completed) ? details.completed
       : Number.isFinite(details.processed_pdf_pages) ? details.processed_pdf_pages : null;
@@ -139,14 +142,14 @@ export class MediaProgressTracker {
     if (entry.kind === 'document' && total !== null) {
       const done = completed === null ? 0 : completed;
       const ratio = percent(done, total);
-      parts.push(`頁面 ${done}/${total}${ratio === null ? '' : `（${ratio}%）`}`);
+      parts.push(mediaText(this.locale, 'page', { done, total, percent: ratio }));
     }
 
     if (Number.isFinite(details.batch) && Number.isFinite(details.batches)) {
-      parts.push(`批次 ${details.batch}/${details.batches}`);
+      parts.push(mediaText(this.locale, 'batch', { index: details.batch, count: details.batches }));
     }
-    parts.push(`狀態：${message}`);
-    return parts.join('｜');
+    parts.push(mediaText(this.locale, 'status', { message }));
+    return parts.join(this.profile.media.separator);
   }
 
   renderMediaReady() {
@@ -156,23 +159,23 @@ export class MediaProgressTracker {
     if (uniqueGroups.size === 1) {
       const entry = [...uniqueGroups.values()][0];
       this.current = entry;
-      return `${this.#fileLabel(entry)}｜處理進度 ${this.descriptors.length}/${this.descriptors.length}（100%）｜狀態：文件與圖片內容已就緒；正在交給主模型分析…`;
+      return [this.#fileLabel(entry), mediaText(this.locale, 'progress', { done: this.descriptors.length, total: this.descriptors.length }), mediaText(this.locale, 'status', { message: statusText(this.locale, 'mediaReady') })].join(this.profile.media.separator);
     }
     if (uniqueGroups.size > 1) {
-      return `檔案處理進度：${uniqueGroups.size}/${uniqueGroups.size}（100%）｜狀態：文件與圖片內容已就緒；正在交給主模型分析…`;
+      return [mediaText(this.locale, 'filesProgress', { done: uniqueGroups.size, total: uniqueGroups.size }), mediaText(this.locale, 'status', { message: statusText(this.locale, 'mediaReady') })].join(this.profile.media.separator);
     }
-    return '文件與圖片內容已就緒；正在交給主模型分析…';
+    return statusText(this.locale, 'mediaReady');
   }
 
   renderHeartbeat() {
     const reference = this.mediaReadyAt ?? this.lastStatusAt;
     const seconds = Math.max(0, Math.floor((this.now() - reference) / 1000));
     if (this.mediaReadyAt !== null) {
-      const prefix = this.current ? this.#fileLabel(this.current) : '目前任務';
-      return `${prefix}｜狀態：主模型仍在處理本輪請求，已等待 ${seconds} 秒…`;
+      const prefix = this.current ? this.#fileLabel(this.current) : mediaText(this.locale, 'currentTask');
+      return [prefix, mediaText(this.locale, 'status', { message: statusText(this.locale, 'modelWaiting', { seconds }) })].join(this.profile.media.separator);
     }
-    const prefix = this.current ? this.#fileLabel(this.current) : '目前任務';
-    return `${prefix}｜狀態：目前處理步驟仍在進行，已等待 ${seconds} 秒…`;
+    const prefix = this.current ? this.#fileLabel(this.current) : mediaText(this.locale, 'currentTask');
+    return [prefix, mediaText(this.locale, 'status', { message: statusText(this.locale, 'currentStepWaiting', { seconds }) })].join(this.profile.media.separator);
   }
 }
 

@@ -283,3 +283,10 @@ test('V0.2.20 live server-tool bridge closes progress once and advances final co
   assert.match(stream, /"index":2/);
   assert.match(stream, /"index":3/);
 });
+
+test('V0.2.23 Anthropic progress descriptions use the configured locale', () => {
+  assert.equal(describeFinalAnthropicProgress({ content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: {} }] }, { locale: 'en-US' }).message,
+    'The main model produced the next Write action; handing control back to Claude Code…');
+  assert.equal(describeFinalAnthropicProgress({ content: [{ type: 'text', text: 'ok' }] }, { locale: 'ja-JP' }).message,
+    'メインモデルの応答が完了しました。結果を返しています…');
+});

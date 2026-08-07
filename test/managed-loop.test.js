@@ -961,3 +961,21 @@ test('diagnostic passthrough returns ordinary WebSearch tool_use unchanged befor
   assert.equal(result.content[0].id, 'web-search-native-ui-1');
   assert.ok(traced.some((entry) => entry.event === 'diagnostic_web_tool_passthrough'));
 });
+
+test('V0.2.23 managed WebSearch progress follows the configured locale', async () => {
+  let calls = 0;
+  const progress = [];
+  await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'go' }] }, {
+    locale: 'en-US',
+    upstream: async () => {
+      calls += 1;
+      return calls === 1
+        ? response([{ type: 'tool_use', id: 'tool-1', name: 'WebSearch', input: { query: 'libuv TLS' } }], 'tool_use')
+        : response([{ type: 'text', text: 'done' }]);
+    },
+    executeTool: async () => ({ results: [{ title: 'x' }] }),
+    onProgress: (message) => progress.push(message),
+  });
+  assert.match(progress.join('\n'), /Searching: libuv TLS…/);
+  assert.match(progress.join('\n'), /Search completed: libuv TLS\./);
+});

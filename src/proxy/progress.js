@@ -1,13 +1,14 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
+import { allProgressBlockHeaders, progressBlockHeader } from '../i18n/response-language.js';
 
 export const PROGRESS_BLOCK_HEADER = '目前處理進度：';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
   'VLLM-CC-TOOLS-PROXY 進度：',
 ]);
 const ALL_PROGRESS_BLOCK_HEADERS = Object.freeze([
-  PROGRESS_BLOCK_HEADER,
+  ...allProgressBlockHeaders(),
   ...LEGACY_PROGRESS_BLOCK_HEADERS,
 ]);
 
@@ -84,7 +85,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {},
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW',
   } = {}) {
     this.res = res;
     this.model = model;
@@ -95,6 +96,7 @@ export class ProgressStream {
     this.onWrite = onWrite;
     this.initialUsage = normalizeAnthropicUsage(initialUsage);
     this.onStateChange = onStateChange;
+    this.progressBlockHeader = progressBlockHeader(locale);
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -224,7 +226,7 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${PROGRESS_BLOCK_HEADER}\n${entry.message}` },
+          delta: { type: 'text_delta', text: `${this.progressBlockHeader}\n${entry.message}` },
         }), metadata);
       } else {
         await this.#write(event('content_block_delta', {

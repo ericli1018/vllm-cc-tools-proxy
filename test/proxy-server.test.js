@@ -18,7 +18,7 @@ function config(overrides = {}) {
     searxngUrl: '', webFetchUrl: '', webFetchApiKey: '', maxToolRounds: 6,
     progressVisibleAfterMs: 0, progressPingIntervalMs: 10000, progressHeartbeatMs: 15000,
     concurrency: { profile: 'default', managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 },
-    logLevel: 'error', gitRevision: 'test', usagePreflightEnabled: false, ...overrides,
+    logLevel: 'error', gitRevision: 'test', usagePreflightEnabled: false, responseLanguage: 'zh-TW', ...overrides,
   };
 }
 
@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.22', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.23', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -72,20 +72,20 @@ test('unknown endpoints bypass transparently to base vLLM', async (t) => {
   assert.deepEqual(await response.json(), { data: ['m'] });
 });
 
-test('plain non-stream Messages request bypasses with original raw JSON bytes', async (t) => {
+test('V0.2.23 plain non-stream Messages request applies the default English response-language policy', async (t) => {
   const original = Buffer.from('{"model":"m", "stream":false, "messages":[{"role":"user","content":"hi"}]}\n');
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
-    observed = await read(req);
-    res.writeHead(201, { 'content-type': 'application/json', 'x-vllm': 'raw' });
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(201, { 'content-type': 'application/json', 'x-vllm': 'transformed' });
     res.end(JSON.stringify({ ok: true }));
   });
-  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url }));
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, responseLanguage: 'en-US' }));
   const proxyUrl = await listen(proxy); t.after(() => upstream.server.close()); t.after(() => proxy.close());
   const response = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: original });
-  assert.equal(response.status, 201);
-  assert.equal(response.headers.get('x-vllm'), 'raw');
-  assert.deepEqual(observed, original);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-vllm'), null);
+  assert.match(observed.system, /Default to English \(en-US\) for user-visible responses/);
 });
 
 test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', async (t) => {
@@ -1098,7 +1098,7 @@ test('explicit count_tokens normalizes native web search and web fetch definitio
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { input_tokens: 321 });
   assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
-  assert.equal(observed.system, undefined);
+  assert.match(observed.system, /Default to Traditional Chinese \(zh-TW\) for user-visible responses/);
   assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
   for (const tool of observed.tools) {
     assert.ok(tool.input_schema);
@@ -1762,6 +1762,7 @@ test('V0.2.22 routes Claude Code WebFetch 200-content child directly to the conf
     processorCalls += 1;
     const payload = JSON.parse((await read(req)).toString());
     assert.equal(payload.model, 'processor-model');
+    assert.match(payload.messages[0].content, /Write the result in Japanese \(ja-JP\)\./);
     assert.match(payload.messages[1].content, /PAGE BODY WITH HTTP CODES/);
     assert.match(payload.messages[1].content, /Summarize HTTP codes/);
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -1774,6 +1775,7 @@ test('V0.2.22 routes Claude Code WebFetch 200-content child directly to the conf
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: vllm.url,
+    responseLanguage: 'ja-JP',
     webFetchProcessor: {
       enabled: true, provider: 'ollama', url: `${processor.url}/v1/chat/completions`, model: 'processor-model', apiKey: '', think: false, concurrency: 3, timeoutMs: 30000,
     },
@@ -1807,8 +1809,10 @@ test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify([{ page_content: 'FINAL README BODY', metadata: { status_code: 200, final_url: 'https://raw.githubusercontent.com/example/readme', title: 'README' } }]));
   });
-  const processor = await startJsonServer(async (_req, res) => {
+  const processor = await startJsonServer(async (req, res) => {
     processorCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    assert.match(payload.messages[0].content, /Write the result in Simplified Chinese \(zh-CN\)\./);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: 'ENRICHED README SUMMARY' } }] }));
   });
@@ -1821,7 +1825,7 @@ test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus
     }));
   });
   const proxy = createProxyServer(config({
-    vllmBaseUrl: vllm.url, webFetchUrl: backend.url,
+    vllmBaseUrl: vllm.url, webFetchUrl: backend.url, responseLanguage: 'zh-CN',
     webFetchProcessor: {
       enabled: true, provider: 'ollama', url: `${processor.url}/v1/chat/completions`, model: 'processor-model', apiKey: '', think: false, concurrency: 3, timeoutMs: 30000,
     },
@@ -1849,4 +1853,22 @@ test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus
   assert.doesNotMatch(baseResult, /^REDIRECT DETECTED:/);
   assert.equal(fetchCalls, 1);
   assert.equal(processorCalls, 1);
+});
+
+test('V0.2.23 plain Messages request injects the configured short response-language system policy', async (t) => {
+  let observed;
+  const upstream = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, responseLanguage: 'zh-TW' }));
+  const proxyUrl = await listen(proxy); t.after(() => upstream.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, system: 'Claude Code system', messages: [{ role: 'user', content: 'hi' }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(observed.system, /Claude Code system/);
+  assert.match(observed.system, /Default to Traditional Chinese \(zh-TW\) for user-visible responses\. Preserve technical literals verbatim\./);
 });

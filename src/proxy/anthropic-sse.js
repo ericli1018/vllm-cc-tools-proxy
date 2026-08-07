@@ -1,6 +1,7 @@
 import { formatSseEvent } from './progress.js';
 import { findControlTags } from './protocol-sanitizer.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
+import { statusText } from '../i18n/response-language.js';
 
 function safeToolName(value) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
@@ -10,7 +11,7 @@ function responseContent(response) {
   return Array.isArray(response?.content) ? response.content : [];
 }
 
-export function describeFinalAnthropicProgress(response) {
+export function describeFinalAnthropicProgress(response, { locale = 'zh-TW' } = {}) {
   const blocks = responseContent(response);
   const toolNames = blocks
     .filter((block) => block?.type === 'tool_use')
@@ -25,8 +26,8 @@ export function describeFinalAnthropicProgress(response) {
   if (toolNames.length > 0) {
     return {
       message: toolNames.length === 1
-        ? `主模型已產生下一步 ${toolNames[0]}；正在交還 Claude Code 執行…`
-        : '主模型已產生下一步工具；正在交還 Claude Code 執行…',
+        ? statusText(locale, 'handoffSingle', { tool: toolNames[0] })
+        : statusText(locale, 'handoffMultiple'),
       phase: 'handoff_to_claude_code',
       details: { ...common, response_disposition: 'tool_handoff' },
     };
@@ -36,20 +37,20 @@ export function describeFinalAnthropicProgress(response) {
     && typeof block.text === 'string' && block.text.trim());
   if (hasVisibleText) {
     return {
-      message: '主模型已完成本輪回答；正在回傳結果…',
+      message: statusText(locale, 'finalVisible'),
       phase: 'returning_visible_response',
       details: { ...common, response_disposition: 'visible_response' },
     };
   }
 
   return {
-    message: '主模型已完成本輪輸出；正在回傳結果…',
+    message: statusText(locale, 'finalOutput'),
     phase: 'returning_model_output',
     details: { ...common, response_disposition: 'model_output' },
   };
 }
 
-function describeStreamingAnthropicProgress(payload) {
+function describeStreamingAnthropicProgress(payload, { locale = 'zh-TW' } = {}) {
   const block = payload?.content_block;
   const type = String(block?.type || '');
   const toolName = type === 'tool_use' ? safeToolName(block?.name) : '';
@@ -61,27 +62,27 @@ function describeStreamingAnthropicProgress(payload) {
 
   if (type === 'tool_use') {
     return {
-      message: '主模型已開始回傳下一步工具…',
+      message: statusText(locale, 'streamingTool'),
       phase: 'streaming_tool_action',
       details: { ...common, response_disposition: 'tool_handoff' },
     };
   }
   if (type === 'text') {
     return {
-      message: '主模型已開始回傳本輪回答…',
+      message: statusText(locale, 'streamingVisible'),
       phase: 'streaming_visible_response',
       details: { ...common, response_disposition: 'visible_response' },
     };
   }
   if (type === 'thinking') {
     return {
-      message: '主模型已開始回傳思考內容…',
+      message: statusText(locale, 'streamingThinking'),
       phase: 'streaming_thinking',
       details: { ...common, response_disposition: 'thinking' },
     };
   }
   return {
-    message: '主模型已開始回傳本輪輸出…',
+    message: statusText(locale, 'streamingOutput'),
     phase: 'streaming_model_output',
     details: { ...common, response_disposition: 'model_output' },
   };
@@ -170,8 +171,8 @@ export function createServerToolStreamBridge(progress) {
   };
 }
 
-export async function emitFinalAnthropicResponse(progress, response, { startIndex } = {}) {
-  const finalProgress = describeFinalAnthropicProgress(response);
+export async function emitFinalAnthropicResponse(progress, response, { startIndex, locale = 'zh-TW' } = {}) {
+  const finalProgress = describeFinalAnthropicProgress(response, { locale });
   await progress.closeProgress(finalProgress.message, {
     phase: finalProgress.phase,
     details: finalProgress.details,
@@ -247,7 +248,7 @@ function shiftEventIndex(payload, offset) {
 }
 
 export async function pipeAnthropicUpstreamStream(progress, upstream, {
-  onDiagnostic = () => {}, onFirstEvent = () => {}, onComplete = () => {}, onUsage = () => {},
+  onDiagnostic = () => {}, onFirstEvent = () => {}, onComplete = () => {}, onUsage = () => {}, locale = 'zh-TW',
 } = {}) {
   let offset = 0;
   let progressClosedForModel = false;
@@ -284,7 +285,7 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
   const closeProgressForModel = async (payload = null) => {
     if (progressClosedForModel) return;
     progress.stopSemanticHeartbeat?.();
-    const state = describeStreamingAnthropicProgress(payload);
+    const state = describeStreamingAnthropicProgress(payload, { locale });
     await progress.closeProgress(state.message, { phase: state.phase, details: state.details });
     progressClosedForModel = true;
     offset = progress.visible ? 1 : 0;

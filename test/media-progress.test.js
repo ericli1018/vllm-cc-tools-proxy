@@ -64,3 +64,14 @@ test('unnamed media fallback numbering does not skip named media', () => {
   const rendered = tracker.render('正在準備圖片…', { phase: 'image_start', path: ['messages', 0, 'content', 1] });
   assert.match(rendered, /檔案 2\/2：圖片 #1/);
 });
+
+test('V0.2.23 media progress localizes labels and heartbeat while preserving filenames', () => {
+  const messages = [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'x', filename: 'panel.png' } }] }];
+  let now = 1000;
+  const tracker = createMediaProgressTracker(messages, { locale: 'en-US', now: () => now });
+  const rendered = tracker.render('Analyzing image with the visual model…', { phase: 'image_vision', path: ['messages', 0, 'content', 0] });
+  assert.equal(rendered, 'File: panel.png | Image 1/1 | Status: Analyzing image with the visual model…');
+  assert.equal(tracker.renderMediaReady(), 'File: panel.png | Progress 1/1 (100%) | Status: Document and image content is ready; handing it to the main model for analysis…');
+  now = 31_000;
+  assert.match(tracker.renderHeartbeat(), /The main model is still processing this request\. Waiting for 30s…/);
+});

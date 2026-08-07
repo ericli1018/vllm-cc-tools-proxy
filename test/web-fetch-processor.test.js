@@ -246,3 +246,18 @@ test('V0.2.19.3 Ollama processor maps THINK=true to high reasoning effort', asyn
   assert.equal(body.reasoning_effort, 'high');
   assert.equal('chat_template_kwargs' in body, false);
 });
+
+test('V0.2.23 WebFetch Processor appends the locale-specific short output instruction', async (t) => {
+  let body;
+  const backend = await startServer(async (req, res) => {
+    body = await readJson(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: '要約' } }] }));
+  });
+  t.after(() => backend.server.close());
+  await processWebFetchContent(source(), {
+    prompt: 'Summarize.', model: 'm', language: 'ja-JP',
+    processor: { enabled: true, url: backend.url, model: '', apiKey: '', think: false },
+  });
+  assert.match(body.messages[0].content, /Write the result in Japanese \(ja-JP\)\.$/);
+});
