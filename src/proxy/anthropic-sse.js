@@ -1,6 +1,7 @@
 import { formatSseEvent } from './progress.js';
 import { findControlTags } from './protocol-sanitizer.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
+import { containNativeWebResponseForClient } from './native-web-tools.js';
 
 function safeToolName(value) {
   return String(value || '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 80);
@@ -11,7 +12,8 @@ function responseContent(response) {
 }
 
 export function describeFinalAnthropicProgress(response) {
-  const blocks = responseContent(response);
+  const contained = containNativeWebResponseForClient(response);
+  const blocks = responseContent(contained);
   const toolNames = blocks
     .filter((block) => block?.type === 'tool_use')
     .map((block) => safeToolName(block?.name))
@@ -125,13 +127,14 @@ async function emitToolUseBlock(progress, index, block) {
 }
 
 export async function emitFinalAnthropicResponse(progress, response) {
-  const finalProgress = describeFinalAnthropicProgress(response);
+  const containedResponse = containNativeWebResponseForClient(response);
+  const finalProgress = describeFinalAnthropicProgress(containedResponse);
   await progress.closeProgress(finalProgress.message, {
     phase: finalProgress.phase,
     details: finalProgress.details,
   });
   let index = progress.visible ? 1 : 0;
-  for (const block of response.content || []) {
+  for (const block of containedResponse.content || []) {
     if (block.type === 'text') await emitTextBlock(progress, index, block);
     else if (block.type === 'thinking') await emitThinkingBlock(progress, index, block);
     else if (block.type === 'tool_use') await emitToolUseBlock(progress, index, block);
@@ -146,11 +149,11 @@ export async function emitFinalAnthropicResponse(progress, response) {
   await progress.writeRaw(formatSseEvent('message_delta', {
     type: 'message_delta',
     delta: {
-      stop_reason: response.stop_reason ?? 'end_turn',
-      stop_sequence: response.stop_sequence ?? null,
+      stop_reason: containedResponse.stop_reason ?? 'end_turn',
+      stop_sequence: containedResponse.stop_sequence ?? null,
     },
     usage: {
-      output_tokens: response.usage?.output_tokens ?? 0,
+      output_tokens: containedResponse.usage?.output_tokens ?? 0,
     },
   }));
   progress.stopKeepalive();

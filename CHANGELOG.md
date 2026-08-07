@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.18 - 2026-08-07
+
+- Added response-side normalization for Native `server_tool_use` blocks named `web_search` or `web_fetch`.
+- Converted those blocks into proxy-owned `tool_use` calls before Managed Final inspection, recovery or dispatch.
+- Removed Base-supplied `web_search_tool_result` and `web_fetch_tool_result` blocks before assistant history construction.
+- Added local execution of response-side Native Web calls through the existing SearXNG and awesome-web-fetch Managed Tool paths.
+- Deferred unrelated Claude Code tool calls when they are mixed with response-side Native Web calls, allowing the model to reissue them after receiving actual web evidence.
+- Added final stream and non-stream containment so Native Web Server Tool blocks cannot reach Claude Code or trigger `Did 0 searches`.
+- Added content-free `native_web_response_contained` and `native_web_mixed_tool_deferred` diagnostics.
+- Added unit, Managed Loop, mixed-tool and end-to-end Claude Code SSE regression coverage.
+
 ## 0.2.17 - 2026-08-07
 
 - Added prefix-based normalization for Anthropic native `web_search_*` and `web_fetch_*` server-tool definitions.

@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.17 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.18 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.17 architecture
+## V0.2.18 architecture
 
 ```text
 Claude Code
@@ -213,6 +213,58 @@ After upgrading from a session that already displayed raw `</function_result>`, 
 
 
 
+
+
+## V0.2.18 response-side native web containment
+
+V0.2.17 normalized Anthropic native Web Search/Web Fetch definitions on the request path. V0.2.18 completes the reverse path so Base-model native server-tool blocks cannot escape into Claude Code's native Web Search UI.
+
+For every buffered managed Base response, the proxy now applies this containment before final-response inspection or recovery:
+
+```text
+server_tool_use:name=web_search
+  -> internal tool_use:name=web_search
+  -> execute SearXNG locally
+  -> correlated local tool_result
+  -> next Base-model round
+
+server_tool_use:name=web_fetch
+  -> internal tool_use:name=web_fetch
+  -> execute awesome-web-fetch locally
+  -> correlated local tool_result
+  -> next Base-model round
+
+web_search_tool_result / web_fetch_tool_result
+  -> removed from the Base response
+  -> never forwarded to Claude Code
+```
+
+The normalized assistant history contains only the internal `tool_use` blocks actually executed by the proxy. Native result blocks supplied by the Base endpoint are discarded because they do not represent the local SearXNG or awesome-web-fetch execution result.
+
+If one Base response contains a response-side Native Web call together with a Claude Code tool such as `Read`, `Write`, `Edit`, `Bash` or `Task`, the proxy executes the Native Web call first and defers the unrelated tool block. The next Base round receives the real web evidence and may emit the Claude Code tool again. This avoids returning a `web_search` block to Claude Code merely because the model attempted parallel tool calls. The safe diagnostic event is:
+
+```text
+native_web_mixed_tool_deferred
+```
+
+Every contained response emits a content-free diagnostic summary:
+
+```text
+native_web_response_contained
+```
+
+It records only the managed round, Native Server Tool count, removed Native Result count and original block-type names. It does not log query text, URLs, fetched content or credentials.
+
+The final Anthropic SSE emitter and non-stream response path apply an additional containment filter. The following block types are therefore forbidden in the response returned to Claude Code:
+
+```text
+server_tool_use:web_search
+server_tool_use:web_fetch
+web_search_tool_result
+web_fetch_tool_result
+```
+
+Consequently Claude Code should not render the native status line `Did 0 searches`. Search/fetch progress remains the proxy's own readable progress text, and the final user-visible response contains only normal text, thinking or Claude Code tool blocks.
 
 ## V0.2.17 native web tool normalization
 
@@ -800,9 +852,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers native Web Search/Web Fetch normalization, native policy enforcement, explicit Count Tokens compatibility, Anthropic usage normalization, managed `/v1/messages/count_tokens` preflight, auto-compact usage compatibility, non-fatal preflight fallback, direct-stream usage observation, transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers request-side and response-side native Web Search/Web Fetch normalization, Native Server Tool containment, mixed-tool deferral, native policy enforcement, explicit Count Tokens compatibility, Anthropic usage normalization, managed `/v1/messages/count_tokens` preflight, auto-compact usage compatibility, non-fatal preflight fallback, direct-stream usage observation, transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.17 limits
+## V0.2.18 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

@@ -214,3 +214,27 @@ test('pipeAnthropicUpstreamStream observes upstream usage without forwarding a s
     { stage: 'message_delta', usage: { input_tokens: 0, output_tokens: 25 } },
   ]);
 });
+
+
+test('emitFinalAnthropicResponse never emits native web result blocks to Claude Code', async () => {
+  const writes = [];
+  const progress = {
+    visible: false,
+    closeProgress: async () => {},
+    writeRaw: async (chunk) => writes.push(chunk),
+    stopKeepalive: () => {},
+    stop: async () => {},
+    res: { end: () => {} },
+  };
+  await emitFinalAnthropicResponse(progress, {
+    content: [
+      { type: 'web_search_tool_result', tool_use_id: 's1', content: [] },
+      { type: 'web_fetch_tool_result', tool_use_id: 'f1', content: {} },
+      { type: 'text', text: 'VISIBLE' },
+    ],
+    stop_reason: 'end_turn', usage: { output_tokens: 3 },
+  });
+  const stream = writes.join('');
+  assert.match(stream, /VISIBLE/);
+  assert.doesNotMatch(stream, /web_search_tool_result|web_fetch_tool_result|Did 0 searches/);
+});

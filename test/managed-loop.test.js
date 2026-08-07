@@ -542,3 +542,97 @@ test('runManagedLoop accepts protocol-like text inside a recovered managed tool 
   assert.equal(result.content[0].text, 'done');
   assert.equal(executedQuery, 'vLLM </function_results> parser behavior');
 });
+
+
+test('runManagedLoop contains response-side native web search and executes it internally', async () => {
+  const requests = [];
+  const executions = [];
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'web_search', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'research' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) {
+        return response([
+          { type: 'server_tool_use', id: 'srv-search-1', name: 'web_search', input: { query: 'libuv openssl' } },
+          { type: 'web_search_tool_result', tool_use_id: 'srv-search-1', content: [] },
+        ], 'pause_turn');
+      }
+      const assistant = request.messages.at(-2);
+      assert.deepEqual(assistant.content, [
+        { type: 'tool_use', id: 'srv-search-1', name: 'web_search', input: { query: 'libuv openssl' } },
+      ]);
+      const toolResult = request.messages.at(-1).content[0];
+      assert.equal(toolResult.tool_use_id, 'srv-search-1');
+      return response([{ type: 'text', text: 'FINAL AFTER LOCAL SEARCH' }]);
+    },
+    executeTool: async (toolUse) => {
+      executions.push(structuredClone(toolUse));
+      return { query: toolUse.input.query, result_count: 1, results: [{ title: 'Docs', url: 'https://example.com', snippet: 'evidence' }] };
+    },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(result.content[0].text, 'FINAL AFTER LOCAL SEARCH');
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0].name, 'web_search');
+  assert.ok(diagnostics.some((entry) => entry.event === 'native_web_response_contained'));
+  assert.doesNotMatch(JSON.stringify(result), /server_tool_use|web_search_tool_result/);
+});
+
+test('runManagedLoop contains response-side native web fetch and executes it internally', async () => {
+  let calls = 0;
+  let executions = 0;
+  const result = await runManagedLoop({
+    model: 'm', tools: [{ name: 'web_fetch', input_schema: { type: 'object' } }], messages: [],
+  }, {
+    upstream: async () => {
+      calls += 1;
+      if (calls === 1) return response([
+        { type: 'server_tool_use', id: 'srv-fetch-1', name: 'web_fetch', input: { url: 'https://example.com/a' } },
+      ], 'pause_turn');
+      return response([{ type: 'text', text: 'FETCH FINAL' }]);
+    },
+    executeTool: async () => { executions += 1; return { markdown: 'page' }; },
+  });
+  assert.equal(result.content[0].text, 'FETCH FINAL');
+  assert.equal(executions, 1);
+});
+
+test('runManagedLoop executes native web calls before handing off a mixed Claude Code tool action', async () => {
+  const requests = [];
+  let webExecutions = 0;
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [
+      { name: 'web_search', input_schema: { type: 'object' } },
+      { name: 'Read', input_schema: { type: 'object' } },
+    ],
+    messages: [{ role: 'user', content: 'research then read' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) return response([
+        { type: 'server_tool_use', id: 'srv-search-mixed', name: 'web_search', input: { query: 'tls docs' } },
+        { type: 'tool_use', id: 'read-premature', name: 'Read', input: { file_path: '/project/a.c' } },
+      ], 'tool_use');
+      const assistant = request.messages.at(-2);
+      assert.deepEqual(assistant.content, [
+        { type: 'tool_use', id: 'srv-search-mixed', name: 'web_search', input: { query: 'tls docs' } },
+      ]);
+      return response([
+        { type: 'tool_use', id: 'read-after-search', name: 'Read', input: { file_path: '/project/a.c' } },
+      ], 'tool_use');
+    },
+    executeTool: async () => { webExecutions += 1; return { results: [] }; },
+  });
+
+  assert.equal(webExecutions, 1);
+  assert.deepEqual(result.content, [
+    { type: 'tool_use', id: 'read-after-search', name: 'Read', input: { file_path: '/project/a.c' } },
+  ]);
+  assert.doesNotMatch(JSON.stringify(result), /web_search|server_tool_use/);
+});

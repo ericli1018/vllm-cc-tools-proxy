@@ -19,7 +19,7 @@ import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
-import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer } from '../proxy/native-web-tools.js';
+import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, containNativeWebResponseForClient } from '../proxy/native-web-tools.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -627,7 +627,7 @@ export function createProxyServer(config, dependencies = {}) {
             output_tokens: observedUsage.output_tokens || 0,
           });
           await emitFinalAnthropicResponse(progress, result);
-        } else sendJson(res, 200, result);
+        } else sendJson(res, 200, containNativeWebResponseForClient(result));
       } else {
         releaseManaged(); releaseManaged = null;
         if (request.stream === true) {

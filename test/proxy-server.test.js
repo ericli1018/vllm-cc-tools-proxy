@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.17, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.18, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.17', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.18', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -1285,4 +1285,79 @@ test('native max_uses is enforced locally and returns a managed tool error witho
   assert.equal(searchCalls, 1);
   assert.equal(modelCalls, 3);
   assert.match(JSON.stringify(finalRequest.messages), /max_uses_exceeded/);
+});
+
+test('response-side native web search is contained and never reaches Claude Code SSE', async (t) => {
+  let searchCalls = 0;
+  let modelCalls = 0;
+  const logs = [];
+  const searx = await startJsonServer((req, res) => {
+    searchCalls += 1;
+    const url = new URL(req.url, 'http://localhost');
+    assert.equal(url.searchParams.get('q'), 'libuv openssl tls');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'Docs', url: 'https://example.com/tls', content: 'evidence' }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 100 }));
+      return;
+    }
+    modelCalls += 1;
+    if (modelCalls === 2) {
+      const assistant = payload.messages.at(-2);
+      assert.deepEqual(assistant.content, [
+        { type: 'tool_use', id: 'srv-search-ui', name: 'web_search', input: { query: 'libuv openssl tls' } },
+      ]);
+      assert.equal(payload.messages.at(-1).content[0].tool_use_id, 'srv-search-ui');
+    }
+    const body = modelCalls === 1
+      ? {
+        id: 'native-search', type: 'message', role: 'assistant', model: 'm',
+        content: [
+          { type: 'server_tool_use', id: 'srv-search-ui', name: 'web_search', input: { query: 'libuv openssl tls' } },
+          { type: 'web_search_tool_result', tool_use_id: 'srv-search-ui', content: [] },
+        ],
+        stop_reason: 'pause_turn', usage: { input_tokens: 100, output_tokens: 5 },
+      }
+      : {
+        id: 'final', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'LOCAL SEARCH COMPLETE' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 120, output_tokens: 8 },
+      };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    searxngUrl: searx.url,
+    usagePreflightEnabled: true,
+    logLevel: 'debug',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+      messages: [{ role: 'user', content: 'research' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(searchCalls, 1);
+  assert.equal(modelCalls, 2);
+  assert.match(stream, /LOCAL SEARCH COMPLETE/);
+  assert.doesNotMatch(stream, /server_tool_use|web_search_tool_result|Did 0 searches/);
+  const contained = logs.find((entry) => entry.event === 'native_web_response_contained');
+  assert.ok(contained);
+  assert.equal(contained.server_tool_use_count, 1);
+  assert.equal(contained.stripped_result_count, 1);
 });

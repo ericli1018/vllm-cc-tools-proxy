@@ -4,6 +4,8 @@ import {
   isNativeWebToolDefinition,
   normalizeNativeWebToolsRequest,
   createManagedWebPolicyEnforcer,
+  normalizeNativeWebToolResponse,
+  containsNativeWebResponseBlocks,
 } from '../src/proxy/native-web-tools.js';
 
 test('detects dated native web search and web fetch tool definitions', () => {
@@ -126,4 +128,45 @@ test('policy enforcer counts failed or successful attempts and blocks uses above
     assert.deepEqual(error.details, { tool: 'WebSearch', max_uses: 1, attempted_use: 2 });
     return true;
   });
+});
+
+
+test('normalizes response-side native web server calls and removes native result blocks', () => {
+  const original = {
+    id: 'm1',
+    content: [
+      { type: 'thinking', thinking: 'need evidence' },
+      { type: 'server_tool_use', id: 'srv-1', name: 'web_search', input: { query: 'libuv openssl' } },
+      { type: 'web_search_tool_result', tool_use_id: 'srv-1', content: [{ type: 'web_search_result', url: 'https://example.com' }] },
+      { type: 'server_tool_use', id: 'srv-2', name: 'web_fetch', input: { url: 'https://example.com' } },
+      { type: 'web_fetch_tool_result', tool_use_id: 'srv-2', content: { type: 'web_fetch_result', url: 'https://example.com' } },
+    ],
+    stop_reason: 'pause_turn',
+  };
+
+  const result = normalizeNativeWebToolResponse(original);
+  assert.equal(result.changed, true);
+  assert.equal(result.serverToolUseCount, 2);
+  assert.equal(result.strippedResultCount, 2);
+  assert.deepEqual(result.response.content, [
+    { type: 'thinking', thinking: 'need evidence' },
+    { type: 'tool_use', id: 'srv-1', name: 'web_search', input: { query: 'libuv openssl' } },
+    { type: 'tool_use', id: 'srv-2', name: 'web_fetch', input: { url: 'https://example.com' } },
+  ]);
+  assert.equal(result.response.stop_reason, 'tool_use');
+  assert.equal(containsNativeWebResponseBlocks(result.response), false);
+  assert.equal(containsNativeWebResponseBlocks(original), true);
+});
+
+test('leaves unrelated server tools and ordinary tool blocks unchanged', () => {
+  const original = {
+    content: [
+      { type: 'server_tool_use', id: 'x1', name: 'code_execution', input: {} },
+      { type: 'tool_use', id: 'x2', name: 'Read', input: { file_path: '/x' } },
+    ],
+    stop_reason: 'tool_use',
+  };
+  const result = normalizeNativeWebToolResponse(original);
+  assert.equal(result.changed, false);
+  assert.equal(result.response, original);
 });

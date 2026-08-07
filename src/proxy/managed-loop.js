@@ -7,6 +7,7 @@ import {
 } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName } from './web-tools.js';
+import { normalizeNativeWebToolResponse, isResponseSideNativeWebToolUse } from './native-web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
@@ -202,22 +203,39 @@ export async function runManagedLoop(initialRequest, {
   const request = structuredClone(initialRequest);
   request.stream = false;
   request.messages = Array.isArray(request.messages) ? request.messages : [];
+  let activeRound = 0;
+  const containedUpstream = async (body, upstreamSignal) => {
+    const rawResponse = await upstream(body, upstreamSignal);
+    const normalized = normalizeNativeWebToolResponse(rawResponse);
+    if (normalized.changed) {
+      await onDiagnostic('native_web_response_contained', {
+        round: activeRound,
+        server_tool_use_count: normalized.serverToolUseCount,
+        stripped_result_count: normalized.strippedResultCount,
+        original_block_types: Array.isArray(rawResponse?.content)
+          ? rawResponse.content.map((block) => String(block?.type || 'unknown'))
+          : [],
+      });
+    }
+    return normalized.response;
+  };
 
   for (let round = 0; round < maxRounds; round += 1) {
+    activeRound = round + 1;
     if (round > 0 || showInitialModelProgress) {
       await onProgress(
         round === 0 ? '正在請主模型規劃下一步…' : '主模型正在整理工具結果…',
         { phase: 'managed_model_round_start', round: round + 1 },
       );
     }
-    let response = await upstream(request, signal);
+    let response = await containedUpstream(request, signal);
     let recovery = null;
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
     if (toolUses.length === 0) {
       const recovered = await recoverInvalidResponse(request, response, {
-        upstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
+        upstream: containedUpstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
         writeProtocolDiagnostics,
       });
       if (!recovered.recovered) return recovered.response;
@@ -229,15 +247,32 @@ export async function runManagedLoop(initialRequest, {
       if (toolUses.length === 0) return response;
     }
     if (toolUses.some((block) => !isManagedToolName(block.name))) {
-      if (recovery) {
-        await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
-          round: round + 1,
-          recovery_route: recovery.route,
-          disposition: 'unmanaged',
-          tool_names: toolUses.map((block) => String(block?.name || '')),
-        });
+      const hasResponseSideNativeWebCall = toolUses.some(isResponseSideNativeWebToolUse);
+      if (!hasResponseSideNativeWebCall) {
+        if (recovery) {
+          await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
+            round: round + 1,
+            recovery_route: recovery.route,
+            disposition: 'unmanaged',
+            tool_names: toolUses.map((block) => String(block?.name || '')),
+          });
+        }
+        return response;
       }
-      return response;
+
+      const deferredToolNames = toolUses
+        .filter((block) => !isManagedToolName(block.name))
+        .map((block) => String(block?.name || ''));
+      response = {
+        ...response,
+        content: response.content.filter((block) => block?.type !== 'tool_use' || isManagedToolName(block.name)),
+      };
+      toolUses = response.content.filter((block) => block?.type === 'tool_use');
+      await onDiagnostic('native_web_mixed_tool_deferred', {
+        round: round + 1,
+        deferred_tool_names: deferredToolNames,
+        managed_tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
+      });
     }
     if (recovery) {
       await onDiagnostic('managed_final_response_recovery_tool_dispatch', {

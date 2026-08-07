@@ -173,6 +173,81 @@ export function normalizeNativeWebToolsRequest(request) {
   };
 }
 
+const RESPONSE_SIDE_NATIVE_WEB_TOOL_USES = new WeakSet();
+
+const NATIVE_WEB_RESULT_TYPES = new Set([
+  'web_search_tool_result',
+  'web_fetch_tool_result',
+]);
+
+function responseServerToolCanonical(block) {
+  if (block?.type !== 'server_tool_use') return '';
+  return canonicalName(block?.name);
+}
+
+export function isResponseSideNativeWebToolUse(block) {
+  return Boolean(block && typeof block === 'object' && RESPONSE_SIDE_NATIVE_WEB_TOOL_USES.has(block));
+}
+
+export function containsNativeWebResponseBlocks(response) {
+  const content = Array.isArray(response?.content) ? response.content : [];
+  return content.some((block) => Boolean(responseServerToolCanonical(block))
+    || NATIVE_WEB_RESULT_TYPES.has(block?.type));
+}
+
+export function normalizeNativeWebToolResponse(response) {
+  if (!response || !Array.isArray(response.content) || !containsNativeWebResponseBlocks(response)) {
+    return {
+      response,
+      changed: false,
+      serverToolUseCount: 0,
+      strippedResultCount: 0,
+    };
+  }
+
+  const content = [];
+  let serverToolUseCount = 0;
+  let strippedResultCount = 0;
+  for (const block of response.content) {
+    const canonical = responseServerToolCanonical(block);
+    if (canonical) {
+      serverToolUseCount += 1;
+      const normalizedBlock = {
+        type: 'tool_use',
+        id: block.id,
+        name: canonical === 'WebSearch' ? 'web_search' : 'web_fetch',
+        input: block.input && typeof block.input === 'object' ? structuredClone(block.input) : {},
+      };
+      RESPONSE_SIDE_NATIVE_WEB_TOOL_USES.add(normalizedBlock);
+      content.push(normalizedBlock);
+      continue;
+    }
+    if (NATIVE_WEB_RESULT_TYPES.has(block?.type)) {
+      strippedResultCount += 1;
+      continue;
+    }
+    content.push(block);
+  }
+
+  return {
+    response: {
+      ...response,
+      content,
+      ...(serverToolUseCount > 0 ? { stop_reason: 'tool_use' } : {}),
+    },
+    changed: true,
+    serverToolUseCount,
+    strippedResultCount,
+  };
+}
+
+export function containNativeWebResponseForClient(response) {
+  if (!response || !Array.isArray(response.content)) return response;
+  const content = response.content.filter((block) => !responseServerToolCanonical(block)
+    && !NATIVE_WEB_RESULT_TYPES.has(block?.type));
+  return content.length === response.content.length ? response : { ...response, content };
+}
+
 export function createManagedWebPolicyEnforcer(policies = {}) {
   const uses = new Map();
   return {

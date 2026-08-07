@@ -67,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.17', async () => {
+test('package version is V0.2.18', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.17');
-  assert.equal(lock.version, '0.2.17');
-  assert.equal(lock.packages[''].version, '0.2.17');
+  assert.equal(packageJson.version, '0.2.18');
+  assert.equal(lock.version, '0.2.18');
+  assert.equal(lock.packages[''].version, '0.2.18');
 });
 
 
@@ -135,4 +135,15 @@ test('README documents V0.2.17 native web tool normalization and policy boundari
   assert.match(readme, /blocked_domains/);
   assert.match(readme, /native_web_tools_normalized/);
   assert.match(readme, /not emulated as Anthropic-native citations/);
+});
+
+
+test('README documents V0.2.18 response-side native web containment', () => {
+  assert.match(readme, /V0\.2\.18 response-side native web containment/);
+  assert.match(readme, /server_tool_use/);
+  assert.match(readme, /web_search_tool_result/);
+  assert.match(readme, /web_fetch_tool_result/);
+  assert.match(readme, /native_web_response_contained/);
+  assert.match(readme, /native_web_mixed_tool_deferred/);
+  assert.match(readme, /Did 0 searches/);
 });
