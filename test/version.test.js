@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { VERSION } from '../src/version.js';
 
-test('runtime version matches the package release version', async () => {
-  const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(VERSION, '0.2.23');
-  assert.equal(packageJson.version, '0.2.23');
+test('V0.2.23.1 runtime label and npm hotfix metadata are intentional', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(VERSION, '0.2.23.1');
+  assert.equal(packageJson.version, '0.2.23+hotfix.1');
 });

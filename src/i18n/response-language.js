@@ -5,7 +5,7 @@ const CANONICAL_BY_LOWER = new Map(SUPPORTED_RESPONSE_LANGUAGES.map((locale) => 
 
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
-    modelInstruction: 'Default to Traditional Chinese (zh-TW) for user-visible responses. Preserve technical literals verbatim.',
+    modelInstruction: 'Respond in Traditional Chinese (zh-TW).',
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
     progressHeader: '目前處理進度：',
     status: Object.freeze({
@@ -65,7 +65,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'zh-CN': Object.freeze({
-    modelInstruction: 'Default to Simplified Chinese (zh-CN) for user-visible responses. Preserve technical literals verbatim.',
+    modelInstruction: 'Respond in Simplified Chinese (zh-CN).',
     processorInstruction: 'Write the result in Simplified Chinese (zh-CN).',
     progressHeader: '当前处理进度：',
     status: Object.freeze({
@@ -125,7 +125,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'en-US': Object.freeze({
-    modelInstruction: 'Default to English (en-US) for user-visible responses. Preserve technical literals verbatim.',
+    modelInstruction: 'Respond in English (en-US).',
     processorInstruction: 'Write the result in English (en-US).',
     progressHeader: 'Current progress:',
     status: Object.freeze({
@@ -185,7 +185,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ja-JP': Object.freeze({
-    modelInstruction: 'Default to Japanese (ja-JP) for user-visible responses. Preserve technical literals verbatim.',
+    modelInstruction: 'Respond in Japanese (ja-JP).',
     processorInstruction: 'Write the result in Japanese (ja-JP).',
     progressHeader: '現在の処理状況：',
     status: Object.freeze({
@@ -245,7 +245,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ko-KP': Object.freeze({
-    modelInstruction: 'Default to Korean (ko-KP) for user-visible responses. Preserve technical literals verbatim.',
+    modelInstruction: 'Respond in Korean (ko-KP).',
     processorInstruction: 'Write the result in Korean (ko-KP).',
     progressHeader: '현재 처리 상태:',
     status: Object.freeze({

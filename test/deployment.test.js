@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.23 release', async () => {
+test('package version is V0.2.23.1 hotfix release', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.23');
-  assert.equal(lock.version, '0.2.23');
-  assert.equal(lock.packages[''].version, '0.2.23');
+  assert.equal(packageJson.version, '0.2.23+hotfix.1');
+  assert.equal(lock.version, '0.2.23+hotfix.1');
+  assert.equal(lock.packages[''].version, '0.2.23+hotfix.1');
 });
 
 
@@ -262,4 +262,11 @@ test('README documents V0.2.20 unified WebSearch and WebFetch server-tool bridge
   assert.match(readme, /web_fetch_YYYYMMDD/);
   assert.match(readme, /mixed server \+ client tools/i);
   assert.match(readme, /mcp__searxng__web_search/);
+});
+
+test('README documents V0.2.23.1 language-policy boundary hotfix', () => {
+  assert.match(readme, /V0\.2\.23\.1 response-language boundary hotfix/);
+  assert.match(readme, /Respond in Traditional Chinese \(zh-TW\)\./);
+  assert.match(readme, /0\.2\.23\+hotfix\.1/);
+  assert.match(readme, /\\n\\n/);
 });

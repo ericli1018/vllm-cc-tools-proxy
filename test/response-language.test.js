@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as language from '../src/i18n/response-language.js';
 
-test('V0.2.23 locale registry exposes short model and processor instructions for all supported locales', () => {
+test('V0.2.23.1 locale registry exposes hard model and short processor instructions for all supported locales', () => {
   assert.equal(typeof language.languageProfile, 'function');
   const expected = {
-    'zh-TW': ['Default to Traditional Chinese (zh-TW) for user-visible responses. Preserve technical literals verbatim.', 'Write the result in Traditional Chinese (zh-TW).'],
-    'zh-CN': ['Default to Simplified Chinese (zh-CN) for user-visible responses. Preserve technical literals verbatim.', 'Write the result in Simplified Chinese (zh-CN).'],
-    'en-US': ['Default to English (en-US) for user-visible responses. Preserve technical literals verbatim.', 'Write the result in English (en-US).'],
-    'ja-JP': ['Default to Japanese (ja-JP) for user-visible responses. Preserve technical literals verbatim.', 'Write the result in Japanese (ja-JP).'],
-    'ko-KP': ['Default to Korean (ko-KP) for user-visible responses. Preserve technical literals verbatim.', 'Write the result in Korean (ko-KP).'],
+    'zh-TW': ['Respond in Traditional Chinese (zh-TW).', 'Write the result in Traditional Chinese (zh-TW).'],
+    'zh-CN': ['Respond in Simplified Chinese (zh-CN).', 'Write the result in Simplified Chinese (zh-CN).'],
+    'en-US': ['Respond in English (en-US).', 'Write the result in English (en-US).'],
+    'ja-JP': ['Respond in Japanese (ja-JP).', 'Write the result in Japanese (ja-JP).'],
+    'ko-KP': ['Respond in Korean (ko-KP).', 'Write the result in Korean (ko-KP).'],
   };
   for (const [locale, [modelInstruction, processorInstruction]] of Object.entries(expected)) {
     const profile = language.languageProfile(locale);
@@ -35,4 +35,34 @@ test('V0.2.23 progress headers are locale-specific with English fallback', () =>
   assert.equal(language.progressBlockHeader('ja-JP'), '現在の処理状況：');
   assert.equal(language.progressBlockHeader('ko-KP'), '현재 처리 상태:');
   assert.equal(language.progressBlockHeader('bad-locale'), 'Current progress:');
+});
+
+import { injectResponseLanguagePolicy } from '../src/proxy/response-language-policy.js';
+
+test('V0.2.23.1 language policy survives vLLM direct system-block join with a hard boundary', () => {
+  const expected = {
+    'zh-TW': 'Respond in Traditional Chinese (zh-TW).',
+    'zh-CN': 'Respond in Simplified Chinese (zh-CN).',
+    'en-US': 'Respond in English (en-US).',
+    'ja-JP': 'Respond in Japanese (ja-JP).',
+    'ko-KP': 'Respond in Korean (ko-KP).',
+  };
+
+  for (const [locale, instruction] of Object.entries(expected)) {
+    const original = {
+      system: [
+        { type: 'text', text: 'Claude Code runtime instructions end here.' },
+        { type: 'text', text: 'Project policy ends here.' },
+      ],
+      messages: [{ role: 'user', content: 'hello' }],
+    };
+    const injected = injectResponseLanguagePolicy(original, locale).request;
+    const renderedLikeVllm = injected.system
+      .filter((block) => block?.type === 'text')
+      .map((block) => block.text)
+      .join('');
+
+    assert.equal(renderedLikeVllm.endsWith(`Project policy ends here.\n\n${instruction}`), true);
+    assert.equal(renderedLikeVllm.includes('Default to '), false);
+  }
 });

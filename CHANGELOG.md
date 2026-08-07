@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.23.1 - 2026-08-08
+
+- Kept the external hotfix label `V0.2.23.1` while using npm-valid package metadata `0.2.23+hotfix.1`.
+- Replaced the soft Main/Base-model language preference (`Default to ...`) with a direct locale-specific `Respond in ...` instruction.
+- Added an explicit `\n\n` boundary to appended Anthropic system text blocks so direct vLLM system-block concatenation cannot glue the language policy to preceding Claude Code text.
+- Added a regression test that simulates direct vLLM `system` text-block joining for all five supported locales.
+- Preserved the V0.2.23 WebFetch Processor instruction, localized Proxy status text, `en-US` fallback, and the V0.2.22 Claude Code-owned WebSearch/WebFetch lifecycle.
+
 ## 0.2.23 - 2026-08-08
 
 - Added `MODEL_RESPONSE_LANGUAGE` as the single response-language setting for main-model user-visible answers, WebFetch Processor output, and Proxy progress/status text.

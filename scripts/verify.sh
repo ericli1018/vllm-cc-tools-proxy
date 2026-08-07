@@ -102,14 +102,16 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.23'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.23'
+test "$(node -p "require('./package.json').version")" = '0.2.23+hotfix.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.23.1'
 
 
 test -f src/i18n/response-language.js
 test -f src/proxy/response-language-policy.js
 grep -Fq 'MODEL_RESPONSE_LANGUAGE=zh-TW' README.md
 grep -Fq 'V0.2.23 response language localization' README.md
+grep -Fq 'V0.2.23.1 response-language boundary hotfix' README.md
+grep -Fq 'Respond in Traditional Chinese (zh-TW).' README.md
 test -f src/proxy/client-web-tool-lifecycle.js
 grep -Fq 'parseClaudeCodeWebFetchProcessorChild' src/services/proxy-server.js
 grep -Fq 'web_fetch_processor_child_completed' src/services/proxy-server.js

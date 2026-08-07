@@ -1,6 +1,38 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23 adds one response-language policy for the main model, WebFetch Processor, and Proxy progress/status text while preserving the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23.1 is a focused response-language boundary hotfix on top of V0.2.23; it does not change the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22.
+
+## V0.2.23.1 response-language boundary hotfix
+
+V0.2.23.1 keeps the same `MODEL_RESPONSE_LANGUAGE` setting and the same five locale profiles introduced by V0.2.23. The external release label is `0.2.23.1`; npm-valid package metadata is `0.2.23+hotfix.1`.
+
+The hotfix changes only the Main/Base-model language instruction. V0.2.23 used a soft preference and appended an Anthropic `system` text block without a guaranteed separator. Some vLLM Anthropic adapters concatenate system text blocks directly, so the policy could become adjacent to the preceding Claude Code text.
+
+V0.2.23.1 uses a direct instruction:
+
+```text
+Respond in Traditional Chinese (zh-TW).
+```
+
+The complete locale mapping is:
+
+```text
+zh-TW: Respond in Traditional Chinese (zh-TW).
+zh-CN: Respond in Simplified Chinese (zh-CN).
+en-US: Respond in English (en-US).
+ja-JP: Respond in Japanese (ja-JP).
+ko-KP: Respond in Korean (ko-KP).
+```
+
+When the incoming Anthropic `system` value is an array, the Proxy prefixes the appended language block with the literal boundary `\n\n`. Therefore a direct block join still produces a clear policy boundary:
+
+```text
+<existing Claude Code system text>\n\nRespond in Traditional Chinese (zh-TW).
+```
+
+For string-form systems, the Proxy likewise inserts one blank-line boundary before the language instruction. Requests without an existing system receive only the instruction itself.
+
+The WebFetch Processor instruction, locale/status registry, English fallback, WebSearch/WebFetch lifecycle, media adaptation, and diagnostic behavior are unchanged from V0.2.23.
 
 ## V0.2.23 response language localization
 
@@ -28,7 +60,7 @@ The resolved locale controls three output surfaces:
 2. **WebFetch Processor** — the independent processor receives a short locale-specific output instruction.
 3. **Proxy progress/status** — Search, Fetch, queue, media/PDF/image, heartbeat, recovery, handoff, and final-return status text uses the same locale.
 
-The main-model instruction is intentionally short. For example:
+V0.2.23 originally used the following softer main-model instruction; V0.2.23.1 supersedes it with the hard instruction documented above:
 
 ```text
 Default to Traditional Chinese (zh-TW) for user-visible responses. Preserve technical literals verbatim.

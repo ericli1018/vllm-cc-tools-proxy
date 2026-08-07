@@ -12,7 +12,7 @@ export function injectResponseLanguagePolicy(request, locale) {
   if (systemContainsInstruction(clone.system, instruction)) return { request: clone, changed: false };
 
   if (Array.isArray(clone.system)) {
-    clone.system = [...clone.system, { type: 'text', text: instruction }];
+    clone.system = [...clone.system, { type: 'text', text: `\n\n${instruction}` }];
   } else if (typeof clone.system === 'string' && clone.system.length > 0) {
     clone.system = `${clone.system}\n\n${instruction}`;
   } else {

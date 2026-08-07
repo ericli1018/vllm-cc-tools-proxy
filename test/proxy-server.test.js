@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.23', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.23.1', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -72,7 +72,7 @@ test('unknown endpoints bypass transparently to base vLLM', async (t) => {
   assert.deepEqual(await response.json(), { data: ['m'] });
 });
 
-test('V0.2.23 plain non-stream Messages request applies the default English response-language policy', async (t) => {
+test('V0.2.23.1 plain non-stream Messages request applies the hard default English response-language policy', async (t) => {
   const original = Buffer.from('{"model":"m", "stream":false, "messages":[{"role":"user","content":"hi"}]}\n');
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
@@ -85,7 +85,7 @@ test('V0.2.23 plain non-stream Messages request applies the default English resp
   const response = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: original });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-vllm'), null);
-  assert.match(observed.system, /Default to English \(en-US\) for user-visible responses/);
+  assert.match(observed.system, /Respond in English \(en-US\)\./);
 });
 
 test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', async (t) => {
@@ -1098,7 +1098,7 @@ test('explicit count_tokens normalizes native web search and web fetch definitio
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { input_tokens: 321 });
   assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
-  assert.match(observed.system, /Default to Traditional Chinese \(zh-TW\) for user-visible responses/);
+  assert.match(observed.system, /Respond in Traditional Chinese \(zh-TW\)\./);
   assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
   for (const tool of observed.tools) {
     assert.ok(tool.input_schema);
@@ -1855,7 +1855,7 @@ test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus
   assert.equal(processorCalls, 1);
 });
 
-test('V0.2.23 plain Messages request injects the configured short response-language system policy', async (t) => {
+test('V0.2.23.1 plain Messages request injects the configured hard response-language system policy', async (t) => {
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
     observed = JSON.parse((await read(req)).toString());
@@ -1870,5 +1870,5 @@ test('V0.2.23 plain Messages request injects the configured short response-langu
   });
   assert.equal(response.status, 200);
   assert.match(observed.system, /Claude Code system/);
-  assert.match(observed.system, /Default to Traditional Chinese \(zh-TW\) for user-visible responses\. Preserve technical literals verbatim\./);
+  assert.match(observed.system, /Respond in Traditional Chinese \(zh-TW\)\./);
 });
