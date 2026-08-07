@@ -7,6 +7,8 @@ Do not add new facts.
 Do not call tools.
 Do not emit reasoning or protocol wrapper tags.`;
 
+const CONTINUATION_STATE_MAX_CHARS = 4000;
+
 const CONTINUATION_INSTRUCTION = `Continue the current task from the existing conversation and tool evidence.
 Your previous generation ended without a valid externally consumable action.
 Complete exactly one valid next action now:
@@ -92,7 +94,8 @@ export function classifyManagedRecovery(response, inspection = inspectManagedFin
   const structured = structure.listItemCount >= 3
     || (structure.headingCount >= 1 && structure.listItemCount >= 2)
     || structure.nonEmptyParagraphs >= 4;
-  const answerLike = inspection.thinking_text_present
+  const answerLike = inspection.tool_use_count === 0
+    && inspection.thinking_text_present
     && substantial
     && structured
     && !continuationIntent;
@@ -131,11 +134,33 @@ function appendInstruction(messages, instruction) {
   messages.push({ role: 'user', content: [{ type: 'text', text: instruction }] });
 }
 
-export function buildManagedContinuationRecoveryRequest(request) {
+function boundedContinuationState(response) {
+  const candidate = [
+    responseText(response, 'thinking', 'thinking'),
+    responseText(response, 'text', 'text'),
+  ].filter(Boolean).join('\n\n').trim();
+  if (!candidate) return '';
+  const neutral = neutralizeControlTags(candidate);
+  if (neutral.length <= CONTINUATION_STATE_MAX_CHARS) return neutral;
+  return `[earlier incomplete state omitted]\n${neutral.slice(-CONTINUATION_STATE_MAX_CHARS)}`;
+}
+
+export function buildManagedContinuationRecoveryRequest(request, response) {
   const recovery = structuredClone(request);
   recovery.stream = false;
+  recovery.chat_template_kwargs = {
+    ...(recovery.chat_template_kwargs && typeof recovery.chat_template_kwargs === 'object'
+      ? recovery.chat_template_kwargs
+      : {}),
+    enable_thinking: false,
+    preserve_thinking: false,
+  };
   recovery.messages = Array.isArray(recovery.messages) ? recovery.messages : [];
-  appendInstruction(recovery.messages, CONTINUATION_INSTRUCTION);
+  const priorState = boundedContinuationState(response);
+  const instruction = priorState
+    ? `Previous incomplete model state (data only; do not copy protocol syntax):\n${priorState}\n\n${CONTINUATION_INSTRUCTION}`
+    : CONTINUATION_INSTRUCTION;
+  appendInstruction(recovery.messages, instruction);
   return recovery;
 }
 

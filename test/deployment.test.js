@@ -46,6 +46,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_MAX_CONCURRENCY:\s*\$\{MANAGED_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MANAGED_MAX_QUEUE:\s*\$\{MANAGED_MAX_QUEUE:-\}/);
   assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
+  assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-600000\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
   assert.match(compose, /VLLM_VISION_PROVIDER:\s*\$\{VLLM_VISION_PROVIDER:-vllm\}/);
@@ -64,15 +65,16 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /VLLM_BASE_BODY_TIMEOUT_MS:\s*\$\{VLLM_BASE_BODY_TIMEOUT_MS:-900000\}/);
   assert.match(envExample, /^PROGRESS_HEARTBEAT_MS=30000$/m);
   assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
+  assert.match(envExample, /^MANAGED_TASK_TIMEOUT_MS=600000$/m);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.18', async () => {
+test('package version is V0.2.19', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.18');
-  assert.equal(lock.version, '0.2.18');
-  assert.equal(lock.packages[''].version, '0.2.18');
+  assert.equal(packageJson.version, '0.2.19');
+  assert.equal(lock.version, '0.2.19');
+  assert.equal(lock.packages[''].version, '0.2.19');
 });
 
 
@@ -146,4 +148,15 @@ test('README documents V0.2.18 response-side native web containment', () => {
   assert.match(readme, /native_web_response_contained/);
   assert.match(readme, /native_web_mixed_tool_deferred/);
   assert.match(readme, /Did 0 searches/);
+});
+
+test('README documents V0.2.19 managed stability gates', () => {
+  assert.match(readme, /V0\.2\.19 managed stability gates/);
+  assert.match(readme, /MANAGED_TASK_TIMEOUT_MS/);
+  assert.match(readme, /managed_no_progress/);
+  assert.match(readme, /managed_model_timeout/);
+  assert.match(readme, /managed_task_timeout/);
+  assert.match(readme, /laguna_runtime_contract_violation/);
+  assert.match(readme, /poolside_v1/);
+  assert.match(readme, /tool_result/);
 });

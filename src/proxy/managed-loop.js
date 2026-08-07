@@ -11,6 +11,73 @@ import { normalizeNativeWebToolResponse, isResponseSideNativeWebToolUse } from '
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
+
+const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 600_000;
+const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 240_000;
+
+function stableValue(value) {
+  if (Array.isArray(value)) return value.map(stableValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+
+function managedActionSignature(toolUses) {
+  return JSON.stringify(toolUses.map((toolUse) => ({
+    name: normalizeManagedToolName(toolUse?.name),
+    input: stableValue(toolUse?.input ?? {}),
+  })));
+}
+
+function managedTimeoutError(code, timeoutMs, phase) {
+  const task = code === 'managed_task_timeout';
+  return new HttpError(504, task
+    ? 'Managed task exceeded its total execution deadline.'
+    : 'Base model did not complete the managed round within the bounded model deadline.', {
+    code,
+    retryable: true,
+    details: { timeout_ms: timeoutMs, phase },
+  });
+}
+
+async function runWithBoundedTime(operation, {
+  signal,
+  timeoutMs,
+  timeoutCode,
+  phase,
+}) {
+  if (signal?.aborted) throw signal.reason || new Error('Aborted');
+  const controller = new AbortController();
+  let parentAbort;
+  let timer;
+  const timeoutError = managedTimeoutError(timeoutCode, timeoutMs, phase);
+  const timeoutPromise = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+  const parentAbortPromise = new Promise((_, reject) => {
+    if (!signal) return;
+    parentAbort = () => {
+      const reason = signal.reason || new Error('Aborted');
+      controller.abort(reason);
+      reject(reason);
+    };
+    signal.addEventListener('abort', parentAbort, { once: true });
+  });
+
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => operation(controller.signal)),
+      timeoutPromise,
+      parentAbortPromise,
+    ]);
+  } finally {
+    clearTimeout(timer);
+    if (signal && parentAbort) signal.removeEventListener('abort', parentAbort);
+  }
+}
+
 function progressMessage(name, input, phase) {
   const normalized = normalizeManagedToolName(name);
   if (normalized === 'WebSearch') {
@@ -48,6 +115,20 @@ async function inspectFinal(response, { onDiagnostic, round, repair }) {
     repair,
     ...inspection,
   });
+  if (!inspection.valid && inspection.reasons.some((reason) => [
+    'control_tag_leak', 'final_answer_in_thinking',
+  ].includes(reason))) {
+    await onDiagnostic('laguna_runtime_contract_violation', {
+      round,
+      repair,
+      expected_tool_parser: 'poolside_v1',
+      expected_reasoning_parser: 'poolside_v1',
+      reasons: inspection.reasons,
+      control_tag_count: inspection.control_tag_count,
+      control_tag_counts: inspection.control_tag_counts,
+      thinking_only: inspection.reasons.includes('final_answer_in_thinking'),
+    });
+  }
   return inspection;
 }
 
@@ -151,7 +232,7 @@ async function recoverInvalidResponse(request, response, {
 
   const recoveryRequest = recovery.route === 'final_channel'
     ? buildManagedFinalChannelRecoveryRequest(request, response)
-    : buildManagedContinuationRecoveryRequest(request);
+    : buildManagedContinuationRecoveryRequest(request, response);
   const recoveredResponse = await upstream(recoveryRequest, signal);
   const recoveredInspection = await inspectFinal(recoveredResponse, {
     onDiagnostic, round, repair: true,
@@ -199,13 +280,26 @@ export async function runManagedLoop(initialRequest, {
   logProtocolSnippets = false,
   writeProtocolDiagnostics,
   signal,
+  taskTimeoutMs = DEFAULT_MANAGED_TASK_TIMEOUT_MS,
+  modelRoundTimeoutMs = DEFAULT_MODEL_ROUND_TIMEOUT_MS,
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
   request.messages = Array.isArray(request.messages) ? request.messages : [];
+  const taskStartedAt = Date.now();
   let activeRound = 0;
+  let previousManagedActionSignature = null;
+
+  const remainingTaskMs = () => taskTimeoutMs - (Date.now() - taskStartedAt);
   const containedUpstream = async (body, upstreamSignal) => {
-    const rawResponse = await upstream(body, upstreamSignal);
+    const remaining = remainingTaskMs();
+    if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'model');
+    const boundedMs = Math.max(1, Math.min(modelRoundTimeoutMs, remaining));
+    const timeoutCode = remaining <= modelRoundTimeoutMs ? 'managed_task_timeout' : 'managed_model_timeout';
+    const rawResponse = await runWithBoundedTime(
+      (boundedSignal) => upstream(body, boundedSignal),
+      { signal: upstreamSignal, timeoutMs: boundedMs, timeoutCode, phase: 'model' },
+    );
     const normalized = normalizeNativeWebToolResponse(rawResponse);
     if (normalized.changed) {
       await onDiagnostic('native_web_response_contained', {
@@ -230,22 +324,16 @@ export async function runManagedLoop(initialRequest, {
     }
     let response = await containedUpstream(request, signal);
     let recovery = null;
+    const recovered = await recoverInvalidResponse(request, response, {
+      upstream: containedUpstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
+      writeProtocolDiagnostics,
+    });
+    response = recovered.response;
+    recovery = recovered.recovery;
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
-    if (toolUses.length === 0) {
-      const recovered = await recoverInvalidResponse(request, response, {
-        upstream: containedUpstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
-        writeProtocolDiagnostics,
-      });
-      if (!recovered.recovered) return recovered.response;
-      response = recovered.response;
-      recovery = recovered.recovery;
-      toolUses = Array.isArray(response?.content)
-        ? response.content.filter((block) => block?.type === 'tool_use')
-        : [];
-      if (toolUses.length === 0) return response;
-    }
+    if (toolUses.length === 0) return response;
     if (toolUses.some((block) => !isManagedToolName(block.name))) {
       const hasResponseSideNativeWebCall = toolUses.some(isResponseSideNativeWebToolUse);
       if (!hasResponseSideNativeWebCall) {
@@ -274,6 +362,19 @@ export async function runManagedLoop(initialRequest, {
         managed_tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
       });
     }
+    const actionSignature = managedActionSignature(toolUses);
+    if (previousManagedActionSignature === actionSignature) {
+      await onDiagnostic('managed_no_progress_detected', {
+        round: round + 1,
+        tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
+      });
+      throw new HttpError(422, 'Managed tool loop repeated the exact same action without progress.', {
+        code: 'managed_no_progress',
+        retryable: false,
+      });
+    }
+    previousManagedActionSignature = actionSignature;
+
     if (recovery) {
       await onDiagnostic('managed_final_response_recovery_tool_dispatch', {
         round: round + 1,
@@ -289,7 +390,12 @@ export async function runManagedLoop(initialRequest, {
         phase: 'managed_tool_start', name: normalizeManagedToolName(toolUse.name), round: round + 1, force: true,
       });
       try {
-        const output = await executeTool(toolUse, signal);
+        const remaining = remainingTaskMs();
+        if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
+        const output = await runWithBoundedTime(
+          (boundedSignal) => executeTool(toolUse, boundedSignal),
+          { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
+        );
         const inventory = inventoryProtocolTags(output);
         if (inventory.total > 0) {
           await onDiagnostic('managed_tool_result_protocol_inventory', {
@@ -309,6 +415,7 @@ export async function runManagedLoop(initialRequest, {
           content: renderManagedToolResult(toolUse.name, neutralOutput),
         });
       } catch (error) {
+        if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
         if (!(error instanceof HttpError)) throw error;
         await onProgress(progressMessage(toolUse.name, toolUse.input, 'error'), {
           phase: 'managed_tool_error', name: normalizeManagedToolName(toolUse.name), round: round + 1,

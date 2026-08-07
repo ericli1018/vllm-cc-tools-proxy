@@ -160,6 +160,7 @@ export function loadConfig(env = process.env) {
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
     usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
+    managedTaskTimeoutMs: intValue(env.MANAGED_TASK_TIMEOUT_MS, 600000, 'MANAGED_TASK_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),
     progressHeartbeatMs: intValue(env.PROGRESS_HEARTBEAT_MS, 30000, 'PROGRESS_HEARTBEAT_MS', { min: 5000 }),

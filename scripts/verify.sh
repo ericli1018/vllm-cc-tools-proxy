@@ -27,6 +27,8 @@ grep -Fq 'CONCURRENCY_PROFILE: ${CONCURRENCY_PROFILE:-default}' compose.yaml
 grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
 grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
+grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-600000}' compose.yaml
+grep -q '^MANAGED_TASK_TIMEOUT_MS=600000$' .env.example
 grep -Fq 'VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MEDIA_CACHE_MAX_MB: ${MEDIA_CACHE_MAX_MB:-0}' compose.yaml
 grep -q '^MEDIA_CACHE_MAX_MB=0$' .env.example
@@ -75,7 +77,7 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.18'
+test "$(node -p "require('./package.json').version")" = '0.2.19'
 
 
 test -f src/proxy/native-web-tools.js

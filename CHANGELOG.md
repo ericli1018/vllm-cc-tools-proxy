@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.19 - 2026-08-07
+
+- Applied managed final-response validation to every Base-model response, including responses that already contain structured `tool_use` blocks.
+- Prevented malformed thinking/text protocol markup from being bypassed merely because a valid tool call was also present.
+- Changed continuation recovery to preserve tools while forcing `enable_thinking=false` and `preserve_thinking=false`.
+- Added a bounded neutralized excerpt of the previous incomplete model state to continuation recovery so recovery continues instead of restarting blind.
+- Added incoming Claude Code `tool_result` protocol quarantine for nested text and string payloads while preserving ordinary user text.
+- Added exact consecutive managed-action detection with the terminal `managed_no_progress` code before duplicate execution.
+- Added a 10-minute managed-task deadline via `MANAGED_TASK_TIMEOUT_MS` and an internal four-minute per-model-round cap with `managed_task_timeout` / `managed_model_timeout` errors.
+- Added content-free `laguna_runtime_contract_violation` telemetry for Poolside parser/reasoning contract anomalies.
+- Preserved V0.2.18 response-side Native Web containment; Anthropic-native Web Search result/citation/count emulation remains outside this release.
+- Added regression coverage for mixed valid-tool/protocol-leak responses, recovery state continuity, tool-result isolation, duplicate-action blocking, and both timeout levels.
+
 ## 0.2.18 - 2026-08-07
 
 - Added response-side normalization for Native `server_tool_use` blocks named `web_search` or `web_fetch`.

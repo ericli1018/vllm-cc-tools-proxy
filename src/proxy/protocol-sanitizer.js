@@ -95,22 +95,49 @@ export function neutralizeProtocolValue(value, seen = new WeakMap()) {
   return clone;
 }
 
+function collectProtocolTags(value) {
+  const tags = [];
+  visitStrings(value, (text) => tags.push(...scanControlTags(text)));
+  return tags;
+}
+
 export function sanitizeProtocolHistory(messages) {
   if (!Array.isArray(messages)) return { messages, changed: false, tags: [] };
   let changed = false;
   const tags = [];
   const output = messages.map((message) => {
-    if (message?.role !== 'assistant' || !Array.isArray(message.content)) return structuredClone(message);
-    const clone = { ...message, content: message.content.map((block) => {
-      if (block?.type !== 'thinking' || typeof block.thinking !== 'string') return structuredClone(block);
-      const detected = scanControlTags(block.thinking);
-      if (detected.length === 0) return structuredClone(block);
+    if (message?.role === 'assistant' && Array.isArray(message.content)) {
+      return { ...message, content: message.content.map((block) => {
+        if (block?.type !== 'thinking' || typeof block.thinking !== 'string') return structuredClone(block);
+        const detected = scanControlTags(block.thinking);
+        if (detected.length === 0) return structuredClone(block);
+        changed = true;
+        tags.push(...detected);
+        const { signature: _staleSignature, ...unsignedBlock } = block;
+        return { ...unsignedBlock, thinking: neutralizeControlTags(block.thinking) };
+      }) };
+    }
+
+    if (message?.role === 'user' && Array.isArray(message.content)) {
+      return { ...message, content: message.content.map((block) => {
+        if (block?.type !== 'tool_result' || block.content === undefined) return structuredClone(block);
+        const detected = collectProtocolTags(block.content);
+        if (detected.length === 0) return structuredClone(block);
+        changed = true;
+        tags.push(...detected);
+        return { ...structuredClone(block), content: neutralizeProtocolValue(block.content) };
+      }) };
+    }
+
+    if (message?.role === 'tool' && message.content !== undefined) {
+      const detected = collectProtocolTags(message.content);
+      if (detected.length === 0) return structuredClone(message);
       changed = true;
       tags.push(...detected);
-      const { signature: _staleSignature, ...unsignedBlock } = block;
-      return { ...unsignedBlock, thinking: neutralizeControlTags(block.thinking) };
-    }) };
-    return clone;
+      return { ...structuredClone(message), content: neutralizeProtocolValue(message.content) };
+    }
+
+    return structuredClone(message);
   });
   return { messages: output, changed, tags };
 }

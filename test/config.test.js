@@ -235,3 +235,11 @@ test('protocol diagnostics use an internal timestamped temporary directory witho
   const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
   assert.match(config.protocolDiagnosticsDir, /vllm-cc-tools-proxy[\\/]protocol-snippets$/);
 });
+
+test('V0.2.19 managed task timeout has one simple bounded override', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(defaults.managedTaskTimeoutMs, 600000);
+  const custom = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '900000' });
+  assert.equal(custom.managedTaskTimeoutMs, 900000);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '1000' }), /MANAGED_TASK_TIMEOUT_MS/);
+});

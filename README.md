@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.18 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.18 architecture
+## V0.2.19 architecture
 
 ```text
 Claude Code
@@ -49,6 +49,80 @@ Startup behavior:
 6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
 
 A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
+
+## V0.2.19 managed stability gates
+
+V0.2.19 hardens the proxy-side managed execution loop used for WebSearch/WebFetch and media-assisted turns. It does **not** implement Anthropic-native Web Search result/citation emulation; that remains a separate compatibility layer.
+
+### 1. Validate every managed Base response
+
+V0.2.18 only entered final-response recovery when the Base response contained no structured `tool_use`. V0.2.19 runs the same protocol validation gate for **all** managed Base responses before any tool is dispatched.
+
+A response containing a valid structured `tool_use` plus leaked raw protocol markup in `thinking`/visible output is therefore rejected and recovered before the tool can execute. Structured tool arguments themselves remain data and may legitimately contain strings such as parser examples.
+
+### 2. Continuation recovery is non-thinking and state-aware
+
+Continuation recovery keeps the original tools and `tool_choice`, but now forces:
+
+```json
+{"chat_template_kwargs":{"enable_thinking":false,"preserve_thinking":false}}
+```
+
+The previous incomplete model state is copied into the recovery request only as a bounded, control-tag-neutralized data excerpt. This prevents the recovery call from restarting blind while also preventing raw `<tool_call>`, `<arg_key>`, `<arg_value>`, `<think>` and related markup from becoming active prompt syntax.
+
+For Laguna S 2.1 on vLLM, the expected runtime pair is:
+
+```text
+--tool-call-parser poolside_v1
+--reasoning-parser poolside_v1
+```
+
+When a managed response shows control-tag leakage or a final answer trapped only in reasoning, the proxy emits the content-free diagnostic `laguna_runtime_contract_violation` with the expected parser names and observed anomaly counts. This is observational telemetry; the proxy does not claim to introspect vLLM command-line flags remotely.
+
+### 3. Claude Code `tool_result` history is isolated
+
+Incoming Claude Code tool results are untrusted evidence. V0.2.19 recursively neutralizes known model-control tags inside `tool_result.content` before forwarding history to the Base model, including nested text arrays and string payloads. Ordinary user text is not rewritten.
+
+This extends the existing quarantine boundary beyond proxy-owned WebSearch/WebFetch results to Read/Bash/MCP and other Claude Code tool-result content.
+
+### 4. Exact repeated managed actions stop as no progress
+
+If two consecutive managed rounds request the exact same managed tool name and equivalent arguments, the second action is not executed. The request fails with:
+
+```text
+managed_no_progress
+```
+
+This prevents repeated WebSearch/WebFetch calls from consuming the remaining round budget without adding evidence. The normal `MAX_TOOL_ROUNDS` limit still applies to changing actions.
+
+### 5. Bounded model rounds and bounded managed tasks
+
+One additional simple override is available:
+
+```env
+MANAGED_TASK_TIMEOUT_MS=600000
+```
+
+Defaults:
+
+```text
+entire managed task: 600000 ms (10 minutes)
+one Base-model managed round: 240000 ms (4 minutes, internal fixed cap)
+```
+
+The per-round cap is intentionally internal so the ENV surface stays small. The effective round budget is always the smaller of 240 seconds and the remaining task budget.
+
+Timeout codes:
+
+```text
+managed_model_timeout
+  one Base-model round exceeded its bounded generation window
+
+managed_task_timeout
+  the complete proxy-managed workflow exhausted its total deadline
+```
+
+The total deadline also bounds proxy-owned tool execution. These limits are independent of the more general `VLLM_BASE_HEADERS_TIMEOUT_MS` / `VLLM_BASE_BODY_TIMEOUT_MS` transport protections.
 
 ## Quick start
 
@@ -206,6 +280,8 @@ base_generation_control_tags_detected
 ```
 
 Every string inside a managed tool result is recursively neutralized before it is serialized as Anthropic `tool_result`. This prevents fetched Markdown or search snippets containing `</tool_response>`, `</function_results>`, `<tool_call>`, ChatML tokens or related singular/plural wrappers from becoming active prompt syntax.
+
+V0.2.19 applies the same control-tag quarantine to **incoming Claude Code `tool_result` history** before any transformed request is sent to the Base model. The rewrite is limited to tool-result payloads and malformed assistant reasoning; ordinary user-visible text remains byte-preserved.
 
 V0.2.14 no longer treats every thinking-only response as a completed final answer. Invalid no-tool responses are routed conservatively: only a substantial structured answer with no continuation intent enters short final-channel recovery; unfinished reasoning, next-step planning, missing visible output and ambiguous content enter continuation recovery with the original tools preserved. A second invalid response is rejected as `response_recovery_exhausted`; raw protocol tags are not forwarded to Claude Code. Valid Base output is never regex-deleted or silently rewritten.
 

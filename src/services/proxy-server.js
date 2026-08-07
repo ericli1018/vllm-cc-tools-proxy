@@ -606,6 +606,8 @@ export function createProxyServer(config, dependencies = {}) {
             ),
           }),
           maxRounds: config.maxToolRounds,
+          taskTimeoutMs: config.managedTaskTimeoutMs,
+          modelRoundTimeoutMs: Math.min(240000, config.managedTaskTimeoutMs || 600000),
           onProgress,
           onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
           showInitialModelProgress: hasMedia,

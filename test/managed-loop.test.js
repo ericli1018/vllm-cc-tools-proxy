@@ -50,7 +50,7 @@ test('runManagedLoop rejects an unbounded managed-tool loop', async () => {
   let sequence = 0;
   await assert.rejects(
     runManagedLoop({ messages: [] }, {
-      upstream: async () => response([{ type: 'tool_use', id: `t${sequence++}`, name: 'WebSearch', input: { query: 'loop' } }], 'tool_use'),
+      upstream: async () => response([{ type: 'tool_use', id: `t${sequence}`, name: 'WebSearch', input: { query: `loop-${sequence++}` } }], 'tool_use'),
       executeTool: async () => ({ results: [] }),
       maxRounds: 2,
     }),
@@ -423,8 +423,11 @@ test('runManagedLoop preserves tools for unfinished thinking and executes a reco
       if (requests.length === 2) {
         assert.equal(request.tools.length, 2);
         assert.deepEqual(request.tool_choice, { type: 'auto' });
-        assert.equal(JSON.stringify(request.messages).includes('I still need to compare'), false);
+        assert.match(JSON.stringify(request.messages.at(-1)), /Previous incomplete model state/);
+        assert.match(JSON.stringify(request.messages.at(-1)), /I still need to compare/);
         assert.match(JSON.stringify(request.messages.at(-1)), /Complete exactly one valid next action/);
+        assert.equal(request.chat_template_kwargs.enable_thinking, false);
+        assert.equal(request.chat_template_kwargs.preserve_thinking, false);
         return response([{ type: 'tool_use', id: 'search-recovered', name: 'WebSearch', input: { query: 'official release notes' } }], 'tool_use');
       }
       const last = request.messages.at(-1);
@@ -635,4 +638,109 @@ test('runManagedLoop executes native web calls before handing off a mixed Claude
     { type: 'tool_use', id: 'read-after-search', name: 'Read', input: { file_path: '/project/a.c' } },
   ]);
   assert.doesNotMatch(JSON.stringify(result), /web_search|server_tool_use/);
+});
+
+test('V0.2.19 validates tool-use responses and recovers leaked protocol markup before dispatch', async () => {
+  const requests = [];
+  const diagnostics = [];
+  const executed = [];
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'research tls' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) {
+        return response([
+          { type: 'thinking', thinking: 'Need evidence <tool_call>WebSearch<arg_key>query</arg_key><arg_value>bad</arg_value></tool_call>' },
+          { type: 'tool_use', id: 'unsafe-original', name: 'WebSearch', input: { query: 'bad' } },
+        ], 'tool_use');
+      }
+      if (requests.length === 2) {
+        assert.equal(request.chat_template_kwargs.enable_thinking, false);
+        assert.equal(request.chat_template_kwargs.preserve_thinking, false);
+        assert.ok(Array.isArray(request.tools));
+        assert.match(JSON.stringify(request.messages.at(-1)), /Previous incomplete model state/);
+        assert.doesNotMatch(JSON.stringify(request.messages.at(-1)), /<tool_call>|<arg_key>|<arg_value>/);
+        return response([{ type: 'tool_use', id: 'safe-recovered', name: 'WebSearch', input: { query: 'good' } }], 'tool_use');
+      }
+      return response([{ type: 'text', text: 'done' }]);
+    },
+    executeTool: async (toolUse) => { executed.push(toolUse.id); return { results: [] }; },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(result.content[0].text, 'done');
+  assert.deepEqual(executed, ['safe-recovered']);
+  assert.ok(diagnostics.some((entry) => entry.event === 'laguna_runtime_contract_violation'
+    && entry.details.control_tag_count > 0));
+});
+
+test('V0.2.19 continuation recovery carries bounded sanitized prior state with thinking disabled', async () => {
+  const requests = [];
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'continue research' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) {
+        return response([{ type: 'thinking', thinking: `I still need official release notes. ${'<tool_call>'.repeat(1500)}` }]);
+      }
+      const rendered = JSON.stringify(request.messages.at(-1));
+      assert.equal(request.chat_template_kwargs.enable_thinking, false);
+      assert.equal(request.chat_template_kwargs.preserve_thinking, false);
+      assert.match(rendered, /Previous incomplete model state/);
+      assert.doesNotMatch(rendered, /<tool_call>/);
+      assert.ok(rendered.length < 12000);
+      return response([{ type: 'text', text: 'recovered final' }]);
+    },
+    executeTool: async () => ({}),
+  });
+  assert.equal(result.content[0].text, 'recovered final');
+  assert.equal(requests.length, 2);
+});
+
+test('V0.2.19 stops an exact repeated managed action as no progress before executing it twice', async () => {
+  let calls = 0;
+  let executions = 0;
+  await assert.rejects(runManagedLoop({ messages: [] }, {
+    upstream: async () => {
+      calls += 1;
+      return response([{ type: 'tool_use', id: `same-${calls}`, name: 'WebSearch', input: { query: 'same query' } }], 'tool_use');
+    },
+    executeTool: async () => { executions += 1; return { results: [] }; },
+    maxRounds: 6,
+  }), (error) => error.code === 'managed_no_progress');
+  assert.equal(calls, 2);
+  assert.equal(executions, 1);
+});
+
+test('V0.2.19 bounds one stalled model round independently of the Base upstream timeout', async () => {
+  await assert.rejects(runManagedLoop({ messages: [] }, {
+    upstream: async (_request, signal) => new Promise((resolve, reject) => {
+      signal.addEventListener('abort', () => reject(signal.reason || new Error('aborted')), { once: true });
+    }),
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 20,
+    taskTimeoutMs: 1000,
+  }), (error) => error.code === 'managed_model_timeout');
+});
+
+test('V0.2.19 bounds the entire managed task across otherwise progressing rounds', async () => {
+  let call = 0;
+  await assert.rejects(runManagedLoop({ messages: [] }, {
+    upstream: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 18));
+      call += 1;
+      return response([{ type: 'tool_use', id: `t-${call}`, name: 'WebSearch', input: { query: `q-${call}` } }], 'tool_use');
+    },
+    executeTool: async () => ({ results: [] }),
+    maxRounds: 12,
+    modelRoundTimeoutMs: 500,
+    taskTimeoutMs: 45,
+  }), (error) => error.code === 'managed_task_timeout');
+  assert.ok(call >= 2);
 });
