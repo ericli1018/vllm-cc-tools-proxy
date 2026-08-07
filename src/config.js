@@ -89,6 +89,14 @@ export function loadConfig(env = process.env) {
   const vllmBaseUrl = normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true });
   const vllmBaseApiKey = env.VLLM_BASE_API_KEY || '';
   const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
+  const webToolDiagnostic = Object.freeze({
+    enabled: booleanValue(env.DIAGNOSTIC_WEB_TOOL_PASSTHROUGH, false, 'DIAGNOSTIC_WEB_TOOL_PASSTHROUGH'),
+    trace: booleanValue(env.DIAGNOSTIC_WEB_TOOL_TRACE, false, 'DIAGNOSTIC_WEB_TOOL_TRACE'),
+    searchPassthroughCount: intValue(env.DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT, 1, 'DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT', { min: 0, max: 100 }),
+    fetchPassthroughCount: intValue(env.DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT, 1, 'DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT', { min: 0, max: 100 }),
+    traceDir: path.resolve(env.DIAGNOSTIC_WEB_TOOL_TRACE_DIR || '/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace'),
+  });
+
   const webFetchProcessor = Object.freeze({
     enabled: booleanValue(env.WEB_FETCH_PROCESSOR_ENABLED, true, 'WEB_FETCH_PROCESSOR_ENABLED'),
     provider: enumValue(env.WEB_FETCH_PROCESSOR_PROVIDER, 'vllm', 'WEB_FETCH_PROCESSOR_PROVIDER', ['vllm', 'ollama']),
@@ -173,6 +181,7 @@ export function loadConfig(env = process.env) {
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),
     webFetchApiKey: env.WEB_FETCH_API_KEY || '',
     webFetchProcessor,
+    webToolDiagnostic,
     logLevel: env.LOG_LEVEL || 'info',
     logProtocolSnippets: booleanValue(env.LOG_PROTOCOL_SNIPPETS, false, 'LOG_PROTOCOL_SNIPPETS'),
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),

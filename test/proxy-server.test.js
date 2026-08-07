@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.21, admission and cache state', async (t) => {
+test('proxy health endpoint reports diagnostic release, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.21', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.21-diagnostic.1', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -1547,4 +1547,157 @@ test('V0.2.19.2 neutralizes protocol tags only inside tool description fields be
   assert.deepEqual(observed.tools[0].input_schema.properties.literal.enum, ['<tool_call>']);
   assert.equal(observed.tools[0].input_schema.properties.literal.default, '<thinking>');
   assert.match(observed.messages[0].content, /<thinking>/);
+});
+
+test('diagnostic build passes one WebSearch through to Claude Code and writes full boundary trace events', async (t) => {
+  const traceEvents = [];
+  let modelCalls = 0;
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    modelCalls += 1;
+    const body = modelCalls === 1
+      ? {
+        id: 'diag-search', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 'diag-search-1', name: 'WebSearch', input: { query: 'native renderer probe' } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 },
+      }
+      : {
+        id: 'diag-final', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'AFTER CLIENT TOOL RESULT' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 3 },
+      };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    searxngUrl: 'http://127.0.0.1:9',
+    webToolDiagnostic: {
+      enabled: true,
+      trace: true,
+      searchPassthroughCount: 1,
+      fetchPassthroughCount: 1,
+      traceDir: '/unused-in-test',
+    },
+  }), {
+    webToolDiagnosticTraceStore: { write: async (entry) => { traceEvents.push(structuredClone(entry)); return { file_path: `/trace/${traceEvents.length}.json` }; } },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const tools = [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object', properties: { query: { type: 'string' } } } }];
+  const first = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer client-secret' },
+    body: JSON.stringify({ model: 'm', stream: false, tools, messages: [{ role: 'user', content: 'probe native WebSearch UI' }] }),
+  });
+  assert.equal(first.status, 200);
+  const firstBody = await first.json();
+  assert.equal(firstBody.content[0].type, 'tool_use');
+  assert.equal(firstBody.content[0].name, 'WebSearch');
+  assert.equal(firstBody.content[0].id, 'diag-search-1');
+
+  const second = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false, tools,
+      messages: [
+        { role: 'user', content: 'probe native WebSearch UI' },
+        { role: 'assistant', content: firstBody.content },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'diag-search-1', content: 'CLAUDE CODE SEARCH RESULT' }] },
+      ],
+    }),
+  });
+  assert.equal(second.status, 200);
+  assert.equal((await second.json()).content[0].text, 'AFTER CLIENT TOOL RESULT');
+
+  assert.ok(traceEvents.some((entry) => entry.event === 'client_request'));
+  assert.ok(traceEvents.some((entry) => entry.event === 'base_model_request'));
+  assert.ok(traceEvents.some((entry) => entry.event === 'base_model_response'));
+  assert.ok(traceEvents.some((entry) => entry.event === 'diagnostic_web_tool_passthrough'));
+  assert.ok(traceEvents.some((entry) => entry.event === 'proxy_response'));
+  const returned = traceEvents.find((entry) => entry.event === 'client_tool_result_returned');
+  assert.ok(returned);
+  assert.equal(returned.payload.results[0].tool_use_id, 'diag-search-1');
+});
+
+test('diagnostic build independently passes one WebFetch through without calling Proxy fetch backend', async (t) => {
+  const traceEvents = [];
+  let fetchBackendCalls = 0;
+  const fetchBackend = await startJsonServer((_req, res) => {
+    fetchBackendCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'must not be called in passthrough probe' }));
+  });
+  const vllm = await startJsonServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'diag-fetch', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'tool_use', id: 'diag-fetch-1', name: 'WebFetch', input: { url: 'https://example.com/docs', prompt: 'read docs' } }],
+      stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    webFetchUrl: fetchBackend.url,
+    webToolDiagnostic: {
+      enabled: true, trace: true, searchPassthroughCount: 1, fetchPassthroughCount: 1, traceDir: '/unused-in-test',
+    },
+  }), {
+    webToolDiagnosticTraceStore: { write: async (entry) => { traceEvents.push(structuredClone(entry)); return { file_path: `/trace/${traceEvents.length}.json` }; } },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => fetchBackend.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ name: 'WebFetch', description: 'fetch', input_schema: { type: 'object', properties: { url: { type: 'string' } } } }],
+      messages: [{ role: 'user', content: 'fetch docs' }],
+    }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.content[0].type, 'tool_use');
+  assert.equal(body.content[0].name, 'WebFetch');
+  assert.equal(fetchBackendCalls, 0);
+  const passthrough = traceEvents.find((entry) => entry.event === 'diagnostic_web_tool_passthrough');
+  assert.ok(passthrough);
+  assert.deepEqual(passthrough.payload.decision.canonical_names, ['WebFetch']);
+});
+
+test('diagnostic trace records unmanaged HTTP routes so alternate Claude Code web backends are discoverable', async (t) => {
+  const traceEvents = [];
+  const upstream = await startJsonServer(async (req, res) => {
+    const body = await read(req);
+    assert.equal(req.url, '/api/web/search?x=1');
+    assert.equal(body.toString(), '{"query":"probe"}');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    webToolDiagnostic: {
+      enabled: true, trace: true, searchPassthroughCount: 1, fetchPassthroughCount: 1, traceDir: '/unused-in-test',
+    },
+  }), {
+    webToolDiagnosticTraceStore: { write: async (entry) => { traceEvents.push(structuredClone(entry)); return { file_path: `/trace/${traceEvents.length}.json` }; } },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/api/web/search?x=1`, {
+    method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer secret' },
+    body: '{"query":"probe"}',
+  });
+  assert.equal(response.status, 200);
+  const traced = traceEvents.find((entry) => entry.event === 'client_unmanaged_request');
+  assert.ok(traced);
+  assert.equal(traced.metadata.path, '/api/web/search');
+  assert.equal(traced.metadata.query, '?x=1');
+  assert.equal(traced.payload.raw_body_utf8, '{"query":"probe"}');
 });

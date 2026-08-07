@@ -64,6 +64,11 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /WEB_FETCH_PROCESSOR_CONCURRENCY:\s*\$\{WEB_FETCH_PROCESSOR_CONCURRENCY:-3\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_TIMEOUT_MS:\s*\$\{WEB_FETCH_PROCESSOR_TIMEOUT_MS:-300000\}/);
   assert.match(compose, /LOG_PROTOCOL_SNIPPETS:\s*\$\{LOG_PROTOCOL_SNIPPETS:-false\}/);
+  assert.match(compose, /DIAGNOSTIC_WEB_TOOL_PASSTHROUGH:\s*\$\{DIAGNOSTIC_WEB_TOOL_PASSTHROUGH:-false\}/);
+  assert.match(compose, /DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT:\s*\$\{DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT:-1\}/);
+  assert.match(compose, /DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT:\s*\$\{DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT:-1\}/);
+  assert.match(compose, /DIAGNOSTIC_WEB_TOOL_TRACE:\s*\$\{DIAGNOSTIC_WEB_TOOL_TRACE:-false\}/);
+  assert.match(compose, /DIAGNOSTIC_WEB_TOOL_TRACE_DIR:\s*\$\{DIAGNOSTIC_WEB_TOOL_TRACE_DIR:-\/var\/lib\/vllm-cc-tools-proxy\/diagnostics\/web-tool-trace\}/);
   assert.match(compose, /VLLM_BASE_CONNECT_TIMEOUT_MS:\s*\$\{VLLM_BASE_CONNECT_TIMEOUT_MS:-10000\}/);
   assert.match(compose, /VLLM_BASE_HEADERS_TIMEOUT_MS:\s*\$\{VLLM_BASE_HEADERS_TIMEOUT_MS:-900000\}/);
   assert.match(compose, /VLLM_BASE_BODY_TIMEOUT_MS:\s*\$\{VLLM_BASE_BODY_TIMEOUT_MS:-900000\}/);
@@ -74,15 +79,20 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_PROVIDER=vllm$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$/m);
+  assert.match(envExample, /^DIAGNOSTIC_WEB_TOOL_PASSTHROUGH=false$/m);
+  assert.match(envExample, /^DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT=1$/m);
+  assert.match(envExample, /^DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT=1$/m);
+  assert.match(envExample, /^DIAGNOSTIC_WEB_TOOL_TRACE=false$/m);
+  assert.match(envExample, /^DIAGNOSTIC_WEB_TOOL_TRACE_DIR=\/var\/lib\/vllm-cc-tools-proxy\/diagnostics\/web-tool-trace$/m);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.21', async () => {
+test('package version is V0.2.21 diagnostic prerelease', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.21');
-  assert.equal(lock.version, '0.2.21');
-  assert.equal(lock.packages[''].version, '0.2.21');
+  assert.equal(packageJson.version, '0.2.21-diagnostic.1');
+  assert.equal(lock.version, '0.2.21-diagnostic.1');
+  assert.equal(lock.packages[''].version, '0.2.21-diagnostic.1');
 });
 
 
@@ -198,6 +208,14 @@ test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
   assert.match(readme, /v1\/chat\/completions/);
 });
 
+
+test('README documents V0.2.21 diagnostic built-in WebSearch/WebFetch trace', () => {
+  assert.match(readme, /V0\.2\.21-diagnostic\.1/);
+  assert.match(readme, /DIAGNOSTIC_WEB_TOOL_PASSTHROUGH/);
+  assert.match(readme, /client_tool_result_returned/);
+  assert.match(readme, /client_unmanaged_request/);
+  assert.match(readme, /web-tool-trace/);
+});
 
 test('README documents V0.2.21 native Claude Code web-tool UI bridge', () => {
   assert.match(readme, /V0\.2\.21 Native Claude Code Web Tool UI Bridge/);

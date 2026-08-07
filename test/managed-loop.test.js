@@ -937,3 +937,27 @@ test('V0.2.19.2 deterministically promotes a complete thinking-only end_turn ans
   assert.equal(promoted.details.route, 'deterministic_final_promotion');
   assert.equal(promoted.details.source, 'thinking');
 });
+
+test('diagnostic passthrough returns ordinary WebSearch tool_use unchanged before Proxy execution', async () => {
+  let executed = 0;
+  const traced = [];
+  const modelResponse = response([
+    { type: 'tool_use', id: 'web-search-native-ui-1', name: 'WebSearch', input: { query: 'diagnostic native UI' } },
+  ], 'tool_use');
+  const result = await runManagedLoop({ messages: [] }, {
+    upstream: async () => modelResponse,
+    executeTool: async () => { executed += 1; return {}; },
+    diagnosticPassthroughWebTools: async ({ toolUses }) => ({
+      passthrough: true,
+      tool_ids: toolUses.map((tool) => tool.id),
+      tool_names: toolUses.map((tool) => tool.name),
+    }),
+    onTrace: async (event, payload) => traced.push({ event, payload }),
+  });
+  assert.equal(executed, 0);
+  assert.deepEqual(result.content, modelResponse.content);
+  assert.equal(result.content[0].type, 'tool_use');
+  assert.equal(result.content[0].name, 'WebSearch');
+  assert.equal(result.content[0].id, 'web-search-native-ui-1');
+  assert.ok(traced.some((entry) => entry.event === 'diagnostic_web_tool_passthrough'));
+});

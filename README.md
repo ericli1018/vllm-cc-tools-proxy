@@ -1098,3 +1098,37 @@ The suite covers request-side and response-side native Web Search/Web Fetch norm
 - Queue, semaphore and singleflight state are process-local; multiple proxy replicas do not share admission state.
 - Cache files are persistent, but multiple proxy replicas do not coordinate cache writes or distributed locks.
 - No persistent document-handle API or distributed Redis cache.
+
+## V0.2.21-diagnostic.1: Claude Code built-in Web tool trace
+
+This diagnostic prerelease is for determining whether Claude Code's visible `Web Search(...)` / `Web Fetch(...)` UI is driven by its built-in client-tool lifecycle rather than Anthropic server-tool blocks.
+
+Enable the probe explicitly:
+
+```env
+DIAGNOSTIC_WEB_TOOL_PASSTHROUGH=true
+DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT=1
+DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT=1
+DIAGNOSTIC_WEB_TOOL_TRACE=true
+DIAGNOSTIC_WEB_TOOL_TRACE_DIR=/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace
+```
+
+When enabled, the first eligible WebSearch and first eligible WebFetch produced by the Base model are returned to Claude Code as ordinary `tool_use` blocks without Proxy execution. Search and Fetch quotas are independent. This intentionally allows Claude Code to execute its built-in tools so the native UI and return path can be observed.
+
+Complete diagnostic records are written under:
+
+```text
+/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace/<session-id>/
+```
+
+Each event is a pretty JSON file and `index.jsonl` lists event order. Trace events include:
+
+- `client_request`: complete redacted Anthropic Messages request received from Claude Code.
+- `base_model_request`: exact managed request sent to the local Base model.
+- `base_model_response`: complete Base model response before Proxy web-tool execution.
+- `diagnostic_web_tool_passthrough`: exact tool-use response intentionally handed to Claude Code.
+- `proxy_response`: complete response prepared for Claude Code.
+- `client_tool_result_returned`: a later Claude Code request containing a correlated passthrough `tool_result`.
+- `client_unmanaged_request`: any non-Messages HTTP route reaching the Proxy, including method/path/query/headers/body, so alternate built-in Web backends are discoverable.
+
+Authorization, API keys, tokens, cookies, passwords and secret-shaped fields are redacted. User/model/tool content is otherwise retained because this build is specifically for protocol diagnosis. Disable the diagnostic flags after one capture.

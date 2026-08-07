@@ -6,6 +6,8 @@ import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
 import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
+import { WebToolDiagnosticTraceStore } from '../proxy/web-tool-diagnostic-trace-store.js';
+import { createWebToolDiagnosticController } from '../proxy/web-tool-diagnostic.js';
 import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
@@ -237,6 +239,44 @@ export function createProxyServer(config, dependencies = {}) {
       rootDir: config.protocolDiagnosticsDir,
     }))
     : null;
+  const webToolDiagnosticConfig = config.webToolDiagnostic || {
+    enabled: false,
+    trace: false,
+    searchPassthroughCount: 1,
+    fetchPassthroughCount: 1,
+    traceDir: '/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace',
+  };
+  const webToolDiagnosticController = dependencies.webToolDiagnosticController || createWebToolDiagnosticController(webToolDiagnosticConfig);
+  const webToolDiagnosticTraceStore = webToolDiagnosticConfig.trace
+    ? (dependencies.webToolDiagnosticTraceStore || new WebToolDiagnosticTraceStore({ rootDir: webToolDiagnosticConfig.traceDir }))
+    : null;
+
+  async function writeWebToolTrace(requestId, event, direction, metadata, payload) {
+    if (!webToolDiagnosticTraceStore) return null;
+    try {
+      const result = await webToolDiagnosticTraceStore.write({
+        request_id: requestId,
+        event,
+        direction,
+        metadata,
+        payload,
+      });
+      log(config, 'info', 'diagnostic_web_tool_trace_file', {
+        requestId,
+        trace_event: event,
+        file_path: result?.file_path || '',
+      });
+      return result;
+    } catch (error) {
+      log(config, 'warn', 'diagnostic_web_tool_trace_failed', {
+        requestId,
+        trace_event: event,
+        code: String(error?.code || 'trace_write_failed'),
+        message: String(error?.message || error),
+      });
+      return null;
+    }
+  }
 
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
@@ -299,9 +339,27 @@ export function createProxyServer(config, dependencies = {}) {
       if (!isMessagesPath) {
         releaseIngress = await admission.acquireIngress({ signal: abortController.signal });
         const rawBody = await readBody(req, config.limits.maxRequestBytes);
+        await writeWebToolTrace(
+          requestId,
+          'client_unmanaged_request',
+          'claude_code_to_proxy',
+          { method: req.method, path: url.pathname, query: url.search },
+          {
+            headers: req.headers,
+            raw_body_bytes: rawBody.length,
+            raw_body_utf8: rawBody.toString('utf8'),
+          },
+        );
         releaseIngress(); releaseIngress = null;
         log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'unmanaged_endpoint' });
         await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
+        await writeWebToolTrace(
+          requestId,
+          'client_unmanaged_request_completed',
+          'proxy_to_claude_code',
+          { method: req.method, path: url.pathname, query: url.search },
+          { completed: true },
+        );
         completed = true;
         return;
       }
@@ -315,6 +373,24 @@ export function createProxyServer(config, dependencies = {}) {
         await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
         completed = true;
         return;
+      }
+
+      await writeWebToolTrace(
+        requestId,
+        'client_request',
+        'claude_code_to_proxy',
+        { method: req.method, path: url.pathname, messages_path: messagesPath },
+        { headers: req.headers, body: original },
+      );
+      const returnedDiagnosticResults = webToolDiagnosticController.findReturnedToolResults(original.messages);
+      if (returnedDiagnosticResults.length > 0) {
+        await writeWebToolTrace(
+          requestId,
+          'client_tool_result_returned',
+          'claude_code_to_proxy',
+          { result_count: returnedDiagnosticResults.length },
+          { results: returnedDiagnosticResults },
+        );
       }
 
       const incomingSystemProtocolInventory = inventoryProtocolTags(original.system);
@@ -659,8 +735,31 @@ export function createProxyServer(config, dependencies = {}) {
           writeProtocolDiagnostics: protocolDiagnosticStore
             ? (bundle) => protocolDiagnosticStore.write({ request_id: requestId, ...bundle })
             : undefined,
+          diagnosticPassthroughWebTools: webToolDiagnosticConfig.enabled
+            ? (context) => webToolDiagnosticController.decide(context)
+            : undefined,
+          onTrace: webToolDiagnosticTraceStore
+            ? async (event, payload) => writeWebToolTrace(
+              requestId,
+              event,
+              event === 'base_model_request'
+                ? 'proxy_to_base_model'
+                : event === 'base_model_response'
+                  ? 'base_model_to_proxy'
+                  : 'proxy_internal',
+              { managed: true },
+              payload,
+            )
+            : undefined,
           signal: abortController.signal,
         });
+        await writeWebToolTrace(
+          requestId,
+          'proxy_response',
+          'proxy_to_claude_code',
+          { stream: request.stream === true, managed: true },
+          { response: result, diagnostic_state: webToolDiagnosticController.snapshot() },
+        );
         releaseManaged(); releaseManaged = null;
         if (request.stream === true) {
           const observedUsage = normalizeAnthropicUsage(result?.usage);

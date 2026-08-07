@@ -272,3 +272,12 @@
 ## 0.1.0 - 2026-08-04
 
 - Added initial Anthropic Messages-compatible proxy, sidecar parsers, OCR, managed web tools and progress streaming.
+
+## 0.2.21-diagnostic.1
+
+- Adds a one-shot diagnostic passthrough for Claude Code built-in `WebSearch` and `WebFetch` tool calls.
+- Search and Fetch use independent passthrough quotas so each built-in renderer/executor path can be observed once without disabling the other.
+- Adds persistent, private, redacted file tracing for Claude Code → Proxy, Proxy → Base model, Base model → Proxy, passthrough responses, returned client `tool_result`, and unmanaged HTTP routes.
+- Diagnostic traces default to `/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace/` under the existing persistent `proxy-data` volume.
+- Console logs contain only trace-file summaries; complete payloads are written to trace files with secrets redacted.
+- Normal v0.2.21 managed WebSearch/WebFetch behavior remains unchanged unless diagnostic passthrough is explicitly enabled.

@@ -295,3 +295,30 @@ test('V0.2.19.3 WebFetch Processor provider defaults to vllm and auto-completes 
     WEB_FETCH_PROCESSOR_PROVIDER: 'other',
   }), /WEB_FETCH_PROCESSOR_PROVIDER/);
 });
+
+test('diagnostic web tool tracing is explicit, persistent, and separately bounded for Search and Fetch', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.deepEqual(defaults.webToolDiagnostic, {
+    enabled: false,
+    trace: false,
+    searchPassthroughCount: 1,
+    fetchPassthroughCount: 1,
+    traceDir: '/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace',
+  });
+
+  const configured = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    DIAGNOSTIC_WEB_TOOL_PASSTHROUGH: 'true',
+    DIAGNOSTIC_WEB_TOOL_TRACE: 'true',
+    DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT: '2',
+    DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT: '3',
+    DIAGNOSTIC_WEB_TOOL_TRACE_DIR: '/data/trace',
+  });
+  assert.deepEqual(configured.webToolDiagnostic, {
+    enabled: true,
+    trace: true,
+    searchPassthroughCount: 2,
+    fetchPassthroughCount: 3,
+    traceDir: '/data/trace',
+  });
+});

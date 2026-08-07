@@ -374,6 +374,8 @@ export async function runManagedLoop(initialRequest, {
   showInitialModelProgress = true,
   logProtocolSnippets = false,
   writeProtocolDiagnostics,
+  diagnosticPassthroughWebTools,
+  onTrace = () => {},
   signal,
   taskTimeoutMs = DEFAULT_MANAGED_TASK_TIMEOUT_MS,
   modelRoundTimeoutMs = DEFAULT_MODEL_ROUND_TIMEOUT_MS,
@@ -399,10 +401,19 @@ export async function runManagedLoop(initialRequest, {
     if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'model');
     const boundedMs = Math.max(1, Math.min(modelRoundTimeoutMs, remaining));
     const timeoutCode = remaining <= modelRoundTimeoutMs ? 'managed_task_timeout' : 'managed_model_timeout';
+    await onTrace('base_model_request', {
+      round: activeRound,
+      timeout_ms: boundedMs,
+      request: structuredClone(body),
+    });
     const rawResponse = await runWithBoundedTime(
       (boundedSignal) => upstream(body, boundedSignal),
       { signal: upstreamSignal, timeoutMs: boundedMs, timeoutCode, phase: 'model' },
     );
+    await onTrace('base_model_response', {
+      round: activeRound,
+      response: structuredClone(rawResponse),
+    });
     const normalized = normalizeNativeWebToolResponse(rawResponse);
     if (normalized.changed) {
       await onDiagnostic('native_web_response_contained', {
@@ -514,6 +525,26 @@ export async function runManagedLoop(initialRequest, {
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
     if (toolUses.length === 0) return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+    if (typeof diagnosticPassthroughWebTools === 'function' && toolUses.some((block) => isManagedToolName(block.name))) {
+      const decision = await diagnosticPassthroughWebTools({
+        round: round + 1,
+        response: structuredClone(response),
+        toolUses: structuredClone(toolUses),
+      });
+      if (decision?.passthrough === true) {
+        await onTrace('diagnostic_web_tool_passthrough', {
+          round: round + 1,
+          decision: structuredClone(decision),
+          response: structuredClone(response),
+        });
+        await onDiagnostic('diagnostic_web_tool_passthrough', {
+          round: round + 1,
+          tool_names: toolUses.map((block) => String(block?.name || '')),
+          tool_ids: toolUses.map((block) => String(block?.id || '')),
+        });
+        return response;
+      }
+    }
     if (toolUses.some((block) => !isManagedToolName(block.name))) {
       const managedToolNames = toolUses.filter((block) => isManagedToolName(block.name)).map((block) => normalizeManagedToolName(block.name));
       if (managedToolNames.length > 0) {
