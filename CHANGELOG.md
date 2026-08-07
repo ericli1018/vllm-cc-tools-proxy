@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.19.3 - 2026-08-07
+
+- Kept external release label `V0.2.19.3` while using npm-valid package metadata `0.2.19+hotfix.3`.
+- Added `WEB_FETCH_PROCESSOR_PROVIDER` with strict `vllm` / `ollama` values and default `vllm`.
+- Added WebFetch Processor base-URL normalization so root endpoints such as `http://192.168.10.169:11434` automatically become `/v1/chat/completions`; `/v1` and `/v1/messages` are normalized to the same OpenAI-compatible chat endpoint, while already complete endpoints are preserved.
+- Preserved explicit non-root custom Processor endpoints for backward compatibility.
+- Kept vLLM thinking control on `chat_template_kwargs.enable_thinking`.
+- Added Ollama OpenAI-compatible thinking control through `reasoning_effort=none` when `WEB_FETCH_PROCESSOR_THINK=false` and `reasoning_effort=high` when true.
+- Preserved independent Processor URL/API key/model, global concurrency 1..3, per-call timeout, managed budgets, deterministic final promotion and tool-description isolation.
+- Native Web Search result/citation/count emulation remains outside this hotfix.
+
 ## 0.2.19.2 - 2026-08-07
 
 - Kept external release label `V0.2.19.2` while using npm-valid package metadata `0.2.19+hotfix.2`.

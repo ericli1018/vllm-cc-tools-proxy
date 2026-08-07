@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.2 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.19.3 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.19.2 architecture
+## V0.2.19.3 architecture
 
 ```text
 Claude Code
@@ -52,6 +52,12 @@ A local source modification or non-fast-forward history intentionally stops star
 
 ## V0.2.19.2 deterministic final promotion and tool-description isolation
 
+## V0.2.19.3 WebFetch Processor provider routing
+
+V0.2.19.3 adds explicit `WEB_FETCH_PROCESSOR_PROVIDER=vllm|ollama` routing while keeping the OpenAI-compatible `/v1/chat/completions` wire format. Root/base Processor URLs are expanded automatically, so `http://192.168.10.169:11434` becomes `http://192.168.10.169:11434/v1/chat/completions`. Complete endpoints and existing custom non-root paths are preserved.
+
+For `vllm`, thinking control uses `chat_template_kwargs.enable_thinking`. For `ollama`, the OpenAI-compatible request uses `reasoning_effort=none` when `WEB_FETCH_PROCESSOR_THINK=false` and `reasoning_effort=high` when true. URL, API key, model, 3-slot concurrency and timeout remain independently configurable.
+
 V0.2.19.2 adds a strict fast path for Laguna/Poolside responses where the model has already completed the user answer but `poolside_v1` returns it only as a `thinking` block. If the response is `end_turn`, thinking-only, has no tool calls, no active protocol tags, has answer-like structure, and contains no continuation intent, the proxy promotes that text directly into one visible Anthropic `text` block. No second Base-model recovery call is made. Unsafe cases keep the existing final-channel or continuation recovery path.
 
 Claude Code tool documentation can itself contain literal protocol examples such as `<thinking>...</thinking>` and `<tool_call>`. Before tool definitions reach the Base vLLM, V0.2.19.2 recursively neutralizes active control tags only in fields named `description`, including nested JSON-schema descriptions. Tool names, enums, defaults, schema values and ordinary user text are preserved exactly.
@@ -75,6 +81,7 @@ The value is strictly bounded to `1..3` and defaults to `3`. A fourth Processor 
 Processor routing remains independently configurable:
 
 ```env
+WEB_FETCH_PROCESSOR_PROVIDER=vllm
 WEB_FETCH_PROCESSOR_URL=
 WEB_FETCH_PROCESSOR_API_KEY=
 WEB_FETCH_PROCESSOR_MODEL=
@@ -84,7 +91,7 @@ WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
 WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
 ```
 
-A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
+`WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama` and defaults to `vllm`. A Processor base URL such as `http://192.168.10.169:11434` is normalized to `/v1/chat/completions`; an already complete `/v1/chat/completions` endpoint is preserved. A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
 
 ### Slow-model managed budgets
 
@@ -855,6 +862,7 @@ WEB_FETCH_URL=http://host.docker.internal:8090/
 WEB_FETCH_API_KEY=
 
 WEB_FETCH_PROCESSOR_ENABLED=true
+WEB_FETCH_PROCESSOR_PROVIDER=vllm
 WEB_FETCH_PROCESSOR_URL=
 WEB_FETCH_PROCESSOR_MODEL=
 WEB_FETCH_PROCESSOR_API_KEY=
@@ -868,7 +876,7 @@ WEB_FETCH_PROCESSOR_THINK=false
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
 - Array responses using `page_content` and `metadata` are normalized; the older object response shape remains accepted.
 - Raw page content is deterministically cleaned and protocol-neutralized, then an isolated WebFetch Processor applies the tool's `prompt` through `/v1/chat/completions` with no tools or Claude Code history.
-- Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`. `WEB_FETCH_PROCESSOR_CONCURRENCY` defaults to 3 and is bounded to 1..3; `WEB_FETCH_PROCESSOR_TIMEOUT_MS` defaults to 300000 ms.
+- `WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama`. A root/base Processor URL automatically receives `/v1/chat/completions`; `/v1` receives `/chat/completions`; an already complete endpoint is unchanged. Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. For provider `vllm`, `WEB_FETCH_PROCESSOR_THINK` maps to `chat_template_kwargs.enable_thinking`. For provider `ollama`, it maps to OpenAI-compatible `reasoning_effort` (`none` when false, `high` when true). `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`. `WEB_FETCH_PROCESSOR_CONCURRENCY` defaults to 3 and is bounded to 1..3; `WEB_FETCH_PROCESSOR_TIMEOUT_MS` defaults to 300000 ms.
 - Successful WebSearch/WebFetch results are readable multiline VCC evidence blocks rather than JSON-stringified objects. One short idempotent System supplement explains the result fields to the Base model.
 - Processor timeout, HTTP failure, invalid response, tool-call output or protocol-tag leakage degrades to a bounded cleaned excerpt; the complete raw page is not forwarded as fallback.
 - HTTP rejection, robots denial and other expected fetch-service failures become correlated `tool_result` blocks with `is_error: true`. The Base model may choose another source instead of terminating the complete Claude Code request.

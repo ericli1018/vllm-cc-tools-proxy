@@ -28,7 +28,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -56,6 +56,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /SSE_DRAIN_TIMEOUT_MS:\s*\$\{SSE_DRAIN_TIMEOUT_MS:-10000\}/);
   assert.match(compose, /WEB_FETCH_API_KEY:\s*\$\{WEB_FETCH_API_KEY:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_ENABLED:\s*\$\{WEB_FETCH_PROCESSOR_ENABLED:-true\}/);
+  assert.match(compose, /WEB_FETCH_PROCESSOR_PROVIDER:\s*\$\{WEB_FETCH_PROCESSOR_PROVIDER:-vllm\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_URL:\s*\$\{WEB_FETCH_PROCESSOR_URL:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_MODEL:\s*\$\{WEB_FETCH_PROCESSOR_MODEL:-\}/);
   assert.match(compose, /WEB_FETCH_PROCESSOR_API_KEY:\s*\$\{WEB_FETCH_PROCESSOR_API_KEY:-\}/);
@@ -70,17 +71,18 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
   assert.match(envExample, /^MANAGED_TASK_TIMEOUT_MS=1800000$/m);
   assert.match(envExample, /^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$/m);
+  assert.match(envExample, /^WEB_FETCH_PROCESSOR_PROVIDER=vllm$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$/m);
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.19.2', async () => {
+test('package version is V0.2.19.3', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.19+hotfix.2');
-  assert.equal(lock.version, '0.2.19+hotfix.2');
-  assert.equal(lock.packages[''].version, '0.2.19+hotfix.2');
+  assert.equal(packageJson.version, '0.2.19+hotfix.3');
+  assert.equal(lock.version, '0.2.19+hotfix.3');
+  assert.equal(lock.packages[''].version, '0.2.19+hotfix.3');
 });
 
 
@@ -170,6 +172,7 @@ test('README documents V0.2.19 managed stability gates', () => {
 
 test('README documents V0.2.19.1 parallel WebFetch and slow-model budgets', () => {
   assert.match(readme, /V0\.2\.19\.1/);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_PROVIDER/);
   assert.match(readme, /WEB_FETCH_PROCESSOR_CONCURRENCY/);
   assert.match(readme, /WEB_FETCH_PROCESSOR_TIMEOUT_MS/);
   assert.match(readme, /MANAGED_MODEL_ROUND_TIMEOUT_MS/);
@@ -185,4 +188,12 @@ test('README documents V0.2.19.2 deterministic promotion and tool-description is
   assert.match(readme, /managed_final_response_promoted/);
   assert.match(readme, /protocol_tool_descriptions_sanitized/);
   assert.match(readme, /fields named `description`/);
+});
+
+
+test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
+  assert.match(readme, /V0\.2\.19\.3 WebFetch Processor provider routing/);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_PROVIDER/);
+  assert.match(readme, /reasoning_effort/);
+  assert.match(readme, /v1\/chat\/completions/);
 });

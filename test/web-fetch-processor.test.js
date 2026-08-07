@@ -190,3 +190,59 @@ test('V0.2.19.1 WebFetch Processor uses the configured per-call timeout and fall
   assert.ok(Date.now() - startedAt < 70);
   assert.ok(events.some((entry) => entry.event === 'web_fetch_processor_fallback' && entry.fields.reason === 'timeout'));
 });
+
+test('V0.2.19.3 Ollama OpenAI-compatible processor uses reasoning_effort and omits vLLM chat_template_kwargs', async (t) => {
+  let observed;
+  const backend = await startServer(async (req, res) => {
+    observed = { url: req.url, body: await readJson(req) };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'ollama processed' } }] }));
+  });
+  t.after(() => backend.server.close());
+
+  await processWebFetchContent(source(), {
+    prompt: 'Summarize.',
+    model: 'base-model',
+    processor: {
+      enabled: true,
+      provider: 'ollama',
+      url: `${backend.url}/v1/chat/completions`,
+      model: 'qwen3.5:9b',
+      apiKey: '',
+      think: false,
+      timeoutMs: 300000,
+    },
+  });
+
+  assert.equal(observed.url, '/v1/chat/completions');
+  assert.equal(observed.body.model, 'qwen3.5:9b');
+  assert.equal(observed.body.reasoning_effort, 'none');
+  assert.equal('chat_template_kwargs' in observed.body, false);
+});
+
+test('V0.2.19.3 Ollama processor maps THINK=true to high reasoning effort', async (t) => {
+  let body;
+  const backend = await startServer(async (req, res) => {
+    body = await readJson(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'processed' } }] }));
+  });
+  t.after(() => backend.server.close());
+
+  await processWebFetchContent(source(), {
+    prompt: 'Summarize.',
+    model: 'base-model',
+    processor: {
+      enabled: true,
+      provider: 'ollama',
+      url: `${backend.url}/v1/chat/completions`,
+      model: 'qwen3.5:9b',
+      apiKey: '',
+      think: true,
+      timeoutMs: 300000,
+    },
+  });
+
+  assert.equal(body.reasoning_effort, 'high');
+  assert.equal('chat_template_kwargs' in body, false);
+});

@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS LOG_PROTOCOL_SNIPPETS; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_PROVIDER WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS LOG_PROTOCOL_SNIPPETS; do
   grep -q "^${name}=" .env.example
 done
 grep -q '^CONCURRENCY_PROFILE=default$' .env.example
@@ -55,6 +55,7 @@ grep -Fq 'VLLM_BASE_HEADERS_TIMEOUT_MS: ${VLLM_BASE_HEADERS_TIMEOUT_MS:-900000}'
 grep -Fq 'VLLM_BASE_BODY_TIMEOUT_MS: ${VLLM_BASE_BODY_TIMEOUT_MS:-900000}' compose.yaml
 grep -Fq 'WEB_FETCH_API_KEY: ${WEB_FETCH_API_KEY:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_ENABLED: ${WEB_FETCH_PROCESSOR_ENABLED:-true}' compose.yaml
+grep -Fq 'WEB_FETCH_PROCESSOR_PROVIDER: ${WEB_FETCH_PROCESSOR_PROVIDER:-vllm}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_URL: ${WEB_FETCH_PROCESSOR_URL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_MODEL: ${WEB_FETCH_PROCESSOR_MODEL:-}' compose.yaml
 grep -Fq 'WEB_FETCH_PROCESSOR_API_KEY: ${WEB_FETCH_PROCESSOR_API_KEY:-}' compose.yaml
@@ -63,6 +64,7 @@ grep -Fq 'WEB_FETCH_PROCESSOR_CONCURRENCY: ${WEB_FETCH_PROCESSOR_CONCURRENCY:-3}
 grep -Fq 'WEB_FETCH_PROCESSOR_TIMEOUT_MS: ${WEB_FETCH_PROCESSOR_TIMEOUT_MS:-300000}' compose.yaml
 grep -Fq 'LOG_PROTOCOL_SNIPPETS: ${LOG_PROTOCOL_SNIPPETS:-false}' compose.yaml
 grep -q '^WEB_FETCH_PROCESSOR_ENABLED=true$' .env.example
+grep -q '^WEB_FETCH_PROCESSOR_PROVIDER=vllm$' .env.example
 grep -q '^WEB_FETCH_PROCESSOR_THINK=false$' .env.example
 grep -q '^WEB_FETCH_PROCESSOR_CONCURRENCY=3$' .env.example
 grep -q '^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$' .env.example
@@ -83,8 +85,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.19+hotfix.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.19.2'
+test "$(node -p "require('./package.json').version")" = '0.2.19+hotfix.3'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.19.3'
 
 
 test -f src/proxy/native-web-tools.js

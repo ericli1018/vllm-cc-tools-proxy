@@ -178,6 +178,7 @@ test('WebFetch Processor defaults inherit Base vLLM with slow-model-friendly con
   });
   assert.deepEqual(config.webFetchProcessor, {
     enabled: true,
+    provider: 'vllm',
     url: 'http://vllm:8000/v1/chat/completions',
     model: '',
     apiKey: 'base-secret',
@@ -201,6 +202,7 @@ test('WebFetch Processor supports explicit URL model key concurrency timeout and
   });
   assert.deepEqual(config.webFetchProcessor, {
     enabled: false,
+    provider: 'vllm',
     url: 'http://processor:9000/custom/chat',
     model: 'processor-model',
     apiKey: 'processor-secret',
@@ -263,4 +265,33 @@ test('V0.2.19.1 managed time budgets favor slow local models with bounded overri
   assert.equal(custom.managedModelRoundTimeoutMs, 480000);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '1000' }), /MANAGED_TASK_TIMEOUT_MS/);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_MODEL_ROUND_TIMEOUT_MS: '1000' }), /MANAGED_MODEL_ROUND_TIMEOUT_MS/);
+});
+
+test('V0.2.19.3 WebFetch Processor provider defaults to vllm and auto-completes base URLs', () => {
+  const defaults = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_URL: 'http://processor:9000',
+  });
+  assert.equal(defaults.webFetchProcessor.provider, 'vllm');
+  assert.equal(defaults.webFetchProcessor.url, 'http://processor:9000/v1/chat/completions');
+
+  const ollama = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_PROVIDER: 'ollama',
+    WEB_FETCH_PROCESSOR_URL: 'http://192.168.10.169:11434/',
+  });
+  assert.equal(ollama.webFetchProcessor.provider, 'ollama');
+  assert.equal(ollama.webFetchProcessor.url, 'http://192.168.10.169:11434/v1/chat/completions');
+
+  const complete = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_PROVIDER: 'ollama',
+    WEB_FETCH_PROCESSOR_URL: 'http://192.168.10.169:11434/v1/chat/completions',
+  });
+  assert.equal(complete.webFetchProcessor.url, 'http://192.168.10.169:11434/v1/chat/completions');
+
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    WEB_FETCH_PROCESSOR_PROVIDER: 'other',
+  }), /WEB_FETCH_PROCESSOR_PROVIDER/);
 });

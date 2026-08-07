@@ -66,6 +66,21 @@ function normalizedUrl(value, fallback, name, { required = false } = {}) {
   return candidate.replace(/\/$/, '');
 }
 
+function normalizedChatCompletionsUrl(value, fallback, name) {
+  const candidate = normalizedUrl(value, fallback, name);
+  if (!candidate) return '';
+  const url = new URL(candidate);
+  const clean = url.pathname.replace(/\/+$/, '');
+  if (clean.endsWith('/v1/chat/completions')) url.pathname = clean;
+  else if (clean.endsWith('/v1/messages')) url.pathname = `${clean.slice(0, -'/messages'.length)}/chat/completions`;
+  else if (clean.endsWith('/v1')) url.pathname = `${clean}/chat/completions`;
+  else if (!clean) url.pathname = '/v1/chat/completions';
+  else return candidate.replace(/\/$/, '');
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
 export function loadConfig(env = process.env) {
   const profileName = env.RESOURCE_PROFILE || 'default';
   const profile = PROFILE_LIMITS[profileName];
@@ -76,7 +91,8 @@ export function loadConfig(env = process.env) {
   const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
   const webFetchProcessor = Object.freeze({
     enabled: booleanValue(env.WEB_FETCH_PROCESSOR_ENABLED, true, 'WEB_FETCH_PROCESSOR_ENABLED'),
-    url: normalizedUrl(
+    provider: enumValue(env.WEB_FETCH_PROCESSOR_PROVIDER, 'vllm', 'WEB_FETCH_PROCESSOR_PROVIDER', ['vllm', 'ollama']),
+    url: normalizedChatCompletionsUrl(
       env.WEB_FETCH_PROCESSOR_URL,
       derivedChatCompletionsUrl(vllmBaseUrl),
       'WEB_FETCH_PROCESSOR_URL',

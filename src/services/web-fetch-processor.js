@@ -172,23 +172,26 @@ export async function processWebFetchContent(source, {
   const endpoint = new URL(processor.url);
   const headers = { 'content-type': 'application/json' };
   if (processor.apiKey) headers.authorization = `Bearer ${processor.apiKey}`;
+  const provider = processor.provider || 'vllm';
   const body = {
     model: selectedModel,
     stream: false,
     temperature: 0.1,
     max_tokens: 2500,
-    chat_template_kwargs: { enable_thinking: Boolean(processor.think) },
     messages: [
       { role: 'system', content: PROCESSOR_SYSTEM_PROMPT },
       { role: 'user', content: processorUserPrompt(source, prompt, clean.text) },
     ],
   };
+  if (provider === 'ollama') body.reasoning_effort = processor.think ? 'high' : 'none';
+  else body.chat_template_kwargs = { enable_thinking: Boolean(processor.think) };
 
   const releaseProcessor = acquireProcessor ? await acquireProcessor({ signal }) : () => {};
   await onEvent('web_fetch_processor_request', {
     backend_host: endpoint.host,
     endpoint_path: endpoint.pathname || '/',
     authenticated: Boolean(processor.apiKey),
+    provider,
     think: Boolean(processor.think),
     source_chars: clean.originalChars,
     clean_chars: clean.cleanChars,
