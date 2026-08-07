@@ -75,7 +75,15 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.16'
+test "$(node -p "require('./package.json').version")" = '0.2.17'
+
+
+test -f src/proxy/native-web-tools.js
+grep -Fq 'normalizeNativeWebToolsRequest' src/services/proxy-server.js
+grep -Fq 'native_web_tools_normalized' src/services/proxy-server.js
+grep -Fq 'web_search_' src/proxy/native-web-tools.js
+grep -Fq 'web_fetch_' src/proxy/native-web-tools.js
+grep -Fq 'max_uses_exceeded' src/proxy/native-web-tools.js
 
 test -f src/proxy/anthropic-usage.js
 grep -Fq 'managed_usage_preflight_succeeded' src/services/proxy-server.js

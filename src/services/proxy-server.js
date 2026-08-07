@@ -19,6 +19,7 @@ import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
+import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer } from '../proxy/native-web-tools.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -350,6 +351,7 @@ export function createProxyServer(config, dependencies = {}) {
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
+          || classification.reasons.includes('native_web_tool')
         : classification.managed;
 
       if (initiallyManaged) {
@@ -385,12 +387,40 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       validateMessagesRequest(original);
-      let request = { ...original, messages: cleanedMessages };
+      const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
+      let request = normalizedWebTools.request;
+      const managedWebPolicyEnforcer = createManagedWebPolicyEnforcer(normalizedWebTools.policies);
+      if (normalizedWebTools.changed) {
+        log(config, 'info', 'native_web_tools_normalized', {
+          requestId,
+          native_tool_count: normalizedWebTools.nativeToolCount,
+          policy_tools: Object.keys(normalizedWebTools.policies).sort(),
+          has_max_uses: Object.values(normalizedWebTools.policies).some((policy) => Number.isInteger(policy.maxUses)),
+          has_domain_policy: Object.values(normalizedWebTools.policies).some((policy) => policy.allowedDomains.length || policy.blockedDomains.length),
+          unsupported_field_count: Object.values(normalizedWebTools.policies)
+            .reduce((total, policy) => total + policy.unsupportedFields.length, 0),
+        });
+      }
       const usagePreflightRequest = request.stream === true
         ? { ...request, messages: request.messages }
         : null;
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
+
+      if (messagesPath === '/v1/messages/count_tokens' && !hasMedia) {
+        releaseIngress(); releaseIngress = null;
+        log(config, 'info', 'route_decision', {
+          requestId,
+          method: req.method,
+          path: url.pathname,
+          decision: 'native_web_tool_normalization',
+          reason: 'count_tokens_schema_compatibility',
+        });
+        const payload = await callUpstreamJson(request, config, req.headers, abortController.signal, messagesPath);
+        completed = true;
+        return sendJson(res, 200, payload);
+      }
+
       const preloadedCache = new Map();
       let allMediaCached = false;
 
@@ -567,6 +597,7 @@ export function createProxyServer(config, dependencies = {}) {
           upstream,
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
             model: request.model || '',
+            policy: managedWebPolicyEnforcer.consume(toolUse.name),
             onEvent: (event, fields) => log(
               config,
               event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',

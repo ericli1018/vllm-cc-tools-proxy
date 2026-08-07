@@ -67,12 +67,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.16', async () => {
+test('package version is V0.2.17', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.16');
-  assert.equal(lock.version, '0.2.16');
-  assert.equal(lock.packages[''].version, '0.2.16');
+  assert.equal(packageJson.version, '0.2.17');
+  assert.equal(lock.version, '0.2.17');
+  assert.equal(lock.packages[''].version, '0.2.17');
 });
 
 
@@ -117,11 +117,22 @@ test('README documents V0.2.15 proxy-turn progress semantics', () => {
 });
 
 
-test('README documents V0.2.16 Anthropic usage preservation and auto-compact compatibility', () => {
+test('README documents V0.2.17 Anthropic usage preservation and auto-compact compatibility', () => {
   assert.match(readme, /V0\.2\.16 Anthropic usage preservation/);
   assert.match(readme, /\/v1\/messages\/count_tokens/);
   assert.match(readme, /managed_usage_preflight_succeeded/);
   assert.match(readme, /managed_usage_preflight_failed/);
   assert.match(readme, /CLAUDE_CODE_AUTO_COMPACT_WINDOW=180000/);
   assert.doesNotMatch(envExample, /^USAGE_PREFLIGHT_/m);
+});
+
+test('README documents V0.2.17 native web tool normalization and policy boundaries', () => {
+  assert.match(readme, /V0\.2\.17 native web tool normalization/);
+  assert.match(readme, /web_search_\*/);
+  assert.match(readme, /web_fetch_\*/);
+  assert.match(readme, /max_uses/);
+  assert.match(readme, /allowed_domains/);
+  assert.match(readme, /blocked_domains/);
+  assert.match(readme, /native_web_tools_normalized/);
+  assert.match(readme, /not emulated as Anthropic-native citations/);
 });

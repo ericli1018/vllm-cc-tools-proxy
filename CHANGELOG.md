@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.17 - 2026-08-07
+
+- Added prefix-based normalization for Anthropic native `web_search_*` and `web_fetch_*` server-tool definitions.
+- Replaced native definitions with vLLM-compatible custom tool schemas before both `/v1/messages/count_tokens` and `/v1/messages` calls.
+- Preserved existing custom WebSearch/WebFetch definitions and avoided duplicate aliases when native and custom definitions coexist.
+- Added request-local enforcement for native `max_uses`, including failed-attempt accounting and recoverable `max_uses_exceeded` tool results.
+- Added native `allowed_domains` and `blocked_domains` enforcement for WebSearch results and WebFetch targets.
+- Added conservative `max_content_tokens` enforcement for WebFetch content while retaining global resource-profile bounds.
+- Added metadata-only `native_web_tools_normalized` diagnostics without logging domain rules, URLs, prompts, results or content.
+- Preserved V0.2.16 Usage Preservation, V0.2.15 Progress Semantics and V0.2.14 Recovery Routing without adding environment variables.
+- Added end-to-end regression coverage for explicit Count Tokens normalization, Usage Preflight, SearXNG execution, WebFetch execution and native policy limits.
+
 ## 0.2.16 - 2026-08-07
 
 - Added a managed-stream token preflight through the existing Anthropic-compatible `/v1/messages/count_tokens` endpoint before the proxy emits its synthetic SSE `message_start`.

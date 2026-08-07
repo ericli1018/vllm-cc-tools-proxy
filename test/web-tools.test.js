@@ -233,3 +233,55 @@ test('WebFetch uses prompt-directed Processor with the current Base request mode
     'web_fetch_processor_response',
   ]);
 });
+
+test('WebSearch enforces native allowed and blocked domain policy on results', async (t) => {
+  const searx = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [
+      { title: 'Allowed', url: 'https://docs.example.com/docs/a', content: 'ok' },
+      { title: 'Wrong path', url: 'https://example.com/blog/a', content: 'no' },
+      { title: 'Blocked', url: 'https://private.example.com/docs/a', content: 'no' },
+    ] }));
+  });
+  t.after(() => searx.server.close());
+  const result = await executeManagedTool({ name: 'web_search', input: { query: 'policy' } }, {
+    searxngUrl: searx.url, webFetchUrl: '', limits: { maxOutputChars: 10000 },
+  }, undefined, {
+    policy: {
+      allowedDomains: ['example.com/docs'],
+      blockedDomains: ['private.example.com'],
+    },
+  });
+  assert.deepEqual(result.results.map((entry) => entry.title), ['Allowed']);
+  assert.equal(result.filtered_result_count, 2);
+});
+
+test('WebFetch enforces blocked domain policy before calling backend', async () => {
+  await assert.rejects(
+    executeManagedTool({ name: 'web_fetch', input: { url: 'https://private.example.com/a' } }, {
+      searxngUrl: '', webFetchUrl: 'http://fetch:8080', limits: { maxOutputChars: 10000 },
+    }, undefined, {
+      policy: { allowedDomains: [], blockedDomains: ['example.com'] },
+    }),
+    (error) => {
+      assert.equal(error.code, 'blocked_web_domain');
+      assert.equal(error.status, 422);
+      return true;
+    },
+  );
+});
+
+test('WebFetch applies max_content_tokens as a conservative output cap', async (t) => {
+  const backend = await startServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ page_content: 'x'.repeat(1000), metadata: { status_code: 200 } }]));
+  });
+  t.after(() => backend.server.close());
+  const result = await executeManagedTool({ name: 'web_fetch', input: { url: 'https://example.com/a' } }, {
+    searxngUrl: '', webFetchUrl: backend.url, webFetchApiKey: '', limits: { maxOutputChars: 10000 },
+  }, undefined, {
+    policy: { allowedDomains: [], blockedDomains: [], maxContentTokens: 10 },
+  });
+  assert.equal(result.markdown.length, 40);
+  assert.equal(result.truncated, true);
+});

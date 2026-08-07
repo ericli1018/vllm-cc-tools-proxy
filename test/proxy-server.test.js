@@ -22,13 +22,13 @@ function config(overrides = {}) {
   };
 }
 
-test('proxy health endpoint reports V0.2.16, admission and cache state', async (t) => {
+test('proxy health endpoint reports V0.2.17, admission and cache state', async (t) => {
   const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }));
   const url = await listen(server); t.after(() => server.close());
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.16', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.17', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -1065,4 +1065,224 @@ test('managed usage preflight failure does not interrupt the Claude Code turn', 
   assert.match(stream, /"name":"Write"/);
   assert.ok(logs.some((entry) => entry.event === 'managed_usage_preflight_failed'
     && entry.code === 'not_found'));
+});
+
+test('explicit count_tokens normalizes native web search and web fetch definitions', async (t) => {
+  let observed;
+  const vllm = await startJsonServer(async (req, res) => {
+    assert.equal(req.url, '/v1/messages/count_tokens');
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ input_tokens: 321 }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages/count_tokens`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm',
+      tools: [
+        { type: 'web_search_20250305', name: 'web_search', max_uses: 8 },
+        { type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 5 },
+      ],
+      messages: [{ role: 'user', content: 'research' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { input_tokens: 321 });
+  assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
+  assert.equal(observed.system, undefined);
+  assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
+  for (const tool of observed.tools) {
+    assert.ok(tool.input_schema);
+    assert.equal(tool.type, undefined);
+    assert.equal(tool.max_uses, undefined);
+  }
+});
+
+test('native web search is normalized for usage preflight and model calls then executed by SearXNG', async (t) => {
+  const upstreamBodies = [];
+  const logs = [];
+  let modelCalls = 0;
+  let searchCalls = 0;
+  const searx = await startJsonServer((req, res) => {
+    searchCalls += 1;
+    const url = new URL(req.url, 'http://localhost');
+    assert.equal(url.searchParams.get('q'), 'libuv openssl');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'Docs', url: 'https://docs.example.com/tls', content: 'evidence' }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamBodies.push({ path: req.url, payload });
+    assert.equal(payload.tools[0].name, 'web_search');
+    assert.ok(payload.tools[0].input_schema);
+    assert.equal(payload.tools[0].type, undefined);
+    assert.equal(payload.tools[0].max_uses, undefined);
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 1000 }));
+      return;
+    }
+    modelCalls += 1;
+    const body = modelCalls === 1
+      ? {
+        id: 'search', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 's1', name: 'web_search', input: { query: 'libuv openssl' } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 1000, output_tokens: 10 },
+      }
+      : {
+        id: 'final', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'FOUND' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 1100, output_tokens: 20 },
+      };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url, searxngUrl: searx.url, usagePreflightEnabled: true,
+    logLevel: 'debug', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{
+        type: 'web_search_20250305', name: 'web_search', max_uses: 8,
+        allowed_domains: ['example.com'],
+      }],
+      messages: [{ role: 'user', content: 'research' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /FOUND/);
+  assert.equal(searchCalls, 1);
+  assert.equal(modelCalls, 2);
+  assert.deepEqual(upstreamBodies.map((entry) => entry.path), [
+    '/v1/messages/count_tokens', '/v1/messages', '/v1/messages',
+  ]);
+  const normalizationEvent = logs.find((entry) => entry.event === 'native_web_tools_normalized');
+  assert.ok(normalizationEvent);
+  assert.equal(normalizationEvent.native_tool_count, 1);
+  assert.equal(normalizationEvent.has_max_uses, true);
+  assert.equal(normalizationEvent.has_domain_policy, true);
+  assert.doesNotMatch(JSON.stringify(normalizationEvent), /example\.com/);
+});
+
+test('native web fetch is normalized and executed by the configured fetch backend', async (t) => {
+  let fetchCalls = 0;
+  let modelCalls = 0;
+  const backend = await startJsonServer(async (req, res) => {
+    fetchCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    assert.deepEqual(payload, { urls: ['https://docs.example.com/article'] });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ page_content: 'FETCHED CONTENT', metadata: { status_code: 200 } }]));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.tools[0].name, 'web_fetch');
+    assert.ok(payload.tools[0].input_schema);
+    assert.equal(payload.tools[0].type, undefined);
+    modelCalls += 1;
+    const body = modelCalls === 1
+      ? {
+        id: 'fetch', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 'f1', name: 'web_fetch', input: { url: 'https://docs.example.com/article' } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 50, output_tokens: 5 },
+      }
+      : {
+        id: 'final', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'FETCH DONE' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 80, output_tokens: 8 },
+      };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, webFetchUrl: backend.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => backend.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{
+        type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 5,
+        allowed_domains: ['example.com'], max_content_tokens: 100,
+      }],
+      messages: [{ role: 'user', content: 'fetch it' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'FETCH DONE');
+  assert.equal(fetchCalls, 1);
+  assert.equal(modelCalls, 2);
+});
+
+test('native max_uses is enforced locally and returns a managed tool error without another backend call', async (t) => {
+  let searchCalls = 0;
+  let modelCalls = 0;
+  let finalRequest;
+  const searx = await startJsonServer((_req, res) => {
+    searchCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'One', url: 'https://example.com/one', content: 'one' }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    modelCalls += 1;
+    let body;
+    if (modelCalls === 1) {
+      body = {
+        id: 'one', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 's1', name: 'web_search', input: { query: 'one' } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 },
+      };
+    } else if (modelCalls === 2) {
+      body = {
+        id: 'two', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 's2', name: 'web_search', input: { query: 'two' } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 20, output_tokens: 2 },
+      };
+    } else {
+      finalRequest = payload;
+      body = {
+        id: 'final', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'LIMIT HANDLED' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 3 },
+      };
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 1 }],
+      messages: [{ role: 'user', content: 'search twice' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'LIMIT HANDLED');
+  assert.equal(searchCalls, 1);
+  assert.equal(modelCalls, 3);
+  assert.match(JSON.stringify(finalRequest.messages), /max_uses_exceeded/);
 });

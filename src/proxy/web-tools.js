@@ -1,6 +1,7 @@
 import { HttpError } from '../lib/http.js';
 import { processWebFetchContent } from '../services/web-fetch-processor.js';
 import { boundedText, fetchJson, serviceEndpoint } from '../lib/media.js';
+import { isUrlAllowedByWebPolicy } from './native-web-tools.js';
 
 const MANAGED = new Map([
   ['WebSearch', 'WebSearch'],
@@ -51,21 +52,28 @@ export function validateFetchTarget(value) {
   return url.toString();
 }
 
-async function webSearch(input, config, signal) {
+async function webSearch(input, config, signal, policy = {}) {
   if (!config.searxngUrl) throw new HttpError(422, 'SEARXNG_URL is not configured.', { code: 'web_search_unavailable' });
   const query = searchQuery(input);
   const endpoint = new URL(serviceEndpoint(config.searxngUrl, '/search'));
   endpoint.searchParams.set('q', query);
   endpoint.searchParams.set('format', 'json');
   const payload = await fetchJson(endpoint, { method: 'GET', signal }, { errorCode: 'web_search_error' });
-  const results = Array.isArray(payload.results) ? payload.results.slice(0, 10).map((item) => ({
+  const candidates = Array.isArray(payload.results) ? payload.results.map((item) => ({
     title: String(item.title || '').slice(0, 500),
     url: String(item.url || ''),
     snippet: String(item.content || item.snippet || '').slice(0, 2000),
     published_date: item.publishedDate || item.published_date || null,
     engine: item.engine || null,
   })) : [];
-  return { query, result_count: results.length, results };
+  const permitted = candidates.filter((item) => isUrlAllowedByWebPolicy(item.url, policy));
+  const results = permitted.slice(0, 10);
+  return {
+    query,
+    result_count: results.length,
+    ...(permitted.length === candidates.length ? {} : { filtered_result_count: candidates.length - permitted.length }),
+    results,
+  };
 }
 
 function webFetchErrorMessage(payload) {
@@ -96,9 +104,14 @@ function normalizeWebFetchPayload(payload, targetUrl, maxChars) {
   };
 }
 
-async function webFetch(input, config, signal, onEvent = () => {}, { model = '' } = {}) {
+async function webFetch(input, config, signal, onEvent = () => {}, { model = '', policy = {} } = {}) {
   if (!config.webFetchUrl) throw new HttpError(422, 'WEB_FETCH_URL is not configured.', { code: 'web_fetch_unavailable' });
   const targetUrl = validateFetchTarget(input?.url);
+  if (!isUrlAllowedByWebPolicy(targetUrl, policy)) {
+    throw new HttpError(422, 'WebFetch target is blocked by the native web tool domain policy.', {
+      code: 'blocked_web_domain', retryable: false,
+    });
+  }
   const target = new URL(targetUrl);
   const backend = new URL(config.webFetchUrl);
   const headers = { 'content-type': 'application/json' };
@@ -176,7 +189,11 @@ async function webFetch(input, config, signal, onEvent = () => {}, { model = '' 
       details: { upstream_status: response.status, upstream_code: upstreamCode },
     });
   }
-  const normalized = normalizeWebFetchPayload(payload, targetUrl, config.limits.maxOutputChars);
+  const policyChars = Number.isInteger(policy.maxContentTokens)
+    ? policy.maxContentTokens * 4
+    : config.limits.maxOutputChars;
+  const maxChars = Math.min(config.limits.maxOutputChars, policyChars);
+  const normalized = normalizeWebFetchPayload(payload, targetUrl, maxChars);
   await onEvent('web_fetch_upstream_response', {
     target_host: target.host,
     backend_host: backend.host,
@@ -198,9 +215,9 @@ async function webFetch(input, config, signal, onEvent = () => {}, { model = '' 
   });
 }
 
-export async function executeManagedTool(block, config, signal, { onEvent = () => {}, model = '' } = {}) {
+export async function executeManagedTool(block, config, signal, { onEvent = () => {}, model = '', policy = {} } = {}) {
   const name = normalizeManagedToolName(block?.name);
   if (!name) throw new HttpError(422, `Unsupported managed tool: ${block?.name || 'unknown'}`, { code: 'unsupported_managed_tool' });
-  if (name === 'WebSearch') return webSearch(block.input || {}, config, signal);
-  return webFetch(block.input || {}, config, signal, onEvent, { model });
+  if (name === 'WebSearch') return webSearch(block.input || {}, config, signal, policy);
+  return webFetch(block.input || {}, config, signal, onEvent, { model, policy });
 }

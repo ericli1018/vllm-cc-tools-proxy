@@ -1,8 +1,8 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.16 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.17 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, and persistently reuses normalized media analysis across later Claude Code turns.
 
-## V0.2.16 architecture
+## V0.2.17 architecture
 
 ```text
 Claude Code
@@ -213,6 +213,50 @@ After upgrading from a session that already displayed raw `</function_result>`, 
 
 
 
+
+## V0.2.17 native web tool normalization
+
+Claude Code may send Anthropic server-tool definitions instead of ordinary custom tools:
+
+```json
+{"type":"web_search_20250305","name":"web_search","max_uses":8}
+{"type":"web_fetch_20250910","name":"web_fetch","max_uses":5}
+```
+
+These definitions intentionally have no `input_schema`, because Anthropic executes them as server tools. A local vLLM Anthropic-compatible endpoint commonly validates every tool as a custom tool and rejects the request before model generation.
+
+V0.2.17 detects any dated `web_search_*` or `web_fetch_*` type, extracts its local policy, and sends a vLLM-compatible custom definition to both:
+
+```text
+/v1/messages/count_tokens
+/v1/messages
+```
+
+The normalized definitions contain:
+
+```text
+web_search → required query string
+web_fetch  → required URL plus optional prompt
+```
+
+Native-only fields such as `type`, `max_uses`, `allowed_domains`, `blocked_domains`, `user_location`, `citations`, and `max_content_tokens` are never forwarded to vLLM. The proxy applies the supported local policies instead:
+
+- `max_uses` counts every attempted managed invocation, including failed fetch/search attempts.
+- `allowed_domains` and `blocked_domains` filter WebSearch results and validate WebFetch targets.
+- Domain rules include subdomains; WebSearch rules may also include a path prefix.
+- `max_content_tokens` becomes a conservative four-characters-per-token WebFetch output ceiling, further bounded by the configured resource profile.
+- `citations` and `user_location` are retained as request metadata but are not emulated as Anthropic-native citations or localized search controls.
+- Newer dynamic-filtering and `allowed_callers` fields are removed from the vLLM request and counted as unsupported policy metadata in diagnostics.
+
+Existing custom `WebSearch`, `web_search`, `WebFetch`, `web_fetch`, and all non-web tools remain unchanged. If a native and custom alias coexist, the existing custom definition is retained and the native policy still applies locally.
+
+A successful normalization emits only metadata:
+
+```text
+native_web_tools_normalized
+```
+
+The event records tool counts and policy presence, not domains, URLs, prompts, search results, fetched content, or credentials.
 
 ## V0.2.16 Anthropic usage preservation
 
@@ -628,6 +672,8 @@ WEB_FETCH_PROCESSOR_THINK=false
 ```
 
 - `WebSearch` and `web_search` call SearXNG and return a readable multiline result list.
+- Anthropic native `web_search_*` and `web_fetch_*` server-tool definitions are normalized into custom schemas before Count Tokens and model calls.
+- Native `max_uses` and domain policies are enforced locally and are not forwarded to vLLM.
 - `WebFetch` and `web_fetch` POST to the exact configured `WEB_FETCH_URL`; the proxy does not append `/v1/fetch`.
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
 - Array responses using `page_content` and `metadata` are normalized; the older object response shape remains accepted.
@@ -754,9 +800,9 @@ The default visual PDF batch size is four pages.
 ./scripts/verify.sh
 ```
 
-The suite covers Anthropic usage normalization, managed `/v1/messages/count_tokens` preflight, auto-compact usage compatibility, non-fatal preflight fallback, direct-stream usage observation, transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
+The suite covers native Web Search/Web Fetch normalization, native policy enforcement, explicit Count Tokens compatibility, Anthropic usage normalization, managed `/v1/messages/count_tokens` preflight, auto-compact usage compatibility, non-fatal preflight fallback, direct-stream usage observation, transparent bypass, raw-body preservation, Claude Code hello probes, FIFO admission, queue full/timeout/cancellation, persistent cache/TTL/LRU/disk-full behavior, request-local deduplication, cross-request singleflight, vLLM/Ollama visual serialization, strict thinking control, internal crop recovery, 20-page batching, configuration, deployment contract, nested content blocks, PDF extraction, scanned-page visual routing, image normalization, crop authorization, bounded visual tool loops, API-key separation, awesome-web-fetch request/response compatibility, isolated prompt-directed WebFetch processing, readable multiline web evidence, Processor fallback, recoverable managed-tool errors, file-aware progress, immediate state revisions, semantic Anthropic SSE heartbeat, drain-timeout handling, Base-vLLM connect/header/body timeout classification, TTFT observability, structured-evidence escaping, contaminated-thinking sanitation, recursive managed-tool evidence neutralization, final-response validation/repair, lazy Web-only progress activation, protocol provenance diagnostics, atomic file-based anomaly evidence, cache-contract invalidation and split control-tag diagnostics across SSE deltas.
 
-## V0.2.16 limits
+## V0.2.17 limits
 
 - DOCX, XLSX and PPTX still require a future host-side document bridge.
 - Visual analysis depends on the selected multimodal model and the provider-specific tool-call protocol/template.

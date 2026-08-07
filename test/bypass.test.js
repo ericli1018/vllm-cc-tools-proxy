@@ -97,3 +97,14 @@ test('managed detector only intercepts media and proxy-owned web tools', () => {
     managed: true, reasons: ['managed_web_tool'], mediaCount: { documents: 0, images: 0 },
   });
 });
+
+test('managed detector distinguishes native web tools that require schema normalization', () => {
+  assert.deepEqual(classifyMessagesRequest({
+    messages: [],
+    tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+  }), {
+    managed: true,
+    reasons: ['managed_web_tool', 'native_web_tool'],
+    mediaCount: { documents: 0, images: 0 },
+  });
+});
