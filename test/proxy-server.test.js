@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.21-diagnostic.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.22', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
@@ -164,9 +164,9 @@ test('historical PDF is analyzed once then served from cache without a second pr
 test('streamed managed request emits progress and final Anthropic blocks', async (t) => {
   const searx = await startJsonServer((_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({results:[{title:'x',url:'https://example.com',content:'y'}]}));});
   let call=0;
-  const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'WebSearch',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
+  const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'web_search',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
   const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url,progressVisibleAfterMs:60_000}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
-  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'search'}]})});
+  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{type:'web_search_20250305',name:'web_search',max_uses:8}],messages:[{role:'user',content:'search'}]})});
   const text=await response.text();assert.match(text,/\"type\":\"server_tool_use\"/);assert.match(text,/\"type\":\"web_search_tool_result\"/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.match(text,/\"web_search_requests\":1/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
 });
 
@@ -263,7 +263,7 @@ test('managed queue is bounded and exposed through health', async (t) => {
     const hasResult = payload.messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'));
     const body = hasResult
       ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${Math.random()}`, name: 'WebSearch', input: { query: 'q' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } };
+      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${Math.random()}`, name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } };
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
   });
@@ -273,7 +273,7 @@ test('managed queue is bounded and exposed through health', async (t) => {
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const request = () => fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', stream: false, tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'search' }] }) });
+  const request = () => fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] }) });
   const a = request();
   await firstSearchStarted;
   const b = request();
@@ -309,7 +309,7 @@ test('managed queue timeout returns 503 without starting queued work', async (t)
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(hasResult
       ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'WebSearch', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
+      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: vllm.url, searxngUrl: searx.url,
@@ -317,7 +317,7 @@ test('managed queue timeout returns 503 without starting queued work', async (t)
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'search' }] });
+  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
   const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
   await searchStarted;
   const second = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
@@ -349,7 +349,7 @@ test('queued streaming request reports position and starts after admission', asy
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(hasResult
       ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${searchCalls}`, name: 'WebSearch', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
+      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${searchCalls}`, name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: vllm.url, searxngUrl: searx.url,
@@ -357,7 +357,7 @@ test('queued streaming request reports position and starts after admission', asy
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const makeBody = (stream) => JSON.stringify({ model: 'm', stream, tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'search' }] });
+  const makeBody = (stream) => JSON.stringify({ model: 'm', stream, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
   const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody(false) });
   await searchStarted;
   const secondResponse = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody(true) });
@@ -386,7 +386,7 @@ test('client cancellation removes a queued request', async (t) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify(hasResult
       ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'WebSearch', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
+      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: vllm.url, searxngUrl: searx.url,
@@ -394,7 +394,7 @@ test('client cancellation removes a queued request', async (t) => {
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'search' }] });
+  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
   const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
   await searchStarted;
   const controller = new AbortController();
@@ -745,7 +745,7 @@ test('managed request logs protocol provenance and repairs malformed final outpu
     call += 1;
     let body;
     if (call === 1) {
-      body = { id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'s1',name:'WebSearch',input:{query:'news'}}],stop_reason:'tool_use',usage:{} };
+      body = { id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'s1',name:'web_search',input:{query:'news'}}],stop_reason:'tool_use',usage:{} };
     } else if (call === 2) {
       body = { id:'b',type:'message',role:'assistant',model:'m',content:[{type:'thinking',thinking:'done </function_results> final in thinking'}],stop_reason:'end_turn',usage:{} };
     } else {
@@ -776,7 +776,7 @@ test('managed request logs protocol provenance and repairs malformed final outpu
     body: JSON.stringify({
       model: 'm', stream: true,
       system: 'Claude dialect </function_results>',
-      tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
       messages: [{ role: 'user', content: 'news' }],
     }),
   });
@@ -831,7 +831,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
       res.end(JSON.stringify({
         id: 'tool', type: 'message', role: 'assistant', model: 'main-model',
         content: [{
-          type: 'tool_use', id: 'fetch-1', name: 'WebFetch',
+          type: 'tool_use', id: 'fetch-1', name: 'web_fetch',
           input: { url: 'https://example.com/article', prompt: 'Extract the verified number.' },
         }],
         stop_reason: 'tool_use', usage: {},
@@ -868,7 +868,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'main-model', stream: false,
-      tools: [{ name: 'WebFetch', input_schema: { type: 'object' } }],
+      tools: [{ type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 5 }],
       messages: [{ role: 'user', content: 'Read the page.' }],
     }),
   });
@@ -1376,16 +1376,14 @@ test('V0.2.20 response-side native web search is surfaced as server-tool lifecyc
   assert.equal(contained.stripped_result_count, 1);
 });
 
-test('V0.2.20 preserves mixed WebSearch plus Read across two Claude Code requests', async (t) => {
+test('V0.2.22 preserves mixed WebSearch plus Read by handing both client tools to Claude Code', async (t) => {
   let searchCalls = 0;
   let modelCalls = 0;
   let secondModelPayload;
-  const searx = await startJsonServer((req, res) => {
+  const searx = await startJsonServer((_req, res) => {
     searchCalls += 1;
-    const url = new URL(req.url, 'http://localhost');
-    assert.equal(url.searchParams.get('q'), 'tls docs');
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ results: [{ title: 'TLS Docs', url: 'https://example.com/tls', content: 'verified evidence' }] }));
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'main-agent Search must not execute in Proxy' }));
   });
   const vllm = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -1421,49 +1419,37 @@ test('V0.2.20 preserves mixed WebSearch plus Read across two Claude Code request
     { name: 'Read', description: 'read', input_schema: { type: 'object', properties: { file_path: { type: 'string' } }, required: ['file_path'] } },
   ];
   const first = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'mixed-session' },
     body: JSON.stringify({ model: 'm', stream: false, tools, messages: [{ role: 'user', content: 'search and read' }] }),
   });
   assert.equal(first.status, 200);
   const firstBody = await first.json();
   assert.equal(searchCalls, 0);
   assert.equal(firstBody.stop_reason, 'tool_use');
-  assert.equal(firstBody.content[0].type, 'server_tool_use');
-  assert.equal(firstBody.content[0].name, 'web_search');
+  assert.equal(firstBody.content[0].type, 'tool_use');
+  assert.equal(firstBody.content[0].name, 'WebSearch');
   assert.equal(firstBody.content[1].type, 'tool_use');
   assert.equal(firstBody.content[1].name, 'Read');
-  const serverId = firstBody.content[0].id;
 
   const second = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'mixed-session' },
     body: JSON.stringify({
       model: 'm', stream: false, tools,
       messages: [
         { role: 'user', content: 'search and read' },
         { role: 'assistant', content: firstBody.content },
-        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-1', content: 'int main(void){}' }] },
+        { role: 'user', content: [
+          { type: 'tool_result', tool_use_id: 'search-original', content: 'CLAUDE CODE SEARCH RESULT' },
+          { type: 'tool_result', tool_use_id: 'read-1', content: 'int main(void){}' },
+        ] },
       ],
     }),
   });
   assert.equal(second.status, 200);
-  const secondBody = await second.json();
-  assert.equal(searchCalls, 1);
+  assert.equal((await second.json()).content[0].text, 'BOTH COMPLETE');
+  assert.equal(searchCalls, 0);
   assert.equal(modelCalls, 2);
-  assert.equal(secondBody.content[0].type, 'web_search_tool_result');
-  assert.equal(secondBody.content[0].tool_use_id, serverId);
-  assert.equal(secondBody.content.find((block) => block.type === 'text')?.text, 'BOTH COMPLETE');
-  assert.equal(secondBody.usage.server_tool_use.web_search_requests, 1);
-
-  const assistant = secondModelPayload.messages.at(-2);
-  const user = secondModelPayload.messages.at(-1);
-  assert.equal(assistant.content[0].type, 'tool_use');
-  assert.equal(assistant.content[0].id, serverId);
-  assert.equal(assistant.content[0].name, 'web_search');
-  assert.equal(assistant.content[1].type, 'tool_use');
-  assert.equal(assistant.content[1].name, 'Read');
-  assert.equal(user.content[0].tool_use_id, 'read-1');
-  assert.equal(user.content[1].tool_use_id, serverId);
-  assert.match(user.content[1].content, /TLS Docs/);
+  assert.equal(secondModelPayload.messages.at(-1).content[0].content, 'CLAUDE CODE SEARCH RESULT');
 });
 
 test('V0.2.19 quarantines contaminated Claude Code tool_result history before Base vLLM', async (t) => {
@@ -1700,4 +1686,167 @@ test('diagnostic trace records unmanaged HTTP routes so alternate Claude Code we
   assert.equal(traced.metadata.path, '/api/web/search');
   assert.equal(traced.metadata.query, '?x=1');
   assert.equal(traced.payload.raw_body_utf8, '{"query":"probe"}');
+});
+
+test('V0.2.22 ordinary WebSearch is handed to Claude Code without SearXNG execution even when diagnostic mode is off', async (t) => {
+  let searchCalls = 0;
+  let modelCalls = 0;
+  const searx = await startJsonServer((_req, res) => {
+    searchCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [] }));
+  });
+  const vllm = await startJsonServer(async (_req, res) => {
+    modelCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'handoff-search', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'tool_use', id: 'search-client-1', name: 'WebSearch', input: { query: 'libuv openssl' } }],
+      stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'session-search' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'research' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.content[0].type, 'tool_use');
+  assert.equal(body.content[0].name, 'WebSearch');
+  assert.equal(searchCalls, 0);
+  assert.equal(modelCalls, 1);
+});
+
+test('V0.2.22 ordinary WebFetch is handed to Claude Code without awesome-web-fetch execution', async (t) => {
+  let fetchCalls = 0;
+  const backend = await startJsonServer((_req, res) => {
+    fetchCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'must not be called' }));
+  });
+  const vllm = await startJsonServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'handoff-fetch', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'tool_use', id: 'fetch-client-1', name: 'WebFetch', input: { url: 'https://example.com/docs', prompt: 'Summarize docs' } }],
+      stop_reason: 'tool_use', usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, webFetchUrl: backend.url }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => backend.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'session-fetch' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ name: 'WebFetch', description: 'fetch', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'fetch docs' }],
+    }),
+  });
+  const body = await response.json();
+  assert.equal(body.content[0].name, 'WebFetch');
+  assert.equal(fetchCalls, 0);
+});
+
+test('V0.2.22 routes Claude Code WebFetch 200-content child directly to the configured Processor instead of Base Laguna', async (t) => {
+  let baseCalls = 0;
+  let processorCalls = 0;
+  const processor = await startJsonServer(async (req, res) => {
+    processorCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.model, 'processor-model');
+    assert.match(payload.messages[1].content, /PAGE BODY WITH HTTP CODES/);
+    assert.match(payload.messages[1].content, /Summarize HTTP codes/);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'PROCESSOR CHILD SUMMARY' } }] }));
+  });
+  const vllm = await startJsonServer((_req, res) => {
+    baseCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'base model must not receive WebFetch processor child' }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    webFetchProcessor: {
+      enabled: true, provider: 'ollama', url: `${processor.url}/v1/chat/completions`, model: 'processor-model', apiKey: '', think: false, concurrency: 3, timeoutMs: 30000,
+    },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => processor.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'session-child' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6', stream: true, tools: [],
+      system: [{ type: 'text', text: "You are Claude Code, Anthropic's official CLI for Claude." }],
+      messages: [{ role: 'user', content: [{ type: 'text', text: '\nWeb page content:\n---\nPAGE BODY WITH HTTP CODES\n---\n\nSummarize HTTP codes\n\nProvide a concise response based only on the content above. In your response:\n - Never produce exact song lyrics.\n' }] }],
+    }),
+  });
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(stream, /PROCESSOR CHILD SUMMARY/);
+  assert.match(stream, /message_stop/);
+  assert.equal(processorCalls, 1);
+  assert.equal(baseCalls, 0);
+});
+
+test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus Processor only for the Base-model view', async (t) => {
+  let fetchCalls = 0;
+  let processorCalls = 0;
+  let baseObserved;
+  const backend = await startJsonServer(async (req, res) => {
+    fetchCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    assert.deepEqual(payload, { urls: ['https://github.com/example/raw/readme'] });
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify([{ page_content: 'FINAL README BODY', metadata: { status_code: 200, final_url: 'https://raw.githubusercontent.com/example/readme', title: 'README' } }]));
+  });
+  const processor = await startJsonServer(async (_req, res) => {
+    processorCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: 'ENRICHED README SUMMARY' } }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    baseObserved = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'DONE' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 3 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url, webFetchUrl: backend.url,
+    webFetchProcessor: {
+      enabled: true, provider: 'ollama', url: `${processor.url}/v1/chat/completions`, model: 'processor-model', apiKey: '', think: false, concurrency: 3, timeoutMs: 30000,
+    },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => backend.server.close()); t.after(() => processor.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
+  const originalRedirect = 'REDIRECT DETECTED: The URL redirects to a different host.\nOriginal URL: https://github.com/example/raw/readme\nRedirect URL: https://raw.githubusercontent.com/example/readme\nStatus: 302 Found';
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'session-redirect' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ name: 'WebFetch', description: 'fetch', input_schema: { type: 'object' } }],
+      messages: [
+        { role: 'user', content: 'fetch readme' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'fetch-r1', name: 'WebFetch', input: { url: 'https://github.com/example/raw/readme', prompt: 'Summarize README' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'fetch-r1', content: originalRedirect }] },
+      ],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'DONE');
+  const baseResult = baseObserved.messages[2].content[0].content;
+  assert.match(baseResult, /ENRICHED README SUMMARY/);
+  assert.match(baseResult, /raw\.githubusercontent\.com/);
+  assert.doesNotMatch(baseResult, /^REDIRECT DETECTED:/);
+  assert.equal(fetchCalls, 1);
+  assert.equal(processorCalls, 1);
 });

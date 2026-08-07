@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.22 - 2026-08-08
+
+- Replaced the V0.2.20/V0.2.21 main-agent synthetic Server Tool handoff with the Claude Code-owned built-in WebSearch/WebFetch lifecycle proven by diagnostic traces.
+- Ordinary `WebSearch`, `web_search`, `WebFetch`, and `web_fetch` tool uses are now returned unchanged to Claude Code instead of being executed inside the same main-agent managed loop.
+- Preserved Proxy-managed native `web_search_YYYYMMDD` child requests; those requests still execute through SearXNG and return Anthropic-compatible Web Search server-tool results to Claude Code.
+- Added detection of Claude Code WebFetch 200-content processor child requests whose payload begins with `Web page content:` and routes them directly to the configured independent WebFetch Processor instead of the main Laguna model.
+- Added bounded WebFetch lifecycle correlation by Claude Code session and `tool_use_id`.
+- Added redirect/explicit-fetch-error enrichment: returned WebFetch `tool_result` blocks are resolved to their original URL/prompt, fetched once through awesome-web-fetch, processed through the configured WebFetch Processor, and replaced only in the Base-model view.
+- Successful Claude Code WebFetch summaries are not re-fetched; enriched fallback results are cached to avoid duplicate work when history is replayed.
+- Mixed ordinary Web tools and Claude Code client tools now return together unchanged, preserving the model's intended parallel tool choices.
+- `MAX_TOOL_ROUNDS` / managed-round limits remain safety fuses for Proxy-owned child workflows and no longer define the normal research-depth limit across Claude Code turns.
+- Retained diagnostic file tracing from `0.2.21-diagnostic.1`, disabled by default.
+- Preserved WebFetch Processor `vllm|ollama` routing, automatic `/v1/chat/completions` URL normalization, three-slot Processor concurrency, protocol isolation, media adaptation, deterministic final promotion, and slow-model timeout controls.
+
 ## 0.2.21 - 2026-08-07
 
 - Fixed Claude Code-facing Server Tool SSE shape by including `input: {}` in every streamed `server_tool_use` start block before `input_json_delta` events.

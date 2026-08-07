@@ -375,6 +375,8 @@ export async function runManagedLoop(initialRequest, {
   logProtocolSnippets = false,
   writeProtocolDiagnostics,
   diagnosticPassthroughWebTools,
+  passthroughManagedWebTools = false,
+  onManagedWebToolHandoff = () => {},
   onTrace = () => {},
   signal,
   taskTimeoutMs = DEFAULT_MANAGED_TASK_TIMEOUT_MS,
@@ -544,6 +546,19 @@ export async function runManagedLoop(initialRequest, {
         });
         return response;
       }
+    }
+    if (passthroughManagedWebTools && toolUses.some((block) => isManagedToolName(block.name))) {
+      await onManagedWebToolHandoff({
+        round: round + 1,
+        response: structuredClone(response),
+        toolUses: structuredClone(toolUses),
+      });
+      await onDiagnostic('client_web_tool_handoff', {
+        round: round + 1,
+        tool_names: toolUses.filter((block) => isManagedToolName(block.name)).map((block) => String(block?.name || '')),
+        tool_ids: toolUses.filter((block) => isManagedToolName(block.name)).map((block) => String(block?.id || '')),
+      });
+      return response;
     }
     if (toolUses.some((block) => !isManagedToolName(block.name))) {
       const managedToolNames = toolUses.filter((block) => isManagedToolName(block.name)).map((block) => normalizeManagedToolName(block.name));

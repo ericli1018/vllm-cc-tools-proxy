@@ -1,9 +1,11 @@
 import http from 'node:http';
+import crypto from 'node:crypto';
 import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
 import { hasProgressHistory, stripProgressHistory, ProgressStream } from '../proxy/progress.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
+import { renderManagedToolResult } from '../proxy/web-result-contract.js';
 import { runManagedLoop } from '../proxy/managed-loop.js';
 import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
 import { WebToolDiagnosticTraceStore } from '../proxy/web-tool-diagnostic-trace-store.js';
@@ -21,7 +23,9 @@ import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
-import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration } from '../proxy/native-web-tools.js';
+import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
+import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
+import { processWebFetchContent } from './web-fetch-processor.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -206,6 +210,39 @@ function canonicalMessagesPath(pathname) {
   return '';
 }
 
+function claudeCodeSessionId(headers, request) {
+  const header = headers?.['x-claude-code-session-id'];
+  if (typeof header === 'string' && header.trim()) return header.trim().slice(0, 200);
+  const raw = request?.metadata?.user_id;
+  if (typeof raw === 'string' && raw.trim()) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.session_id === 'string' && parsed.session_id.trim()) return parsed.session_id.trim().slice(0, 200);
+    } catch {}
+  }
+  return '';
+}
+
+function findToolUseById(messages, toolUseId) {
+  for (const message of Array.isArray(messages) ? messages : []) {
+    if (message?.role !== 'assistant') continue;
+    for (const block of Array.isArray(message?.content) ? message.content : []) {
+      if (block?.type === 'tool_use' && String(block?.id || '') === String(toolUseId || '')) return block;
+    }
+  }
+  return null;
+}
+
+function syntheticTextResponse(model, text) {
+  return {
+    id: `msg_proxy_${crypto.randomUUID().replaceAll('-', '')}`,
+    type: 'message', role: 'assistant', model: model || 'proxy',
+    content: [{ type: 'text', text: String(text || '') }],
+    stop_reason: 'end_turn', stop_sequence: null,
+    usage: { input_tokens: 0, output_tokens: 0 },
+  };
+}
+
 function log(config, level, event, fields = {}) {
   const ranks = { debug: 10, info: 20, warn: 30, error: 40 };
   if ((ranks[level] || 20) < (ranks[config.logLevel] || 20)) return;
@@ -247,6 +284,7 @@ export function createProxyServer(config, dependencies = {}) {
     traceDir: '/var/lib/vllm-cc-tools-proxy/diagnostics/web-tool-trace',
   };
   const webToolDiagnosticController = dependencies.webToolDiagnosticController || createWebToolDiagnosticController(webToolDiagnosticConfig);
+  const clientWebToolLifecycleRegistry = dependencies.clientWebToolLifecycleRegistry || new ClientWebToolLifecycleRegistry();
   const webToolDiagnosticTraceStore = webToolDiagnosticConfig.trace
     ? (dependencies.webToolDiagnosticTraceStore || new WebToolDiagnosticTraceStore({ rootDir: webToolDiagnosticConfig.traceDir }))
     : null;
@@ -276,6 +314,51 @@ export function createProxyServer(config, dependencies = {}) {
       });
       return null;
     }
+  }
+
+  async function enrichReturnedWebFetchResults(messages, { sessionId, model, signal, requestId }) {
+    const outputMessages = structuredClone(Array.isArray(messages) ? messages : []);
+    const sessionKey = sessionId || `request:${requestId}`;
+    let changed = false;
+    let enrichedCount = 0;
+    for (const message of outputMessages) {
+      if (message?.role !== 'user' || !Array.isArray(message.content)) continue;
+      for (const block of message.content) {
+        if (!webFetchResultNeedsFallback(block)) continue;
+        const toolUse = findToolUseById(outputMessages, block.tool_use_id);
+        if (!toolUse || canonicalWebToolName(toolUse.name) !== 'WebFetch') continue;
+        let rendered = clientWebToolLifecycleRegistry.getEnriched(sessionKey, block.tool_use_id);
+        if (!rendered) {
+          try {
+            const fetched = await executeManagedTool(toolUse, config, signal, {
+              model: model || '',
+              acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
+              onEvent: (event, fields) => log(
+                config,
+                event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',
+                event,
+                { requestId, fallback_enrichment: true, ...fields },
+              ),
+            });
+            rendered = renderManagedToolResult('WebFetch', fetched);
+            clientWebToolLifecycleRegistry.setEnriched(sessionKey, block.tool_use_id, rendered);
+          } catch (error) {
+            log(config, 'warn', 'web_fetch_result_enrichment_failed', {
+              requestId,
+              tool_use_id: String(block.tool_use_id || ''),
+              code: String(error?.code || 'web_fetch_enrichment_failed'),
+              retryable: Boolean(error?.retryable),
+            });
+            continue;
+          }
+        }
+        block.content = rendered;
+        delete block.is_error;
+        changed = true;
+        enrichedCount += 1;
+      }
+    }
+    return { messages: outputMessages, changed, enrichedCount };
   }
 
   return http.createServer(async (req, res) => {
@@ -382,6 +465,69 @@ export function createProxyServer(config, dependencies = {}) {
         { method: req.method, path: url.pathname, messages_path: messagesPath },
         { headers: req.headers, body: original },
       );
+      const clientSessionId = claudeCodeSessionId(req.headers, original);
+      const webFetchProcessorChild = messagesPath === '/v1/messages'
+        ? parseClaudeCodeWebFetchProcessorChild(original)
+        : null;
+      if (webFetchProcessorChild) {
+        const pending = clientWebToolLifecycleRegistry.claimLatestWebFetch(clientSessionId, { prompt: webFetchProcessorChild.prompt });
+        const requestedUrl = String(pending?.input?.url || '');
+        releaseIngress(); releaseIngress = null;
+        const processed = await processWebFetchContent({
+          requested_url: requestedUrl,
+          final_url: requestedUrl,
+          status: 200,
+          title: '',
+          content_type: 'text/html',
+          retrieved_at: new Date().toISOString(),
+          browser_rendered: true,
+          markdown: webFetchProcessorChild.sourceText,
+          truncated: false,
+          warnings: [],
+        }, {
+          prompt: webFetchProcessorChild.prompt,
+          model: original.model || '',
+          processor: config.webFetchProcessor || {},
+          signal: abortController.signal,
+          acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
+          onEvent: (event, fields) => log(
+            config,
+            event.endsWith('_fallback') ? 'warn' : 'info',
+            event,
+            { requestId, child_request: true, ...fields },
+          ),
+        });
+        const childResponse = syntheticTextResponse(original.model, processed.result);
+        log(config, 'info', 'web_fetch_processor_child_completed', {
+          requestId,
+          correlated_tool_use_id: pending?.tool_use_id || '',
+          source_chars: webFetchProcessorChild.sourceText.length,
+          output_chars: processed.result.length,
+        });
+        await writeWebToolTrace(
+          requestId,
+          'web_fetch_processor_child_response',
+          'proxy_to_claude_code',
+          { correlated_tool_use_id: pending?.tool_use_id || '', stream: original.stream === true },
+          { response: childResponse },
+        );
+        if (original.stream === true) {
+          progress = new ProgressStream(res, {
+            model: original.model || 'proxy',
+            initialUsage: usageFromTokenCount({}),
+            pingIntervalMs: config.progressPingIntervalMs,
+            heartbeatIntervalMs: config.progressHeartbeatMs,
+            drainTimeoutMs: config.sseDrainTimeoutMs,
+            visibleAfterMs: config.progressVisibleAfterMs,
+          });
+          await progress.open();
+          await emitFinalAnthropicResponse(progress, childResponse);
+        } else {
+          sendJson(res, 200, childResponse);
+        }
+        completed = true;
+        return;
+      }
       const returnedDiagnosticResults = webToolDiagnosticController.findReturnedToolResults(original.messages);
       if (returnedDiagnosticResults.length > 0) {
         await writeWebToolTrace(
@@ -429,6 +575,18 @@ export function createProxyServer(config, dependencies = {}) {
           tag_count: protocolHistory.tags.length,
           tags: [...new Set(protocolHistory.tags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))],
         });
+      }
+      if (messagesPath === '/v1/messages') {
+        const enrichedFetchResults = await enrichReturnedWebFetchResults(cleanedMessages, {
+          sessionId: clientSessionId, model: original.model || '', signal: abortController.signal, requestId,
+        });
+        if (enrichedFetchResults.changed) {
+          cleanedMessages = enrichedFetchResults.messages;
+          historyRewritten = true;
+          log(config, 'info', 'web_fetch_tool_result_enriched', {
+            requestId, enriched_count: enrichedFetchResults.enrichedCount,
+          });
+        }
       }
       if (historyRewritten) {
         original = { ...original, messages: cleanedMessages };
@@ -510,10 +668,17 @@ export function createProxyServer(config, dependencies = {}) {
         : null;
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
+      const passthroughClientWebTools = hasManagedTools
+        && serverWebUiDeclaration.native_count === 0
+        && serverWebUiDeclaration.alias_count > 0;
       if (hasManagedTools) {
         log(config, 'info', 'server_web_ui_bridge_selected', {
           requestId,
-          mode: request.stream === true && serverWebUiDeclaration.eligible ? 'native_server_tool' : 'visible_progress',
+          mode: passthroughClientWebTools
+            ? 'claude_code_client_tool'
+            : request.stream === true && serverWebUiDeclaration.native_count > 0
+              ? 'native_server_tool'
+              : 'visible_progress',
           native_declaration_count: serverWebUiDeclaration.native_count,
           alias_declaration_count: serverWebUiDeclaration.alias_count,
           search: serverWebUiDeclaration.search,
@@ -706,7 +871,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal);
-      const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.eligible
+      const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
       if (hasManagedTools) {
@@ -738,6 +903,10 @@ export function createProxyServer(config, dependencies = {}) {
           diagnosticPassthroughWebTools: webToolDiagnosticConfig.enabled
             ? (context) => webToolDiagnosticController.decide(context)
             : undefined,
+          passthroughManagedWebTools: passthroughClientWebTools,
+          onManagedWebToolHandoff: ({ toolUses }) => {
+            clientWebToolLifecycleRegistry.recordToolUses(clientSessionId, toolUses);
+          },
           onTrace: webToolDiagnosticTraceStore
             ? async (event, payload) => writeWebToolTrace(
               requestId,

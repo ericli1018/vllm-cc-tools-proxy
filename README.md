@@ -1,56 +1,143 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.21 bypasses ordinary traffic directly to the base vLLM, intercepts PDF/image content or proxy-owned WebSearch/WebFetch workflows, surfaces proxy-owned web activity as Anthropic-style server tools, and persistently reuses normalized media analysis across later Claude Code turns.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.22 preserves Claude Code's own built-in WebSearch/WebFetch tool lifecycle on main-agent turns, while the Proxy owns the backend work only at the child/result boundaries proven by diagnostic traces.
 
-## V0.2.21 architecture
+## V0.2.22 Claude Code-owned Web lifecycle
+
+V0.2.22 replaces the V0.2.20/V0.2.21 assumption that ordinary main-agent Web tools should be converted immediately into synthetic Anthropic server tools.
+
+The runtime now distinguishes two protocol layers.
+
+### Main-agent ordinary tools
+
+The main-agent boundary treats ordinary `WebSearch` / `WebFetch` as Claude Code-owned client tools.
+
+Exact built-in aliases are handed back to Claude Code as ordinary client tools:
+
+```text
+WebSearch / web_search
+WebFetch  / web_fetch
+```
+
+When the Base model emits one of these ordinary tool calls, the Proxy does **not** execute SearXNG or awesome-web-fetch inside the same main `/v1/messages` request. It returns the original `tool_use` to Claude Code so the terminal can keep its native tool row and lifecycle.
+
+```text
+Laguna
+  -> tool_use(WebSearch / WebFetch)
+  -> Proxy handoff
+  -> Claude Code built-in renderer/executor
+```
+
+The diagnostic event for this boundary is:
+
+```text
+server_web_ui_bridge_selected mode=claude_code_client_tool
+client_web_tool_handoff
+```
+
+Mixed ordinary tools are preserved in the same response. For example, `WebSearch + Read` is returned as two client `tool_use` blocks; the Proxy does not convert one into a server tool or silently delay the other.
+
+### WebSearch child requests
+
+Claude Code's built-in WebSearch creates a second `/v1/messages` child request containing a dated native tool declaration such as:
+
+```text
+web_search_YYYYMMDD
+```
+
+That child request remains Proxy-managed. The native definition is normalized only for the local Base-model protocol, SearXNG performs the actual search, and the Anthropic-compatible server-tool result is returned to Claude Code. Overall research depth is therefore controlled by Claude Code's normal multi-turn lifecycle instead of being trapped inside one `MAX_TOOL_ROUNDS` loop.
+
+```text
+Main agent WebSearch
+  -> Claude Code native Web Search UI
+  -> native web_search_YYYYMMDD child request
+  -> Proxy / SearXNG
+  -> web_search_tool_result
+  -> Claude Code returns tool_result to the main agent
+```
+
+`MAX_TOOL_ROUNDS` now acts only as a safety fuse for one Proxy-managed child workflow; it is not the intended limit on how many research steps the agent may perform across Claude Code turns.
+
+### WebFetch 200-content processor child
+
+Claude Code's built-in WebFetch directly downloads normal HTTP 200 content. It then creates a content-processing `/v1/messages` child request with no tools and a payload beginning with:
+
+```text
+Web page content:
+---
+...
+---
+```
+
+V0.2.22 detects this exact Claude Code child shape and routes it directly to `WEB_FETCH_PROCESSOR_URL` instead of sending the large page back through the main Laguna model. The configured `WEB_FETCH_PROCESSOR_PROVIDER=vllm|ollama`, model, API key, THINK mode, timeout and global concurrency limit remain in force.
+
+```text
+Main agent WebFetch
+  -> Claude Code native Fetch UI
+  -> Claude Code downloads page
+  -> Web page content: child request
+  -> Proxy WebFetch Processor
+  -> child text response
+  -> Claude Code returns tool_result to the main agent
+```
+
+This avoids a second full Base-model reasoning pass for the common 200-OK WebFetch path.
+
+### Redirect/error awesome-web-fetch fallback
+
+Claude Code may return a redirect or explicit fetch error without creating the 200-content processor child. V0.2.22 detects only those failure-shaped `tool_result` blocks. Using the original `tool_use_id`, it finds the corresponding WebFetch URL/prompt, invokes awesome-web-fetch, applies the normal WebFetch Processor, and replaces only the **Base-model view** of that tool result.
+
+Claude Code's transcript remains unchanged; the model receives the enriched result and therefore does not need to issue a second WebFetch merely to follow a redirect.
+
+```text
+Claude Code Fetch
+  -> 302 / explicit fetch error
+  -> tool_result returns to Proxy
+  -> awesome-web-fetch fallback
+  -> WebFetch Processor
+  -> enriched tool_result sent only to Laguna
+```
+
+Successful Claude Code WebFetch summaries are never re-fetched. Enrichment is cached by session/tool-use identity so replayed history does not repeat the fallback download.
+
+### Matching boundaries
+
+The Proxy continues to use exact aliases and dated native forms. It does not capture arbitrary substring or MCP tool names:
+
+```text
+captured/recognized:
+  WebSearch
+  web_search
+  web_search_YYYYMMDD
+  WebFetch
+  web_fetch
+  web_fetch_YYYYMMDD
+
+not captured by substring:
+  mcp__searxng__web_search
+  company_web_search_v2
+  my_web_fetch
+```
+
+Diagnostic file tracing from `0.2.21-diagnostic.1` remains available but is disabled by default.
+
+## V0.2.22 architecture
 
 ```text
 Claude Code
   -> vllm-cc-tools-proxy:8080
-       ├─ local Poppler: PDF metadata, native text, page rendering
-       ├─ local ImageMagick: validation, normalization, bounded crops
-       ├─ visual provider: vLLM OpenAI-compatible or Ollama native multimodal analysis
-       ├─ SearXNG / awesome-web-fetch: managed WebSearch and raw page retrieval
-       ├─ WebFetch Processor: isolated prompt-directed page extraction
-       └─ base vLLM: final reasoning and Claude Code tool calling
+       ├─ ordinary WebSearch/WebFetch: hand back to Claude Code
+       ├─ native web_search child: SearXNG
+       ├─ WebFetch 200-content child: WebFetch Processor
+       ├─ WebFetch redirect/error: awesome-web-fetch fallback + Processor
+       ├─ local Poppler/ImageMagick: PDF/image adaptation
+       ├─ visual provider: vLLM or Ollama
+       └─ base vLLM: main reasoning and Claude Code tool calling
 ```
 
-Routing is intentionally asymmetric:
+Routing remains transparent for ordinary traffic, while PDF/image workflows and native Web child workflows stay bounded and observable. The deployment remains one official `node:22-bookworm-slim` service with persistent source/cache/data volumes and no Redis, parser sidecars or custom Docker image.
 
-```text
-HEAD /, HEAD/GET /api/hello and GET /health
-  -> handled locally
-
-PDF/image cache miss, WebSearch or WebFetch Messages requests
-  -> bounded managed workflow
-
-PDF/image cache hit
-  -> normalized cached transform without managed queue or visible progress
-
-all other methods and endpoints
-  -> transparent bypass to VLLM_BASE_URL
-```
-
-Transparent bypass preserves the original method, path, query string, request bytes, response status, response headers and streaming body. Ordinary Claude Code native tools therefore remain native vLLM streams and do not enter the proxy queue.
-
-The deployment contains one official `node:22-bookworm-slim` service and does not use `bootstrap.sh` or a Dockerfile. The inline Compose command uses the fixed repository:
-
-```text
-https://github.com/ericli1018/vllm-cc-tools-proxy.git
-```
-
-Startup behavior:
-
-1. The first start clones `main` into the persistent `proxy-source` volume.
-2. Later starts run `git pull --ff-only origin main` in the same checkout.
-3. `package.json` and `package-lock.json` are fingerprinted. `npm ci --omit=dev` runs only when that fingerprint changes.
-4. `node_modules` and the dependency fingerprint remain inside `proxy-source`; npm downloads remain in `proxy-npm-cache`.
-5. Debian package archives remain in `proxy-apt-cache`, reducing downloads after container recreation. Installed Poppler/ImageMagick binaries survive a normal container restart; a recreated container reinstalls them from the persistent package cache.
-6. Normalized PDF/image analysis remains in `proxy-data`, independent of the Git checkout and dependency volumes.
-
-A local source modification or non-fast-forward history intentionally stops startup instead of silently overwriting the persistent checkout. There are no parser sidecars, OCR sidecars, Redis or object storage.
-
-## V0.2.21 Native Claude Code Web Tool UI Bridge
+## Historical V0.2.21 Native Claude Code Web Tool UI Bridge
 
 V0.2.21 keeps the V0.2.20 Proxy-owned Server Tool execution model, but tightens the Claude Code-facing streaming contract so WebSearch/WebFetch can be rendered as native tool activity instead of disappearing while the Proxy works.
 
@@ -89,7 +176,7 @@ The intended Claude Code presentation is the native tool row, for example:
 
 The Proxy still owns execution; Claude Code should not execute the same WebSearch/WebFetch a second time.
 
-## V0.2.20 unified Web Server Tool Bridge
+## Historical V0.2.20 unified Web Server Tool Bridge
 
 V0.2.20 changes Proxy-owned WebSearch and WebFetch from hidden/internal client-tool handling into an Anthropic-compatible server-tool lifecycle. The model still chooses the web action, Claude Code can see that the action exists, but the Proxy owns execution and Claude Code does not execute the web tool a second time.
 

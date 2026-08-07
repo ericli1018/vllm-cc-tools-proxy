@@ -87,12 +87,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.21 diagnostic prerelease', async () => {
+test('package version is V0.2.22 release', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.21-diagnostic.1');
-  assert.equal(lock.version, '0.2.21-diagnostic.1');
-  assert.equal(lock.packages[''].version, '0.2.21-diagnostic.1');
+  assert.equal(packageJson.version, '0.2.22');
+  assert.equal(lock.version, '0.2.22');
+  assert.equal(lock.packages[''].version, '0.2.22');
 });
 
 
@@ -208,6 +208,15 @@ test('README documents V0.2.19.3 WebFetch Processor provider routing', () => {
   assert.match(readme, /v1\/chat\/completions/);
 });
 
+
+test('README documents V0.2.22 Claude Code-owned Web lifecycle', () => {
+  assert.match(readme, /V0\.2\.22 Claude Code-owned Web lifecycle/);
+  assert.match(readme, /ordinary `WebSearch` \/ `WebFetch`/);
+  assert.match(readme, /web_search_YYYYMMDD/);
+  assert.match(readme, /Web page content:/);
+  assert.match(readme, /awesome-web-fetch fallback/);
+  assert.match(readme, /claude_code_client_tool/);
+});
 
 test('README documents V0.2.21 diagnostic built-in WebSearch/WebFetch trace', () => {
   assert.match(readme, /V0\.2\.21-diagnostic\.1/);

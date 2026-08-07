@@ -100,10 +100,16 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.21-diagnostic.1'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.21-diagnostic.1'
+test "$(node -p "require('./package.json').version")" = '0.2.22'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.22'
 
 
+test -f src/proxy/client-web-tool-lifecycle.js
+grep -Fq 'parseClaudeCodeWebFetchProcessorChild' src/services/proxy-server.js
+grep -Fq 'web_fetch_processor_child_completed' src/services/proxy-server.js
+grep -Fq 'web_fetch_tool_result_enriched' src/services/proxy-server.js
+grep -Fq 'passthroughManagedWebTools' src/proxy/managed-loop.js
+grep -Fq 'claude_code_client_tool' src/services/proxy-server.js
 test -f src/proxy/native-web-tools.js
 grep -Fq 'normalizeNativeWebToolsRequest' src/services/proxy-server.js
 grep -Fq 'native_web_tools_normalized' src/services/proxy-server.js
