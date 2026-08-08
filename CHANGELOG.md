@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.26.3 - 2026-08-08
+
+- Kept the V0.2.26.2 locale-native system language contract and added a compact locale-native generation-adjacent language tail to the latest user turn sent to Base vLLM.
+- Re-anchored exactly one language tail before every managed Base-model round, including rounds after managed tool results, without persisting the tail into the Claude Code transcript.
+- Re-applied the tail after native Web-tool normalization so `/v1/messages/count_tokens` preflight and first-round inference receive the same prompt content.
+- Preserved the original Laguna chat template and avoided tool/protocol/JSON wording in the tail.
+- Preserved V0.2.26 Media/Vision, V0.2.26.1 activity-aware timeout behavior, WebSearch/WebFetch lifecycle, scheduling, and all existing ENV names.
+
 ## 0.2.26.2 - 2026-08-08
 
 - Replaced the Main/Base-model `Respond in ...` language instruction with a short locale-native visible-output contract for all five supported `MODEL_RESPONSE_LANGUAGE` values.

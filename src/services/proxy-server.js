@@ -16,7 +16,7 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
-import { injectResponseLanguagePolicy } from '../proxy/response-language-policy.js';
+import { injectResponseLanguagePolicy, injectResponseLanguageTail } from '../proxy/response-language-policy.js';
 import { localizeProgressMessage, statusText } from '../i18n/response-language.js';
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
@@ -743,6 +743,7 @@ export function createProxyServer(config, dependencies = {}) {
       const serverWebUiDeclaration = detectServerWebUiDeclaration(original);
       const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
       let request = normalizedWebTools.request;
+      request = injectResponseLanguageTail(request, config.responseLanguage).request;
       const managedWebPolicyEnforcer = createManagedWebPolicyEnforcer(normalizedWebTools.policies);
       if (normalizedWebTools.changed) {
         log(config, 'info', 'native_web_tools_normalized', {
@@ -1041,7 +1042,10 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
+      const upstream = (body, signal) => {
+        const tailed = injectResponseLanguageTail(body, config.responseLanguage).request;
+        return callUpstreamManagedStream(tailed, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
+      };
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;

@@ -134,3 +134,62 @@ test('V0.2.25.2 localizes immediate first-byte model progress in every locale', 
     assert.equal(language.statusText(locale, 'modelFirstByte', { seconds: 45, receivedBytes: 284 }), text);
   }
 });
+
+test('V0.2.26.3 locale registry exposes a compact generation-adjacent tail in the target language', () => {
+  const expected = {
+    'zh-TW': '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。',
+    'zh-CN': '若用户未明确要求其他语言，请使用简体中文（zh-CN）撰写给用户看的回答。',
+    'en-US': 'Unless the user explicitly requests another language, write the user-visible answer in English (en-US).',
+    'ja-JP': 'ユーザーが他の言語を明示的に要求していない限り、ユーザー向けの回答は日本語（ja-JP）で記述してください。',
+    'ko-KP': '사용자가 다른 언어를 명시적으로 요청하지 않는 한, 사용자에게 보여 줄 답변은 한국어(ko-KP)로 작성하십시오.',
+  };
+
+  for (const [locale, tailInstruction] of Object.entries(expected)) {
+    const profile = language.languageProfile(locale);
+    assert.equal(profile.modelTailInstruction, tailInstruction);
+    assert.doesNotMatch(tailInstruction, /<\/?think>|\btool\b|protocol|JSON/i);
+  }
+});
+
+import { injectResponseLanguageTail } from '../src/proxy/response-language-policy.js';
+
+test('V0.2.26.3 language tail is appended to the latest user turn without mutating the source request', () => {
+  const original = {
+    messages: [
+      { role: 'user', content: '第一個問題' },
+      { role: 'assistant', content: 'First answer' },
+      { role: 'user', content: '最新問題' },
+    ],
+  };
+  const before = structuredClone(original);
+  const result = injectResponseLanguageTail(original, 'zh-TW');
+
+  assert.deepEqual(original, before);
+  assert.equal(result.changed, true);
+  assert.equal(result.request.messages[0].content, '第一個問題');
+  assert.equal(
+    result.request.messages[2].content,
+    '最新問題\n\n若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。',
+  );
+});
+
+test('V0.2.26.3 language tail can follow a tool_result user turn and is re-anchored instead of duplicated', () => {
+  const tail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
+  const original = {
+    messages: [
+      { role: 'user', content: `開始分析\n\n${tail}` },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'WebSearch', input: { query: 'x' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'result' }] },
+    ],
+  };
+
+  const result = injectResponseLanguageTail(original, 'zh-TW');
+  assert.equal(result.changed, true);
+  assert.equal(result.request.messages[0].content, '開始分析');
+  assert.deepEqual(result.request.messages[2].content, [
+    { type: 'tool_result', tool_use_id: 'toolu_1', content: 'result' },
+    { type: 'text', text: tail },
+  ]);
+  const serialized = JSON.stringify(result.request.messages);
+  assert.equal(serialized.split(tail).length - 1, 1);
+});

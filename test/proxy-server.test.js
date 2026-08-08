@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.26.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.26.3', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -1102,7 +1102,7 @@ test('explicit count_tokens normalizes native web search and web fetch definitio
   assert.deepEqual(await response.json(), { input_tokens: 321 });
   assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
   assert.match(observed.system, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
-  assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
+  assert.deepEqual(observed.messages, [{ role: 'user', content: 'research\n\n若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。' }]);
   for (const tool of observed.tools) {
     assert.ok(tool.input_schema);
     assert.equal(tool.type, undefined);
@@ -2158,4 +2158,99 @@ test('V0.2.26 adapts raw image to Vision evidence before Base count_tokens prefl
   assert.doesNotMatch(preflightSerialized, new RegExp(png.toString('base64').slice(0, 80)));
   assert.match(preflightSerialized, /VCC_PROXY_EVIDENCE_BEGIN/);
   assert.ok(logs.some((entry) => entry.event === 'managed_request_classified' && entry.class === 'large_context' && entry.input_tokens === 120000));
+});
+
+test('V0.2.26.3 managed rounds re-anchor one locale-native language tail on the newest user turn', async (t) => {
+  const tail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
+  const upstreamBodies = [];
+  const searx = await startJsonServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'x', url: 'https://example.com', content: 'result' }] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamBodies.push(payload);
+    const hasResult = payload.messages.some((message) => Array.isArray(message.content)
+      && message.content.some((block) => block?.type === 'tool_result'));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(hasResult
+      ? { id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'完成'}],stop_reason:'end_turn',usage:{} }
+      : { id:'tool',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'web_search',input:{query:'x'}}],stop_reason:'tool_use',usage:{} }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url, responseLanguage: 'zh-TW' }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+      messages: [{ role: 'user', content: '請搜尋後回答' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const observedResponse = await response.json();
+  assert.equal(observedResponse.content.find((block) => block?.type === 'text')?.text, '完成');
+  assert.equal(upstreamBodies.length, 2);
+
+  const firstLastUser = [...upstreamBodies[0].messages].reverse().find((message) => message.role === 'user');
+  assert.equal(firstLastUser.content, `請搜尋後回答\n\n${tail}`);
+
+  const secondLastUser = [...upstreamBodies[1].messages].reverse().find((message) => message.role === 'user');
+  assert.equal(Array.isArray(secondLastUser.content), true);
+  assert.equal(secondLastUser.content.at(-1)?.type, 'text');
+  assert.equal(secondLastUser.content.at(-1)?.text, tail);
+  assert.equal(JSON.stringify(upstreamBodies[1].messages).split(tail).length - 1, 1);
+});
+
+test('V0.2.26.3 managed usage preflight and first model round receive the same language tail', async (t) => {
+  const tail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
+  let preflightBody = null;
+  let modelBody = null;
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      preflightBody = payload;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 100 }));
+      return;
+    }
+    modelBody = payload;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'完成'}],stop_reason:'end_turn',usage:{input_tokens:100,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    responseLanguage: 'zh-TW',
+    usagePreflightEnabled: true,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+      messages: [{ role: 'user', content: '直接回答，不需要搜尋' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  await response.text();
+  assert.ok(preflightBody);
+  assert.ok(modelBody);
+
+  const lastUserText = (body) => {
+    const message = [...body.messages].reverse().find((entry) => entry.role === 'user');
+    if (typeof message.content === 'string') return message.content;
+    return message.content.filter((block) => block?.type === 'text').map((block) => block.text).join('\n');
+  };
+  assert.match(lastUserText(preflightBody), new RegExp(tail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(lastUserText(modelBody), new RegExp(tail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.equal(JSON.stringify(preflightBody.messages).split(tail).length - 1, 1);
+  assert.equal(JSON.stringify(modelBody.messages).split(tail).length - 1, 1);
 });

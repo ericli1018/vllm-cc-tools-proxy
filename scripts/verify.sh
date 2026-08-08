@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.2'
+test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.3'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.3'
 
 
 test -f src/i18n/response-language.js
@@ -216,5 +216,22 @@ import { SUPPORTED_RESPONSE_LANGUAGES, languageProfile } from './src/i18n/respon
 for (const locale of SUPPORTED_RESPONSE_LANGUAGES) {
   const instruction = languageProfile(locale).modelInstruction;
   if (/<\/?think>/i.test(instruction) || /\btool\b|protocol|JSON/i.test(instruction)) process.exit(1);
+}
+NODE
+
+
+# V0.2.26.3 generation-adjacent language tail release contract
+grep -Fq 'V0.2.26.3 generation-adjacent language tail' README.md
+grep -Fq '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。' README.md
+grep -Fq 'latest user turn' README.md
+grep -Fq 'every managed model round' README.md
+grep -Fq '0.2.26+hotfix.3' README.md
+grep -Fq 'modelTailInstruction' src/i18n/response-language.js
+grep -Fq 'injectResponseLanguageTail' src/services/proxy-server.js
+node --input-type=module - <<'NODE'
+import { SUPPORTED_RESPONSE_LANGUAGES, languageProfile } from './src/i18n/response-language.js';
+for (const locale of SUPPORTED_RESPONSE_LANGUAGES) {
+  const tail = languageProfile(locale).modelTailInstruction;
+  if (!tail || /<\/?think>/i.test(tail) || /tool|protocol|JSON/i.test(tail)) process.exit(1);
 }
 NODE

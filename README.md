@@ -1,7 +1,21 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.2 strengthens the runtime response-language boundary with short locale-native instructions for user-visible prose while leaving the Laguna chat template and tool protocol untouched.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.3 adds a generation-adjacent locale-native language tail on the latest user turn for every Base-model round while preserving the V0.2.26.2 system language contract and the original Laguna chat template.
 
+
+## V0.2.26.3 generation-adjacent language tail
+
+V0.2.26.3 keeps the V0.2.26.2 locale-native `system` language contract and adds one compact **generation-adjacent language tail** to the latest `user` turn in the request clone sent to Base vLLM. This increases recency without modifying the original Laguna chat template or adding tool/protocol wording.
+
+For `MODEL_RESPONSE_LANGUAGE=zh-TW`, the tail is:
+
+```text
+若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。
+```
+
+Equivalent one-line tails are native-language localized for `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`. The tail is ephemeral: the Proxy does not persist it back into the Claude Code transcript. Before every managed model round, the Proxy removes any previous injected copy from the request clone and re-anchors exactly one copy on the **latest user turn**, including a user turn containing a `tool_result`. This keeps the reminder adjacent after WebSearch/WebFetch or other managed-tool continuation rounds instead of leaving it behind in older history.
+
+Managed `/v1/messages/count_tokens` usage preflight is re-anchored after native-Web normalization as well, so token counting and the first Base-model inference round see the same language tail. V0.2.26.3 does not change WebFetch Processor or Vision/Ollama language instructions, tool schemas, tool lifecycle, Media/Vision processing, activity-aware timeout policy, scheduling, or ENV names. The external release label is `0.2.26.3`; npm-valid package metadata is `0.2.26+hotfix.3`.
 
 ## V0.2.26.2 native-language visible-output contract
 

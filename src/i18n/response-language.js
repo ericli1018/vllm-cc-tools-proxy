@@ -25,6 +25,7 @@ function hasReceivedBytes(value) {
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
     modelInstruction: '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。',
+    modelTailInstruction: '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。',
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
     progressHeader: '目前處理進度：',
     status: Object.freeze({
@@ -86,6 +87,7 @@ const PROFILES = Object.freeze({
   }),
   'zh-CN': Object.freeze({
     modelInstruction: '在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。',
+    modelTailInstruction: '若用户未明确要求其他语言，请使用简体中文（zh-CN）撰写给用户看的回答。',
     processorInstruction: 'Write the result in Simplified Chinese (zh-CN).',
     progressHeader: '当前处理进度：',
     status: Object.freeze({
@@ -147,6 +149,7 @@ const PROFILES = Object.freeze({
   }),
   'en-US': Object.freeze({
     modelInstruction: 'Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.',
+    modelTailInstruction: 'Unless the user explicitly requests another language, write the user-visible answer in English (en-US).',
     processorInstruction: 'Write the result in English (en-US).',
     progressHeader: 'Current progress:',
     status: Object.freeze({
@@ -208,6 +211,7 @@ const PROFILES = Object.freeze({
   }),
   'ja-JP': Object.freeze({
     modelInstruction: 'think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。',
+    modelTailInstruction: 'ユーザーが他の言語を明示的に要求していない限り、ユーザー向けの回答は日本語（ja-JP）で記述してください。',
     processorInstruction: 'Write the result in Japanese (ja-JP).',
     progressHeader: '現在の処理状況：',
     status: Object.freeze({
@@ -269,6 +273,7 @@ const PROFILES = Object.freeze({
   }),
   'ko-KP': Object.freeze({
     modelInstruction: 'think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.',
+    modelTailInstruction: '사용자가 다른 언어를 명시적으로 요청하지 않는 한, 사용자에게 보여 줄 답변은 한국어(ko-KP)로 작성하십시오.',
     processorInstruction: 'Write the result in Korean (ko-KP).',
     progressHeader: '현재 처리 상태:',
     status: Object.freeze({
