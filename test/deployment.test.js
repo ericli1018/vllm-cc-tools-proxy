@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.26.4 hotfix metadata', async () => {
+test('package version is V0.2.26.5 hotfix metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.26+hotfix.4');
-  assert.equal(lock.version, '0.2.26+hotfix.4');
-  assert.equal(lock.packages[''].version, '0.2.26+hotfix.4');
+  assert.equal(packageJson.version, '0.2.26+hotfix.5');
+  assert.equal(lock.version, '0.2.26+hotfix.5');
+  assert.equal(lock.packages[''].version, '0.2.26+hotfix.5');
 });
 
 
@@ -357,4 +357,12 @@ test('README documents V0.2.26.4 Final Language Gate and repair fallback order',
   assert.match(readme, /External Processor.*Base.*original/is);
   assert.match(readme, /thinking.*tool_use.*intermediate/is);
   assert.match(readme, /0\.2\.26\+hotfix\.4/);
+});
+
+
+test('README documents V0.2.26.5 native WebSearch bypass and stricter Chinese variant detection', () => {
+  assert.match(readme, /V0\.2\.26\.5/);
+  assert.match(readme, /native_web_search/);
+  assert.match(readme, /bypass Final Language Gate/);
+  assert.match(readme, /zh-TW \/ zh-CN/);
 });

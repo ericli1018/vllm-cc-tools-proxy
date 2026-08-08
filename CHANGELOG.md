@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.26.5 - 2026-08-08
+
+- Bypassed Final Language Gate for the exclusive `native_web_search` fast lane so Claude Code internal WebSearch child/results are never presentation-rewritten.
+- Expanded common Simplified/Traditional Chinese variant markers and added short-text discrimination from four Han characters when at least two same-direction markers clearly dominate.
+- Preserved conservative handling for mixed technical Chinese and all V0.2.26.4 External→Base→original fallback behavior.
+- Added no ENV variables and changed no Laguna chat-template, WebFetch/Vision, timeout, scheduling, or tool-lifecycle contracts.
+
 
 ## 0.2.26.4 - 2026-08-08
 

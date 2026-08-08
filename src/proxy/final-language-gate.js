@@ -1,5 +1,5 @@
-const SIMPLIFIED_MARKERS = new Set([...('这们为说国会个门体发现经应该问题处理进行实际结果数据还没从对开关请让显认证转换输设备统线网页读写软硬码误').replace(/\s/g, '')]);
-const TRADITIONAL_MARKERS = new Set([...('這們為說國會個門體發現經應該問題處理進行實際結果數據還沒從對開關請讓顯認證轉換輸設備統線網頁讀寫軟硬碼誤').replace(/\s/g, '')]);
+const SIMPLIFIED_MARKERS = new Set([...('这们为说国会个门体发现经应该问题处理进行实际结果数据还没从对开关请让显认证转换输设备统线网页读写软硬码误简单双过与后里并务项达态类时种点标记历产测试').replace(/\s/g, '')]);
+const TRADITIONAL_MARKERS = new Set([...('這們為說國會個門體發現經應該問題處理進行實際結果數據還沒從對開關請讓顯認證轉換輸設備統線網頁讀寫軟硬碼誤簡單雙過與後裡並務項達態類時種點標記歷產測試').replace(/\s/g, '')]);
 
 function proseOnly(value) {
   return String(value ?? '')
@@ -43,6 +43,12 @@ function strongHan(c) {
   return c.han >= 8 && c.han >= c.latin * 0.15;
 }
 
+function variantDominates(c, variantCount, otherCount) {
+  return c.han >= 4
+    && variantCount >= 2
+    && variantCount > otherCount * 1.5;
+}
+
 export function classifyFinalLanguage(text, locale = 'en-US') {
   const c = counts(text);
   if (!c.prose || (c.han + c.kana + c.hangul + c.latin) < 4) {
@@ -52,7 +58,7 @@ export function classifyFinalLanguage(text, locale = 'en-US') {
   if (locale === 'zh-TW') {
     if (c.hangul >= 6) return { decision: 'repair', detected: 'ko', ...c };
     if (c.kana >= 6) return { decision: 'repair', detected: 'ja', ...c };
-    if (c.han >= 8 && c.simplified >= 3 && c.simplified > c.traditional * 1.5) {
+    if (variantDominates(c, c.simplified, c.traditional)) {
       return { decision: 'repair', detected: 'zh-CN', ...c };
     }
     if (strongHan(c)) return { decision: 'compliant', detected: 'zh', ...c };
@@ -63,7 +69,7 @@ export function classifyFinalLanguage(text, locale = 'en-US') {
   if (locale === 'zh-CN') {
     if (c.hangul >= 6) return { decision: 'repair', detected: 'ko', ...c };
     if (c.kana >= 6) return { decision: 'repair', detected: 'ja', ...c };
-    if (c.han >= 8 && c.traditional >= 3 && c.traditional > c.simplified * 1.5) {
+    if (variantDominates(c, c.traditional, c.simplified)) {
       return { decision: 'repair', detected: 'zh-TW', ...c };
     }
     if (strongHan(c)) return { decision: 'compliant', detected: 'zh', ...c };

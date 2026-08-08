@@ -108,3 +108,18 @@ test('V0.2.26.4 all repair failures preserve the original successful Laguna answ
   assert.equal(result.action, 'fallback_original');
   assert.deepEqual(result.response, original);
 });
+
+test('V0.2.26.5 short explicit Simplified/Traditional Chinese is discriminated for zh-TW and zh-CN', () => {
+  const simplified = classifyFinalLanguage('这是测试。', 'zh-TW');
+  assert.equal(simplified.decision, 'repair');
+  assert.equal(simplified.detected, 'zh-CN');
+
+  const traditional = classifyFinalLanguage('這是測試。', 'zh-CN');
+  assert.equal(traditional.decision, 'repair');
+  assert.equal(traditional.detected, 'zh-TW');
+
+  assert.equal(
+    classifyFinalLanguage('目前 vLLM 的 request 已完成，response 可以直接交回 Claude Code。', 'zh-TW').decision,
+    'compliant',
+  );
+});

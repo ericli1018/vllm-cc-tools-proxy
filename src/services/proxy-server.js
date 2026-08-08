@@ -1279,7 +1279,9 @@ export function createProxyServer(config, dependencies = {}) {
             : undefined,
           signal: abortController.signal,
         });
-        result = await applyFinalPresentationLanguage(result, request);
+        if (!nativeWebSearchFastLane) {
+          result = await applyFinalPresentationLanguage(result, request);
+        }
         await writeWebToolTrace(
           requestId,
           'proxy_response',

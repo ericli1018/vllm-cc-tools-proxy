@@ -1,7 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.4 replaces Base-model language prompting with a final-response language gate: Laguna completes the task normally, then only a clearly non-compliant final visible answer is rewritten to `MODEL_RESPONSE_LANGUAGE`.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.5 tightens the V0.2.26.4 Final Language Gate by excluding the internal `native_web_search` lane and improving short explicit zh-TW / zh-CN variant discrimination.
 
+
+
+## V0.2.26.5 Final Language Gate boundary hotfix
+
+V0.2.26.5 fixes two narrow Final Language Gate boundaries found in production logs.
+
+The exclusive `native_web_search` fast lane now **bypass Final Language Gate** completely. That lane is a Claude Code internal WebSearch child/result workflow rather than the user's final assistant answer, so its `end_turn` text is returned unchanged to Claude Code. It no longer calls the External Processor or Base language-repair fallback merely because the internal WebSearch result is English. Normal `managed` final answers and ordinary final `/v1/messages` responses keep the V0.2.26.4 language gate behavior.
+
+The zh-TW / zh-CN deterministic classifier now recognizes more common variant-specific characters and can classify short, explicit Chinese text from four Han characters onward when at least two same-direction variant markers clearly dominate the opposite variant. For example, `这是测试。` is treated as zh-CN when the target is zh-TW, and `這是測試。` is treated as zh-TW when the target is zh-CN. Code fences, inline code, URLs and path-like literals remain excluded from language sampling, and mixed technical Chinese continues to use the conservative pass/uncertain policy when variant evidence is not clear.
+
+No ENV variable, Laguna chat template, WebFetch/Vision pipeline, timeout policy, scheduling rule, or External→Base→original repair fallback order is changed. The external release label is `0.2.26.5`; npm-valid package metadata is `0.2.26+hotfix.5`.
 
 ## V0.2.26.4 Final Language Gate
 

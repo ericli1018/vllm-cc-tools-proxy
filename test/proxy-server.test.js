@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.26.4', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.26.5', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2384,4 +2384,54 @@ test('V0.2.26.4 non-managed streaming final answer is buffered, language-repaire
   assert.match(sse, /直接回答已準備完成/);
   assert.doesNotMatch(sse, /The direct answer is ready/);
   assert.equal(baseCalls, 2);
+});
+
+test('V0.2.26.5 native web search lane bypasses Final Language Gate even when its end_turn text is English', async (t) => {
+  let modelCalls = 0;
+  let processorCalls = 0;
+  const searx = await startJsonServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ results: [{ title: 'Docs', url: 'https://example.com', content: 'evidence' }] }));
+  });
+  const processor = await startJsonServer(async (_req, res) => {
+    processorCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'<<<VCC_LANG_SEGMENT_0>>>\n不應執行翻譯。\n<<<VCC_LANG_SEGMENT_END_0>>>'}}] }));
+  });
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 100 }));
+      return;
+    }
+    modelCalls += 1;
+    const body = modelCalls === 1
+      ? { id:'search',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'s1',name:'web_search',input:{query:'test'}}],stop_reason:'tool_use',usage:{} }
+      : { id:'final',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'Internal web search result in English.'}],stop_reason:'end_turn',usage:{} };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    searxngUrl: searx.url,
+    usagePreflightEnabled: true,
+    responseLanguage: 'zh-TW',
+    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => searx.server.close());
+  t.after(() => processor.server.close());
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ model:'m',stream:false,tools:[{type:'web_search_20250305',name:'web_search',max_uses:8}],messages:[{role:'user',content:'search'}] }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  const finalText = body.content.find((block) => block?.type === 'text')?.text;
+  assert.equal(finalText, 'Internal web search result in English.');
+  assert.equal(processorCalls, 0);
 });

@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.4'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.4'
+test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.5'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.5'
 
 
 test -f src/i18n/response-language.js
@@ -227,3 +227,14 @@ grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
  test -f src/proxy/final-language-gate.js
  test -f src/services/final-language-repair.js
  test -f V0.2.26.4-更新說明.md
+
+# V0.2.26.5 Final Language Gate boundary hotfix contract
+ grep -Fq 'V0.2.26.5 Final Language Gate boundary hotfix' README.md
+ grep -Fq 'native_web_search' README.md
+ grep -Fq 'bypass Final Language Gate' README.md
+ grep -Fq 'zh-TW / zh-CN' README.md
+ grep -Fq '0.2.26+hotfix.5' README.md
+ grep -Fq 'if (!nativeWebSearchFastLane)' src/services/proxy-server.js
+ grep -Fq 'variantDominates' src/proxy/final-language-gate.js
+ test -f V0.2.26.5-更新說明.md
+
