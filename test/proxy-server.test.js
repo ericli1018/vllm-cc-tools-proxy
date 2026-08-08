@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.25', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.25.1', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -167,7 +167,7 @@ test('historical PDF is analyzed once then served from cache without a second pr
 test('streamed managed request emits progress and final Anthropic blocks', async (t) => {
   const searx = await startJsonServer((_req,res)=>{res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({results:[{title:'x',url:'https://example.com',content:'y'}]}));});
   let call=0;
-  const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,false);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'web_search',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
+  const vllm=await startJsonServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,true);call+=1;const response=call===1?{id:'a',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'tool-1',name:'web_search',input:{query:'abc'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1}}:{id:'b',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FINAL'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:3}};res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify(response));});
   const proxy=createProxyServer(config({vllmBaseUrl:vllm.url,searxngUrl:searx.url,progressVisibleAfterMs:60_000}));const proxyUrl=await listen(proxy);t.after(()=>searx.server.close());t.after(()=>vllm.server.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,tools:[{type:'web_search_20250305',name:'web_search',max_uses:8}],messages:[{role:'user',content:'search'}]})});
   const text=await response.text();assert.match(text,/\"type\":\"server_tool_use\"/);assert.match(text,/\"type\":\"web_search_tool_result\"/);assert.match(text,/FINAL/);assert.match(text,/event: message_stop/);assert.match(text,/\"web_search_requests\":1/);assert.doesNotMatch(text,/VLLMCCP:v1:/);assert.equal(call,2);
@@ -415,7 +415,7 @@ test('client cancellation removes a queued request', async (t) => {
 test('quick managed stream does not show a progress block only to announce completion', async (t) => {
   const vllm = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
-    assert.equal(payload.stream, false);
+    assert.equal(payload.stream, true);
     await new Promise((resolve) => setTimeout(resolve, 20));
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
@@ -983,7 +983,7 @@ test('managed streaming preflights input tokens for Claude Code auto compact com
       return;
     }
     messageCalls += 1;
-    assert.equal(payload.stream, false);
+    assert.equal(payload.stream, true);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       id: 'done', type: 'message', role: 'assistant', model: 'm',
@@ -1036,7 +1036,7 @@ test('managed usage preflight failure does not interrupt the Claude Code turn', 
       res.end(JSON.stringify({ error: { type: 'not_found', message: 'count unsupported' } }));
       return;
     }
-    assert.equal(payload.stream, false);
+    assert.equal(payload.stream, true);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
       id: 'done', type: 'message', role: 'assistant', model: 'm',
@@ -1913,7 +1913,7 @@ test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON ro
   let round = 0;
   const vllm = http.createServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
-    assert.equal(payload.stream, false);
+    assert.equal(payload.stream, true);
     round += 1;
     const raw = round === 1 ? searchResponse : finalResponse;
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -2012,4 +2012,51 @@ test('V0.2.25 large-context gate serializes 100K-plus managed model requests wit
   assert.match(a, /DONE/); assert.match(b, /DONE/);
   assert.equal(maxConcurrent, 1);
   assert.equal(admission.health().managed.limit, 2);
+});
+
+test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero bytes before completion', async (t) => {
+  const observedStreams = [];
+  const vllm = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    observedStreams.push(payload.stream);
+    if (payload.stream !== true) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'legacy', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'LEGACY' }], stop_reason: 'end_turn',
+        usage: { input_tokens: 10, output_tokens: 1 },
+      }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"streamed","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"STREAMED"}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    res.end('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressHeartbeatMs: 20,
+    progressVisibleAfterMs: 0,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'answer directly' }],
+    }),
+  });
+  const wire = await response.text();
+  assert.deepEqual(observedStreams, [true]);
+  assert.match(wire, /STREAMED/);
+  assert.match(wire, /已收到 (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
 });

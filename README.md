@@ -1,6 +1,27 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25 optimizes multi-Agent research scheduling with an independent native-WebSearch fast lane, a large-context gate, truthful queue/model timers, and conservative response-body stall detection while preserving the existing Claude Code-owned WebSearch/WebFetch lifecycle.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25.1 fixes the Managed Base-model transport so live Anthropic SSE response bytes reach the Proxy during generation, making V0.2.24 byte progress and V0.2.25 stall detection reflect real upstream activity while preserving the multi-Agent scheduling changes introduced in V0.2.25.
+
+
+## V0.2.25.1 managed SSE streaming hotfix
+
+V0.2.25.1 fixes a transport mismatch in the managed model loop. V0.2.24 introduced cumulative Base-vLLM response-byte progress, and V0.2.25 used the same `receivedBytes` / `lastByteAt` activity to distinguish a live response from a stalled one, but the managed upstream adapter still forced `stream:false`. A local vLLM could therefore keep decoding tokens while the Proxy saw `0 B` until the final JSON response was complete.
+
+Managed Base-model rounds now request `stream:true`. The Proxy consumes the Anthropic SSE internally and reconstructs the same complete Anthropic Message object that the existing Managed Loop already expects. The reconstruction covers `message_start`, thinking/text deltas, streamed tool input JSON, usage, stop state, and `message_stop`; Claude Code still receives the same Proxy-managed final/tool lifecycle as before.
+
+The raw Base-vLLM HTTP response-body chunks continue to update the request-scoped byte counter before SSE decoding. As a result, progress can now change while Laguna is still generating:
+
+```text
+目前處理進度（已收到 0 B）：
+主模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…
+主模型仍在處理本輪請求，已執行 60 秒（已收到 2.31 KB）…
+```
+
+This also makes the existing `managed_model_stall_timeout` meaningful for a streaming-capable Base vLLM: after the current round receives its first upstream response bytes, `lastByteAt` advances as later SSE chunks arrive; a full 90-second response-body silence can then be detected before the hard `MANAGED_MODEL_ROUND_TIMEOUT_MS` deadline. TTFT remains protected because the stall detector does not arm before the first response byte.
+
+For compatibility, if an upstream ignores `stream:true` and returns one valid JSON Message, the Proxy still accepts it. In that compatibility path, live token-byte progress is naturally unavailable until the JSON body begins arriving. No new ENV variable is required.
+
+V0.2.25.1 does not change the native WebSearch fast lane, 100K+ large-context gate, WebSearch forced choice, WebFetch/Ollama Processor routing, response-language policy, or Claude Code-owned WebSearch/WebFetch lifecycle.
 
 ## V0.2.25 multi-Agent research scheduling
 

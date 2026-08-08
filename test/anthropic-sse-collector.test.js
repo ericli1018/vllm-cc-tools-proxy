@@ -1,0 +1,84 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { collectAnthropicMessageFromSse } from '../src/proxy/anthropic-sse-collector.js';
+
+function upstreamFromChunks(chunks, contentType = 'text/event-stream; charset=utf-8') {
+  return {
+    ok: true,
+    status: 200,
+    headers: { get: (name) => String(name).toLowerCase() === 'content-type' ? contentType : null },
+    body: {
+      async *[Symbol.asyncIterator]() {
+        for (const chunk of chunks) yield Buffer.from(chunk);
+      },
+    },
+  };
+}
+
+function event(name, payload) {
+  return `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+test('V0.2.25.1 collector reconstructs Anthropic thinking text tool input usage and stop state across arbitrary chunks', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'msg-1', type: 'message', role: 'assistant', model: 'laguna', content: [],
+      stop_reason: null, stop_sequence: null,
+      usage: { input_tokens: 123, output_tokens: 0, cache_read_input_tokens: 7 },
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'check ' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'Searching' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 1 }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-1', name: 'WebSearch', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"query":"today' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: ' news"}' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use', stop_sequence: null }, usage: { output_tokens: 42 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+  const cut1 = 37;
+  const cut2 = 211;
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([
+    wire.slice(0, cut1), wire.slice(cut1, cut2), wire.slice(cut2),
+  ]));
+
+  assert.equal(result.id, 'msg-1');
+  assert.equal(result.model, 'laguna');
+  assert.equal(result.stop_reason, 'tool_use');
+  assert.equal(result.usage.input_tokens, 123);
+  assert.equal(result.usage.cache_read_input_tokens, 7);
+  assert.equal(result.usage.output_tokens, 42);
+  assert.deepEqual(result.content, [
+    { type: 'thinking', thinking: 'check ', signature: 'sig' },
+    { type: 'text', text: 'Searching' },
+    { type: 'tool_use', id: 'tool-1', name: 'WebSearch', input: { query: 'today news' } },
+  ]);
+});
+
+test('V0.2.25.1 collector rejects malformed tool input JSON', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'm', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't', name: 'WebSearch', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{bad' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    return true;
+  });
+});
+
+test('V0.2.25.1 collector surfaces Anthropic SSE error events as retryable upstream errors', async () => {
+  const wire = event('error', { type: 'error', error: { type: 'overloaded_error', message: 'busy' } });
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'overloaded_error');
+    assert.equal(error.message, 'busy');
+    assert.equal(error.retryable, true);
+    return true;
+  });
+});

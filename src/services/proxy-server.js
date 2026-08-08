@@ -11,6 +11,7 @@ import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
 import { WebToolDiagnosticTraceStore } from '../proxy/web-tool-diagnostic-trace-store.js';
 import { createWebToolDiagnosticController } from '../proxy/web-tool-diagnostic.js';
 import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
+import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
@@ -82,6 +83,29 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
     });
   }
   return payload;
+}
+
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null } = {}) {
+  const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk });
+  if (!response.ok) {
+    const text = await response.text();
+    let payload = null;
+    try { payload = text ? JSON.parse(text) : null; } catch {}
+    throw new HttpError(response.status >= 500 ? 502 : response.status, payload?.error?.message || text || 'vLLM rejected the request.', {
+      code: payload?.error?.type || 'vllm_request_failed', retryable: response.status >= 500, details: payload?.error,
+    });
+  }
+  const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response);
+
+  // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
+  // Raw body chunks are still counted by requestBaseUpstream, but live token activity requires SSE.
+  const text = await response.text();
+  try { return text ? JSON.parse(text) : {}; } catch {
+    throw new HttpError(502, 'vLLM returned neither Anthropic SSE nor valid JSON for a managed model round.', {
+      code: 'vllm_invalid_stream', retryable: true, details: { content_type: contentType, body_prefix: text.slice(0, 1000) },
+    });
+  }
 }
 
 
@@ -962,7 +986,7 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
+      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;

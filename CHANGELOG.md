@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.25.1 - 2026-08-08
+
+- Kept the external hotfix label `V0.2.25.1` while using npm-valid package metadata `0.2.25+hotfix.1`.
+- Changed Managed Base-model rounds from forced `stream:false` JSON responses to `stream:true` Anthropic SSE requests.
+- Added an internal Anthropic SSE-to-Message collector that reconstructs thinking, text, streamed tool JSON, usage and stop state without changing the Managed Loop response contract.
+- Made V0.2.24 cumulative Base-vLLM bytes update while generation is still in progress when the upstream supports SSE streaming.
+- Made V0.2.25 `receivedBytes` / `lastByteAt` stall detection observe live managed response-body activity instead of only a completed JSON body.
+- Retained a JSON Message compatibility fallback for upstreams that ignore `stream:true`.
+- Preserved the V0.2.25 native WebSearch fast lane, large-context gate, queue/model timers, WebFetch/Ollama Processor routing and response-language behavior.
+
 ## 0.2.25 - 2026-08-08
 
 - Added a dedicated one-slot native WebSearch fast lane for exclusive `web_search_YYYYMMDD` child requests, independent of the general managed queue.
