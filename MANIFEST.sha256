@@ -1,8 +1,8 @@
 d78af1c0243e8881b3303e393d870260cfa833bf65a9bb12cb50af65f691907d  ./.env.example
 c25243596674d1d745ee7ef3c93b7cf72ee01b3d59702c81594c60e9ed2ce4ae  ./.gitignore
-0e9947cd3c65b7eae3a8d7d849b37dc33ae6b9365a4eaab4ff2687c2f1364740  ./CHANGELOG.md
+29e847b1bae4f4a5e55d39b0e6b50b93277202e68b304f300f833730acab0315  ./CHANGELOG.md
 0ad6856338f82966a546301aba13f36bd009b52959aff64cedf969571982343b  ./LICENSE
-523f9fb0505ee677762261aa568770ee7677fcd72795201eb13b7b869bfc2395  ./README.md
+5d1c952dae7866fdbbb09604a7b9e86159add7de2fb5320df9e0ac2fc9033a5b  ./README.md
 4ae45485d557282e1f69af6761ba2fe696caac83bcda64cec0b657e0bb1c360c  ./V0.2.10-更新說明.md
 e425f8e961ddb175d9035c190bf7255c6761a030e5ab0aa22e0599a182a2b292  ./V0.2.11-更新說明.md
 9b3771cda8082429ff32f797a8c4999c460159c2e143cf9f36abcc228aa93c01  ./V0.2.12-更新說明.md
@@ -29,6 +29,7 @@ e9b7dbc867551dd48e7514aedbe153251e945e8ae85a74da2318bedad256601a  ./V0.2.24-更�
 4baf883a41478fe082f0ac40006dc43f54eccac39826c1f0d136632ca22955b8  ./V0.2.25.2-更新說明.md
 3a6ee545e65f01656b3fa7561c82fc6a76fa3cac2f12a9a3271ae704808bf49f  ./V0.2.26-更新說明.md
 53eac5ef6dac31b70142898e7ffd6ad01eb57b33b31251199c70416a1ba41b7d  ./V0.2.26.1-更新說明.md
+b202bb20593c82353c102599f7aa72f6b34882124d13de7bd39e54ff8a532f81  ./V0.2.26.2-更新說明.md
 ade751120ca8184cd47da4bc252900043ccf834877bd49049c054a8b16927a25  ./V0.2.6-更新說明.md
 db339f6a59bfeb7f7ef4bffd8bcd61188197ce1fc7dba62bb999027525ebff0c  ./V0.2.7-更新說明.md
 6e7836635230ae71f313c710236dfff93f37a3d6f5fffe40961fa279eb3730f5  ./V0.2.8-更新說明.md
@@ -74,11 +75,11 @@ c5a3f128fb8b51f0f24b62954ae04bf3d9eabca634ec71f60bdde26c87d0514b  ./docs/superpo
 d98eb8ac03d7ed7a4ef62a1f0a1587bd0ed7fa48d301aad5fdb5558c16d630ce  ./docs/superpowers/specs/2026-08-08-response-language-localization-design.md
 407f035a638729b702247251e67a471cb0fe48c4ac080f9eb274f6312fc95518  ./docs/superpowers/specs/2026-08-08-v0.2.26-recursive-vision-evidence-design.md
 553019977e85d4ccca8e27df992eb33b6b54f33bf35309ff2547ed2c8cdaf207  ./docs/superpowers/specs/2026-08-08-v0.2.26.1-activity-timeout-design.md
-0732c3a4639236ad86456b4f7284b99cfa99e665f59b20506b222e767c5042c1  ./package-lock.json
-8c15544861dd99e1df54482e5dee8e2e6b379a676c9e1aaab592240ab602b7d1  ./package.json
+049ea76dddd2057c94cc7771796e66bead878bfd0a538da3eae30ed59a74887b  ./package-lock.json
+7c4ee90909b33a52b395929fde9d21eab98989f227aa8b3a87c28e190036f78e  ./package.json
 887be3109524a8ad3253e4b01d5623aa801b5f907a3b9230c892b0d33c02ff60  ./scripts/check-syntax.js
 ec14ecf7086117258faf8b04816cb6d4307c4b8180230ecd2d58759445d0c5d6  ./scripts/package.sh
-2e289a3dadfff87413c46f7d62fd7d233687f261d17bf09a43bc499accfd9cc9  ./scripts/verify.sh
+1ac97943e5f6cbacd52c5d85c549dfc6f608810596b66e8d35129c47111efb7a  ./scripts/verify.sh
 b7dd0aed384eaf2ada8625652632faeafb2735ae468a3920cb492d2084df86de  ./src/app.js
 53593bacfedae68d3b8e0595b0c6c90153aa6918613d18335c37a7c9bd8e64d7  ./src/cache/cache-key.js
 5529b7febbad0be48009e6f8cf8a7eed01c86589afe7a1f9bf09479c368c5e57  ./src/cache/media-cache.js
@@ -86,7 +87,7 @@ b7dd0aed384eaf2ada8625652632faeafb2735ae468a3920cb492d2084df86de  ./src/app.js
 ea2de8f2c66853f1e8ed5c987b2c4ea8695827b051248e06d465f44fec0ef554  ./src/concurrency/managed-queue.js
 ed978437305b8d1cc3569765ad37f692a764e144cec79fc11c2d9d4ba64c83b8  ./src/concurrency/semaphore.js
 0f88c826f2a4e128ec8416bfcede5e7cef8338b1ee8df44c8f140079a201bdf4  ./src/config.js
-4ffc65148ea3d76f4d25254461346d3aa362517568c17ab73af4426f99411dec  ./src/i18n/response-language.js
+3b0e2e6c4364c4dc447295c35af067af79e69a2a4ec5acd7039257a13e7d3a71  ./src/i18n/response-language.js
 9e1c99949feb8ea30e1618c1118fb2cf51efd1cc4d85e6b296d83595d8c52269  ./src/index.js
 29c7827682b7c45f3331c533db10ad528d57bc36407a9aaa8e3f9db0cc334a39  ./src/lib/http.js
 85a1acf2d3a6a1053d4893b7f9fa781bd4c8287ae2f740c6c3dfb1032b15734a  ./src/lib/media.js
@@ -120,7 +121,7 @@ ebc0b660afb31b262a2b0b3617823c63aa6a9f96fb4c0fbc3d5f008e56139016  ./src/proxy/we
 7f05d2a7c3c6a7836cc3c64e9dd986bd6ea90342c49df308a1f7ea8de644fae1  ./src/services/base-upstream.js
 8a9b0e5904f8cabaf753f248e7c8e890688f899069420f5f491cdb792be720b5  ./src/services/proxy-server.js
 0ebeec63c60e3e799d99afc5b5e04fa0f92cc6e106817e769709c65808eb795b  ./src/services/web-fetch-processor.js
-140899763e4cdf9dfd1ec25b76263ee43e0229f50236bb8abe89045bc8ba41c7  ./src/version.js
+28759cc4d4de1c063bbb00daa463846ea9572ed7bb7826ca82065e0481306f63  ./src/version.js
 9fbedeee0f1e8c8d11f87c92dfb3bda0fa58e016717cb0089a6dcb13ca3dbabf  ./src/visual/asset-registry.js
 8f9b9239564299d364ca23e71b5ff4db95ddb9badd6e5fbae7ae386e82cf8b4e  ./src/visual/crop-errors.js
 7e611c77cabf2c875bbfe192f9bab47da8d39a6b49febb320fa46cee8743b323  ./src/visual/pdf-batcher.js
@@ -138,7 +139,7 @@ f11139c9053830e8ac4f33c7b30af7fcf52ac7ad0bbcc3cc948e9ce1261d9736  ./test/cache-k
 c70dde8db99698f4f048478a87a4f89b9cef64cdbb4c032020efc11aaf845cc3  ./test/concurrency.test.js
 7fb6bcc2c92e8c718fd5639701870cab79b7c9e30b716687f928fff2e1680249  ./test/config.test.js
 64a4ae43b1f8a84b811c9371d2be53c4eb31688b3fe55c1eb07b8ac3ee5a5c00  ./test/content-blocks.test.js
-6307e725db36b73a439105b5cfca46993ab7e8e665793a20ee1d8124a31b9827  ./test/deployment.test.js
+dfc6955b9db3c36eb7713709d82c179a0f338ab3a2268d078677b3d26d04e144  ./test/deployment.test.js
 2580f2b8b0096f9a336e5ed47062ba9a05397ec6e6e879ef46d80e7ab4d3bf09  ./test/evidence-contract.test.js
 61151c2ec4d614504547d6477614571373b92e55bf6af401f5374c6ac7118909  ./test/fixtures/mixed.pdf
 fb9c184415abf872a5b1b5e9161b4537f050579bd8866965f94b0f7651ce3f40  ./test/fixtures/scanned.pdf
@@ -158,9 +159,9 @@ df14105145e74a18472c7fb04f59827c4879511d82da4d393e9e3e498fe46efd  ./test/pdf-par
 ebbf25ccbb4844c08707b55facd016302e20eb80e206e6f79c0b331e0abf1d64  ./test/progress.test.js
 6596e106a0da57382fbffb2378ef7ff23d8ae6984319cabd62264385a0d5739a  ./test/protocol-diagnostic-store.test.js
 3225f521d670f5d466c570a97934b4f34181c56469f1933ffaac64d684ecb4e5  ./test/protocol-diagnostics.test.js
-2f3605c64fb23b0c6b5437aa3089f497faef6c6719f3a46f9503d7c450bb2f26  ./test/proxy-server.test.js
-1cde03168b3818cbece94763a5570bddaf645ffdfbfde8b3171ed25665767ee0  ./test/response-language.test.js
-ab4ed09e80bd292d579f7f897e187d4ad53bc0b59a431ad8d72d49a5307ed1f3  ./test/version.test.js
+d71c13eba5c5ee102b176c97937291440010fee35950e24b5515c04c2032fe89  ./test/proxy-server.test.js
+f9ffc50cd93e9bbc8479eaf05ce9f48648a9f4dad4c963b7200f96e0fcf9dfeb  ./test/response-language.test.js
+c554f39e0aaab2389cf53110d5f815ecfe2c6875706b9fe10a3cca214a485946  ./test/version.test.js
 bf77594bd55fab028d873e331ff20c225a1c852b60faab98622615170ec9bc5c  ./test/vision-client.test.js
 7e6caa6c43d0af8ebda2b95c4a9dfac84812e6aab9f0c6f23b1961520b350b6b  ./test/web-fetch-processor.test.js
 e0457e397a026dbafa448d8a560b698de5faaff993647a609bc7a6668d321c5b  ./test/web-result-contract.test.js

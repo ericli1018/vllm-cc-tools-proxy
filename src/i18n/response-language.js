@@ -24,7 +24,7 @@ function hasReceivedBytes(value) {
 
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
-    modelInstruction: 'Respond in Traditional Chinese (zh-TW).',
+    modelInstruction: '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。',
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
     progressHeader: '目前處理進度：',
     status: Object.freeze({
@@ -85,7 +85,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'zh-CN': Object.freeze({
-    modelInstruction: 'Respond in Simplified Chinese (zh-CN).',
+    modelInstruction: '在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。',
     processorInstruction: 'Write the result in Simplified Chinese (zh-CN).',
     progressHeader: '当前处理进度：',
     status: Object.freeze({
@@ -146,7 +146,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'en-US': Object.freeze({
-    modelInstruction: 'Respond in English (en-US).',
+    modelInstruction: 'Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.',
     processorInstruction: 'Write the result in English (en-US).',
     progressHeader: 'Current progress:',
     status: Object.freeze({
@@ -207,7 +207,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ja-JP': Object.freeze({
-    modelInstruction: 'Respond in Japanese (ja-JP).',
+    modelInstruction: 'think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。',
     processorInstruction: 'Write the result in Japanese (ja-JP).',
     progressHeader: '現在の処理状況：',
     status: Object.freeze({
@@ -268,7 +268,7 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ko-KP': Object.freeze({
-    modelInstruction: 'Respond in Korean (ko-KP).',
+    modelInstruction: 'think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.',
     processorInstruction: 'Write the result in Korean (ko-KP).',
     progressHeader: '현재 처리 상태:',
     status: Object.freeze({

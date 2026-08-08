@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.26.2 - 2026-08-08
+
+- Replaced the Main/Base-model `Respond in ...` language instruction with a short locale-native visible-output contract for all five supported `MODEL_RESPONSE_LANGUAGE` values.
+- Scoped the contract to user-visible natural-language content and explicitly prevents language drift unless the user requests another language.
+- Referred to the `think` reasoning block without injecting literal `<think>` / `</think>` control-tag syntax, preventing the language policy itself from polluting protocol diagnostics.
+- Kept the language instruction at the end of the transformed Anthropic system prompt with the existing blank-line boundary.
+- Did not modify the official Laguna chat template and did not add tool/protocol wording to the language prompt.
+- Preserved WebFetch Processor/Vision prompts, Proxy status localization, Media/Vision, WebSearch/WebFetch, activity-aware timeout policy, and scheduling. No new ENV variable was added.
+
 ## 0.2.26.1 - 2026-08-08
 
 - Reinterpreted `MANAGED_MODEL_ROUND_TIMEOUT_MS` as a first-response-byte deadline when Base upstream activity telemetry is available.

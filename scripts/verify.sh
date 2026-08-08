@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.1'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.1'
+test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.2'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.2'
 
 
 test -f src/i18n/response-language.js
@@ -204,3 +204,17 @@ grep -Fq 'V0.2.26.1 activity-aware managed timeout hotfix' README.md
 grep -Fq 'first-byte deadline' README.md
 grep -Fq 'streaming inactivity' README.md
 grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
+
+
+# V0.2.26.2 locale-native visible-output release contract
+grep -Fq 'V0.2.26.2 native-language visible-output contract' README.md
+grep -Fq '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。' README.md
+grep -Fq '除非使用者明確要求，否則不得切換為其他語言。' README.md
+grep -Fq '0.2.26+hotfix.2' README.md
+node --input-type=module - <<'NODE'
+import { SUPPORTED_RESPONSE_LANGUAGES, languageProfile } from './src/i18n/response-language.js';
+for (const locale of SUPPORTED_RESPONSE_LANGUAGES) {
+  const instruction = languageProfile(locale).modelInstruction;
+  if (/<\/?think>/i.test(instruction) || /\btool\b|protocol|JSON/i.test(instruction)) process.exit(1);
+}
+NODE

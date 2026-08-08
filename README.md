@@ -1,6 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.1 makes managed Base-model timeouts activity-aware so healthy long-running streams are not terminated solely by round wall-clock time.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.2 strengthens the runtime response-language boundary with short locale-native instructions for user-visible prose while leaving the Laguna chat template and tool protocol untouched.
+
+
+## V0.2.26.2 native-language visible-output contract
+
+V0.2.26.2 changes only the Main/Base-model `MODEL_RESPONSE_LANGUAGE` instruction. The Proxy still appends the instruction at the end of the transformed Anthropic `system` prompt with the existing blank-line boundary, but each supported locale now expresses the rule in that locale's own language instead of using the previous English `Respond in ...` sentence.
+
+For `MODEL_RESPONSE_LANGUAGE=zh-TW`, the appended instruction is:
+
+```text
+在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。
+除非使用者明確要求，否則不得切換為其他語言。
+```
+
+The wording intentionally constrains only **user-visible natural-language content**. It does not mention tool calls, JSON, protocol syntax, code, paths, or identifiers. It also refers to the `think` reasoning block without embedding literal `<think>` / `</think>` control-tag syntax into the system prompt, avoiding interference with the Proxy protocol-anomaly scanner and Laguna control-tag handling.
+
+The same compact contract is localized for `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`. The original Laguna chat template is not modified. WebFetch Processor instructions, Vision/Ollama prompts, Proxy progress/status localization, WebSearch/WebFetch, Media/Vision, timeout policy, and scheduling are unchanged. No new ENV variable is introduced. The external release label is `0.2.26.2`; npm-valid package metadata is `0.2.26+hotfix.2`.
 
 ## V0.2.26.1 activity-aware managed timeout hotfix
 

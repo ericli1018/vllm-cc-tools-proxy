@@ -5,16 +5,34 @@ import * as language from '../src/i18n/response-language.js';
 test('V0.2.23.1 locale registry exposes hard model and short processor instructions for all supported locales', () => {
   assert.equal(typeof language.languageProfile, 'function');
   const expected = {
-    'zh-TW': ['Respond in Traditional Chinese (zh-TW).', 'Write the result in Traditional Chinese (zh-TW).'],
-    'zh-CN': ['Respond in Simplified Chinese (zh-CN).', 'Write the result in Simplified Chinese (zh-CN).'],
-    'en-US': ['Respond in English (en-US).', 'Write the result in English (en-US).'],
-    'ja-JP': ['Respond in Japanese (ja-JP).', 'Write the result in Japanese (ja-JP).'],
-    'ko-KP': ['Respond in Korean (ko-KP).', 'Write the result in Korean (ko-KP).'],
+    'zh-TW': ['在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。', 'Write the result in Traditional Chinese (zh-TW).'],
+    'zh-CN': ['在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。', 'Write the result in Simplified Chinese (zh-CN).'],
+    'en-US': ['Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.', 'Write the result in English (en-US).'],
+    'ja-JP': ['think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。', 'Write the result in Japanese (ja-JP).'],
+    'ko-KP': ['think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.', 'Write the result in Korean (ko-KP).'],
   };
   for (const [locale, [modelInstruction, processorInstruction]] of Object.entries(expected)) {
     const profile = language.languageProfile(locale);
     assert.equal(profile.modelInstruction, modelInstruction);
     assert.equal(profile.processorInstruction, processorInstruction);
+  }
+});
+
+
+
+test('V0.2.26.2 model language contract uses the target language and constrains only user-visible prose', () => {
+  const expected = {
+    'zh-TW': '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。',
+    'zh-CN': '在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。',
+    'en-US': 'Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.',
+    'ja-JP': 'think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。',
+    'ko-KP': 'think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.',
+  };
+
+  for (const [locale, instruction] of Object.entries(expected)) {
+    assert.equal(language.languageProfile(locale).modelInstruction, instruction);
+    assert.doesNotMatch(instruction, /\btool\b|protocol|JSON/i);
+    assert.doesNotMatch(instruction, /<\/?think>/i);
   }
 });
 
@@ -41,11 +59,11 @@ import { injectResponseLanguagePolicy } from '../src/proxy/response-language-pol
 
 test('V0.2.23.1 language policy survives vLLM direct system-block join with a hard boundary', () => {
   const expected = {
-    'zh-TW': 'Respond in Traditional Chinese (zh-TW).',
-    'zh-CN': 'Respond in Simplified Chinese (zh-CN).',
-    'en-US': 'Respond in English (en-US).',
-    'ja-JP': 'Respond in Japanese (ja-JP).',
-    'ko-KP': 'Respond in Korean (ko-KP).',
+    'zh-TW': '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。',
+    'zh-CN': '在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。',
+    'en-US': 'Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.',
+    'ja-JP': 'think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。',
+    'ko-KP': 'think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.',
   };
 
   for (const [locale, instruction] of Object.entries(expected)) {

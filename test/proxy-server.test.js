@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.26.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.26.2', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -88,7 +88,7 @@ test('V0.2.23.1 plain non-stream Messages request applies the hard default Engli
   const response = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: original });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-vllm'), null);
-  assert.match(observed.system, /Respond in English \(en-US\)\./);
+  assert.match(observed.system, /Outside the think reasoning block, all user-visible natural-language content MUST be written in English \(en-US\)\./);
 });
 
 test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', async (t) => {
@@ -1101,7 +1101,7 @@ test('explicit count_tokens normalizes native web search and web fetch definitio
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { input_tokens: 321 });
   assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
-  assert.match(observed.system, /Respond in Traditional Chinese \(zh-TW\)\./);
+  assert.match(observed.system, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
   assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
   for (const tool of observed.tools) {
     assert.ok(tool.input_schema);
@@ -1880,7 +1880,7 @@ test('V0.2.23.1 plain Messages request injects the configured hard response-lang
   });
   assert.equal(response.status, 200);
   assert.match(observed.system, /Claude Code system/);
-  assert.match(observed.system, /Respond in Traditional Chinese \(zh-TW\)\./);
+  assert.match(observed.system, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
 });
 
 test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON rounds are still arriving', async (t) => {

@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.26.1 hotfix metadata', async () => {
+test('package version is V0.2.26.2 hotfix metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.26+hotfix.1');
-  assert.equal(lock.version, '0.2.26+hotfix.1');
-  assert.equal(lock.packages[''].version, '0.2.26+hotfix.1');
+  assert.equal(packageJson.version, '0.2.26+hotfix.2');
+  assert.equal(lock.version, '0.2.26+hotfix.2');
+  assert.equal(lock.packages[''].version, '0.2.26+hotfix.2');
 });
 
 
@@ -333,6 +333,15 @@ test('README documents V0.2.26 recursive Vision evidence pipeline', () => {
   assert.match(readme, /visual-v5/);
 });
 
+
+
+
+test('README documents V0.2.26.2 native-language visible-output contract', () => {
+  assert.match(readme, /V0\.2\.26\.2 native-language visible-output contract/);
+  assert.match(readme, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
+  assert.match(readme, /除非使用者明確要求，否則不得切換為其他語言。/);
+  assert.match(readme, /0\.2\.26\+hotfix\.2/);
+});
 
 test('README documents V0.2.26.1 activity-aware timeout policy', () => {
   assert.match(readme, /V0\.2\.26\.1/);
