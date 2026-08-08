@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.26.3 hotfix metadata', async () => {
+test('package version is V0.2.26.4 hotfix metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.26+hotfix.3');
-  assert.equal(lock.version, '0.2.26+hotfix.3');
-  assert.equal(lock.packages[''].version, '0.2.26+hotfix.3');
+  assert.equal(packageJson.version, '0.2.26+hotfix.4');
+  assert.equal(lock.version, '0.2.26+hotfix.4');
+  assert.equal(lock.packages[''].version, '0.2.26+hotfix.4');
 });
 
 
@@ -351,10 +351,10 @@ test('README documents V0.2.26.1 activity-aware timeout policy', () => {
 });
 
 
-test('README documents V0.2.26.3 generation-adjacent language tail', () => {
-  assert.match(readme, /V0\.2\.26\.3 generation-adjacent language tail/);
-  assert.match(readme, /若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。/);
-  assert.match(readme, /latest user turn/i);
-  assert.match(readme, /every managed model round/i);
-  assert.match(readme, /0\.2\.26\+hotfix\.3/);
+test('README documents V0.2.26.4 Final Language Gate and repair fallback order', () => {
+  assert.match(readme, /V0\.2\.26\.4 Final Language Gate/);
+  assert.match(readme, /MODEL_RESPONSE_LANGUAGE.*Final Presentation Language/is);
+  assert.match(readme, /External Processor.*Base.*original/is);
+  assert.match(readme, /thinking.*tool_use.*intermediate/is);
+  assert.match(readme, /0\.2\.26\+hotfix\.4/);
 });

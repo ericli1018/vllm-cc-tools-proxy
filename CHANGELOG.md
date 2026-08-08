@@ -1,5 +1,18 @@
 # Changelog
 
+
+## 0.2.26.4 - 2026-08-08
+
+- Replaced Base-model response-language prompting with a final-response language gate.
+- Removed runtime injection of the V0.2.26.2 system language contract and V0.2.26.3 generation-adjacent user tail.
+- Added conservative deterministic final-visible-prose language classification that ignores code, inline code, URLs and path-like literals.
+- Added External Processor language-only rewrite using the existing `WEB_FETCH_PROCESSOR_*` backend configuration.
+- Added isolated Base vLLM single-shot language-repair fallback when the External Processor is unavailable or fails.
+- Preserved the original successful Laguna response when both repair backends fail.
+- Kept thinking, tool-use blocks, tool results and intermediate managed rounds outside language repair.
+- Buffered streaming Base responses until final language compliance is known while preserving Base request/header/first-event/usage/completion progress diagnostics.
+- Added no new ENV variables; `MODEL_RESPONSE_LANGUAGE` now means Final Presentation Language.
+
 ## 0.2.26.3 - 2026-08-08
 
 - Kept the V0.2.26.2 locale-native system language contract and added a compact locale-native generation-adjacent language tail to the latest user turn sent to Base vLLM.

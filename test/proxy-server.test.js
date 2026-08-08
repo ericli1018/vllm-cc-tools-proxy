@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.26.3', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.26.4', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -75,7 +75,7 @@ test('unknown endpoints bypass transparently to base vLLM', async (t) => {
   assert.deepEqual(await response.json(), { data: ['m'] });
 });
 
-test('V0.2.23.1 plain non-stream Messages request applies the hard default English response-language policy', async (t) => {
+test('V0.2.26.4 plain non-stream Messages request no longer injects a Base response-language policy', async (t) => {
   const original = Buffer.from('{"model":"m", "stream":false, "messages":[{"role":"user","content":"hi"}]}\n');
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
@@ -88,7 +88,8 @@ test('V0.2.23.1 plain non-stream Messages request applies the hard default Engli
   const response = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: original });
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('x-vllm'), null);
-  assert.match(observed.system, /Outside the think reasoning block, all user-visible natural-language content MUST be written in English \(en-US\)\./);
+  assert.equal(observed.system, undefined);
+  assert.deepEqual(observed.messages, [{ role: 'user', content: 'hi' }]);
 });
 
 test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', async (t) => {
@@ -200,11 +201,18 @@ test('plain bypass strips the dedicated progress block before forwarding history
   assert.deepEqual(observed.messages[1].content, [{ type: 'text', text: '真正答案' }]);
 });
 
-test('ordinary streaming request passes upstream SSE through', async (t) => {
-  const vllm=http.createServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,true);res.writeHead(200,{'content-type':'text/event-stream'});res.end('event: message_start\ndata: {"type":"message_start"}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');});
-  const vllmUrl=await listen(vllm);const proxy=createProxyServer(config({vllmBaseUrl:vllmUrl}));const proxyUrl=await listen(proxy);t.after(()=>vllm.close());t.after(()=>proxy.close());
+test('V0.2.26.4 ordinary streaming request buffers valid upstream SSE then emits a final Anthropic SSE response', async (t) => {
+  const vllm=http.createServer(async(req,res)=>{const payload=JSON.parse((await read(req)).toString());assert.equal(payload.stream,true);res.writeHead(200,{'content-type':'text/event-stream'});res.end([
+    'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+    'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ].join(''));});
+  const vllmUrl=await listen(vllm);const proxy=createProxyServer(config({vllmBaseUrl:vllmUrl,responseLanguage:'en-US'}));const proxyUrl=await listen(proxy);t.after(()=>vllm.close());t.after(()=>proxy.close());
   const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,messages:[{role:'user',content:'hi'}]})});
-  const text=await response.text();assert.match(text,/message_start/);assert.match(text,/message_stop/);
+  const text=await response.text();assert.match(text,/message_start/);assert.match(text,/message_stop/);assert.match(text,/OK/);
 });
 
 test('streamed media request preprocesses under managed slot then streams base vLLM SSE', async (t) => {
@@ -690,7 +698,7 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
       res.flushHeaders();
       setTimeout(() => {
         if (res.destroyed) return;
-        res.write('event: message_start\ndata: {"type":"message_start"}\n\n');
+        res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
         res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
         res.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"DONE"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
       }, 25);
@@ -1101,8 +1109,8 @@ test('explicit count_tokens normalizes native web search and web fetch definitio
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { input_tokens: 321 });
   assert.deepEqual(observed.tools.map((tool) => tool.name), ['web_search', 'web_fetch']);
-  assert.match(observed.system, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
-  assert.deepEqual(observed.messages, [{ role: 'user', content: 'research\n\n若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。' }]);
+  assert.equal(observed.system, undefined);
+  assert.deepEqual(observed.messages, [{ role: 'user', content: 'research' }]);
   for (const tool of observed.tools) {
     assert.ok(tool.input_schema);
     assert.equal(tool.type, undefined);
@@ -1348,6 +1356,7 @@ test('V0.2.20 response-side native web search is surfaced as server-tool lifecyc
     vllmBaseUrl: vllm.url,
     searxngUrl: searx.url,
     usagePreflightEnabled: true,
+    responseLanguage: 'en-US',
     logLevel: 'debug',
     logSink: (entry) => logs.push(entry),
   }));
@@ -1865,12 +1874,12 @@ test('V0.2.22 enriches redirect WebFetch tool_result with awesome-web-fetch plus
   assert.equal(processorCalls, 1);
 });
 
-test('V0.2.23.1 plain Messages request injects the configured hard response-language system policy', async (t) => {
+test('V0.2.26.4 plain Messages request preserves caller system without Base language prompting', async (t) => {
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
     observed = JSON.parse((await read(req)).toString());
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }));
+    res.end(JSON.stringify({ id: 'm', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: '完成' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }));
   });
   const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, responseLanguage: 'zh-TW' }));
   const proxyUrl = await listen(proxy); t.after(() => upstream.server.close()); t.after(() => proxy.close());
@@ -1880,7 +1889,7 @@ test('V0.2.23.1 plain Messages request injects the configured hard response-lang
   });
   assert.equal(response.status, 200);
   assert.match(observed.system, /Claude Code system/);
-  assert.match(observed.system, /在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。/);
+  assert.equal(observed.system, 'Claude Code system');
 });
 
 test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON rounds are still arriving', async (t) => {
@@ -2160,8 +2169,8 @@ test('V0.2.26 adapts raw image to Vision evidence before Base count_tokens prefl
   assert.ok(logs.some((entry) => entry.event === 'managed_request_classified' && entry.class === 'large_context' && entry.input_tokens === 120000));
 });
 
-test('V0.2.26.3 managed rounds re-anchor one locale-native language tail on the newest user turn', async (t) => {
-  const tail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
+test('V0.2.26.4 managed rounds keep language repair out of Base prompts and user history', async (t) => {
+  const retiredTail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
   const upstreamBodies = [];
   const searx = await startJsonServer(async (_req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -2197,17 +2206,16 @@ test('V0.2.26.3 managed rounds re-anchor one locale-native language tail on the 
   assert.equal(upstreamBodies.length, 2);
 
   const firstLastUser = [...upstreamBodies[0].messages].reverse().find((message) => message.role === 'user');
-  assert.equal(firstLastUser.content, `請搜尋後回答\n\n${tail}`);
+  assert.equal(firstLastUser.content, '請搜尋後回答');
 
   const secondLastUser = [...upstreamBodies[1].messages].reverse().find((message) => message.role === 'user');
   assert.equal(Array.isArray(secondLastUser.content), true);
-  assert.equal(secondLastUser.content.at(-1)?.type, 'text');
-  assert.equal(secondLastUser.content.at(-1)?.text, tail);
-  assert.equal(JSON.stringify(upstreamBodies[1].messages).split(tail).length - 1, 1);
+  assert.ok(secondLastUser.content.some((block) => block?.type === 'tool_result'));
+  assert.equal(JSON.stringify(upstreamBodies).includes(retiredTail), false);
 });
 
-test('V0.2.26.3 managed usage preflight and first model round receive the same language tail', async (t) => {
-  const tail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
+test('V0.2.26.4 managed usage preflight and first model round receive no retired language tail', async (t) => {
+  const retiredTail = '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。';
   let preflightBody = null;
   let modelBody = null;
   const vllm = await startJsonServer(async (req, res) => {
@@ -2249,8 +2257,131 @@ test('V0.2.26.3 managed usage preflight and first model round receive the same l
     if (typeof message.content === 'string') return message.content;
     return message.content.filter((block) => block?.type === 'text').map((block) => block.text).join('\n');
   };
-  assert.match(lastUserText(preflightBody), new RegExp(tail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(lastUserText(modelBody), new RegExp(tail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.equal(JSON.stringify(preflightBody.messages).split(tail).length - 1, 1);
-  assert.equal(JSON.stringify(modelBody.messages).split(tail).length - 1, 1);
+  assert.equal(lastUserText(preflightBody), '直接回答，不需要搜尋');
+  assert.equal(lastUserText(modelBody), '直接回答，不需要搜尋');
+  assert.equal(JSON.stringify(preflightBody.messages).includes(retiredTail), false);
+  assert.equal(JSON.stringify(modelBody.messages).includes(retiredTail), false);
+});
+
+test('V0.2.26.4 final language gate uses external processor for a managed final answer and removes model language prompting', async (t) => {
+  const baseBodies = [];
+  const processorBodies = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    baseBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'The final answer is ready for the user.'}],stop_reason:'end_turn',usage:{input_tokens:20,output_tokens:8} }));
+  });
+  const processor = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    processorBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'<<<VCC_LANG_SEGMENT_0>>>\n最終回答已準備完成。\n<<<VCC_LANG_SEGMENT_END_0>>>'}}] }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    responseLanguage: 'zh-TW',
+    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => processor.server.close()); t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ model:'m',stream:false,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'請直接回答'}] }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.content[0].text, '最終回答已準備完成。');
+  assert.equal(processorBodies.length, 1);
+  assert.equal(baseBodies.length, 1);
+  assert.doesNotMatch(JSON.stringify(baseBodies[0]), /若使用者未明確要求其他語言|在 think 思考區塊之外/);
+});
+
+test('V0.2.26.4 missing external processor falls back to isolated Base language repair', async (t) => {
+  const bodies = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    bodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (bodies.length === 1) {
+      res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'The answer is complete and ready.'}],stop_reason:'end_turn',usage:{input_tokens:20,output_tokens:7} }));
+      return;
+    }
+    res.end(JSON.stringify({ id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'<<<VCC_LANG_SEGMENT_0>>>\n答案已完成並準備就緒。\n<<<VCC_LANG_SEGMENT_END_0>>>'}],stop_reason:'end_turn',usage:{input_tokens:30,output_tokens:10} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    responseLanguage: 'zh-TW',
+    webFetchProcessor: { enabled:true, provider:'ollama', url:'http://127.0.0.1:1/v1/chat/completions', model:'', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ model:'m',stream:false,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'請直接回答，不需要搜尋'}] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, '答案已完成並準備就緒。');
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[1].messages.length, 1);
+  assert.equal(bodies[1].tools, undefined);
+  assert.match(bodies[1].messages[0].content, /<<<VCC_LANG_SEGMENT_0>>>/);
+  assert.doesNotMatch(JSON.stringify(bodies[1]), /請直接回答，不需要搜尋/);
+  assert.equal(bodies[1].chat_template_kwargs.enable_thinking, false);
+});
+
+test('V0.2.26.4 compliant Traditional Chinese final answer bypasses both repair backends', async (t) => {
+  let baseCalls = 0;
+  let processorCalls = 0;
+  const base = await startJsonServer(async (_req, res) => {
+    baseCalls += 1;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'目前分析已完成，結果可以直接交給使用者。'}],stop_reason:'end_turn',usage:{} }));
+  });
+  const processor = await startJsonServer(async (_req, res) => {
+    processorCalls += 1;
+    res.writeHead(500); res.end();
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    responseLanguage: 'zh-TW',
+    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => processor.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:false,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'回答'}]}) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, '目前分析已完成，結果可以直接交給使用者。');
+  assert.equal(baseCalls, 1);
+  assert.equal(processorCalls, 0);
+});
+
+test('V0.2.26.4 non-managed streaming final answer is buffered, language-repaired, then emitted as Anthropic SSE', async (t) => {
+  let baseCalls = 0;
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    baseCalls += 1;
+    if (baseCalls === 1) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"The direct answer is ready for the user."}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":8}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      return;
+    }
+    assert.equal(payload.stream, false);
+    res.writeHead(200, { 'content-type':'application/json' });
+    res.end(JSON.stringify({id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'<<<VCC_LANG_SEGMENT_0>>>\n直接回答已準備完成。\n<<<VCC_LANG_SEGMENT_END_0>>>'}],stop_reason:'end_turn',usage:{}}));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url, responseLanguage:'zh-TW',
+    webFetchProcessor: { enabled:false, provider:'ollama', url:'', model:'', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,messages:[{role:'user',content:'請回答'}]})});
+  assert.equal(response.status, 200);
+  const sse = await response.text();
+  assert.match(sse, /直接回答已準備完成/);
+  assert.doesNotMatch(sse, /The direct answer is ready/);
+  assert.equal(baseCalls, 2);
 });

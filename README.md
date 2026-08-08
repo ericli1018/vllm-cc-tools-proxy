@@ -1,6 +1,28 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.3 adds a generation-adjacent locale-native language tail on the latest user turn for every Base-model round while preserving the V0.2.26.2 system language contract and the original Laguna chat template.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.4 replaces Base-model language prompting with a final-response language gate: Laguna completes the task normally, then only a clearly non-compliant final visible answer is rewritten to `MODEL_RESPONSE_LANGUAGE`.
+
+
+## V0.2.26.4 Final Language Gate
+
+V0.2.26.4 changes `MODEL_RESPONSE_LANGUAGE` from a Base-model generation instruction into the **Final Presentation Language**. The V0.2.26.2 `system` language contract and V0.2.26.3 generation-adjacent user tail are retired from the runtime request path. Laguna therefore receives the caller's original system/user/tool context without Proxy-added response-language prompting and can focus on reasoning, coding and tool use.
+
+The language gate runs only after a candidate final Anthropic Message exists. It never rewrites `thinking`, `tool_use`, server-tool blocks, tool results, or intermediate managed rounds. A conservative deterministic detector removes code fences, inline code, URLs and path-like literals from its language sample before deciding whether the visible prose is clearly non-compliant. Technical or mixed-language answers that are compliant or uncertain pass through unchanged.
+
+When repair is required, the fallback order is:
+
+```text
+Final visible text
+→ External Processor (when WEB_FETCH_PROCESSOR_* is configured and enabled)
+→ isolated Base vLLM language repair if External is unavailable or fails
+→ original Laguna final response if Base repair also fails
+```
+
+The External Processor reuses the existing `WEB_FETCH_PROCESSOR_PROVIDER`, URL, model, API key and thinking setting; no language-specific ENV variables are added. The Base fallback is a direct single-shot internal request with no original Claude Code system/history/tools, no agent loop, and thinking disabled. Both repair backends receive only marker-delimited final text segments under a language-only rewrite contract that preserves meaning, Markdown, code, commands, paths, URLs, numbers and identifiers. Segment-count or empty-output mismatches are treated as repair failures rather than accepted as modified content.
+
+For streaming `/v1/messages`, the Proxy buffers the Base Anthropic SSE into a complete final Message before emitting the final response, because language compliance cannot be decided after untranslated text has already been sent to Claude Code. Existing progress/keepalive and Base lifecycle observability are preserved while buffering, including request start, headers received, first model event, usage and stream completion.
+
+`MODEL_RESPONSE_LANGUAGE` remains the only response-language setting. WebFetch Processor and Vision evidence-language behavior are unchanged. Language repair is presentation-only: an External/Base repair failure must never turn an otherwise successful Laguna task into an API error. The external release label is `0.2.26.4`; npm-valid package metadata is `0.2.26+hotfix.4`.
 
 
 ## V0.2.26.3 generation-adjacent language tail

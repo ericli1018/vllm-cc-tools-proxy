@@ -74,7 +74,9 @@ function finalizeToolInput(block, partialJson, index) {
   }
 }
 
-export async function collectAnthropicMessageFromSse(upstream) {
+export async function collectAnthropicMessageFromSse(upstream, {
+  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {},
+} = {}) {
   if (!upstream?.body) throw invalidStream('vLLM Anthropic SSE response did not contain a body.');
 
   const decoder = new TextDecoder();
@@ -83,8 +85,9 @@ export async function collectAnthropicMessageFromSse(upstream) {
   const blocks = new Map();
   const toolJson = new Map();
   let sawMessageStop = false;
+  let firstModelEventObserved = false;
 
-  const processBlock = (rawBlock) => {
+  const processBlock = async (rawBlock) => {
     if (!String(rawBlock || '').trim()) return;
     const parsed = parseSseBlock(rawBlock);
     const payload = parsePayload(parsed);
@@ -101,6 +104,7 @@ export async function collectAnthropicMessageFromSse(upstream) {
       const started = payload?.message;
       if (!started || typeof started !== 'object') throw invalidStream('vLLM Anthropic SSE message_start did not contain a message.');
       message = structuredClone(started);
+      try { await onUsage({ stage: 'message_start', usage: structuredClone(message.usage || {}) }); } catch {}
       const initialContent = Array.isArray(message.content) ? message.content : [];
       message.content = [];
       initialContent.forEach((entry, index) => blocks.set(index, structuredClone(entry)));
@@ -115,6 +119,10 @@ export async function collectAnthropicMessageFromSse(upstream) {
         throw invalidStream('vLLM Anthropic SSE content_block_start was invalid.');
       }
       blocks.set(index, structuredClone(block));
+      if (!firstModelEventObserved) {
+        firstModelEventObserved = true;
+        try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
+      }
       if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
       return;
     }
@@ -122,6 +130,10 @@ export async function collectAnthropicMessageFromSse(upstream) {
     if (parsed.name === 'content_block_delta') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
+      if (!firstModelEventObserved) {
+        firstModelEventObserved = true;
+        try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
+      }
       const holder = { value: toolJson.get(index) || '' };
       applyDelta(block, payload?.delta, holder);
       if (toolJson.has(index)) toolJson.set(index, holder.value);
@@ -142,6 +154,9 @@ export async function collectAnthropicMessageFromSse(upstream) {
       if (!message) throw invalidStream('vLLM Anthropic SSE returned message_delta before message_start.');
       if (payload?.delta && typeof payload.delta === 'object') Object.assign(message, payload.delta);
       message.usage = mergeUsage(message.usage, payload?.usage);
+      if (payload?.usage) {
+        try { await onUsage({ stage: 'message_delta', usage: structuredClone(payload.usage) }); } catch {}
+      }
       return;
     }
 
@@ -157,16 +172,17 @@ export async function collectAnthropicMessageFromSse(upstream) {
       if (!match || match.index === undefined) break;
       const rawBlock = buffer.slice(0, match.index);
       buffer = buffer.slice(match.index + match[0].length);
-      processBlock(rawBlock);
+      await processBlock(rawBlock);
     }
   }
   buffer += decoder.decode();
-  if (buffer.trim()) processBlock(buffer);
+  if (buffer.trim()) await processBlock(buffer);
 
   if (!message) throw invalidStream('vLLM Anthropic SSE ended without message_start.');
   for (const [index, partial] of toolJson.entries()) finalizeToolInput(ensureBlock(blocks, index), partial, index);
   message.content = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
   message.usage = message.usage || {};
   if (!sawMessageStop) throw invalidStream('vLLM Anthropic SSE ended without message_stop.');
+  try { await onComplete({ firstModelEventObserved }); } catch {}
   return message;
 }

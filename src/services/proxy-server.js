@@ -16,7 +16,6 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
-import { injectResponseLanguagePolicy, injectResponseLanguageTail } from '../proxy/response-language-policy.js';
 import { localizeProgressMessage, statusText } from '../i18n/response-language.js';
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
@@ -29,6 +28,12 @@ import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
+import { applyFinalLanguageGate } from '../proxy/final-language-gate.js';
+import {
+  buildBaseLanguageRepairRequest,
+  extractLanguageRepairSegmentsFromAnthropic,
+  rewriteFinalSegmentsWithExternalProcessor,
+} from './final-language-repair.js';
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -198,6 +203,63 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
       first_model_event_observed: Boolean(firstModelEventObserved),
     }),
   });
+}
+
+
+async function collectManagedBase(request, config, incomingHeaders, signal, {
+  onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null,
+} = {}) {
+  const outbound = { ...request, stream: true };
+  const requestStartedAt = Date.now();
+  await onLifecycle('base_upstream_request_start', {
+    request_bytes: Buffer.byteLength(JSON.stringify(outbound)),
+    message_count: Array.isArray(outbound.messages) ? outbound.messages.length : 0,
+    evidence_bytes: evidenceByteLength(outbound.messages),
+  });
+  const upstream = await fetchUpstream(outbound, config, incomingHeaders, signal, '/v1/messages', { onResponseChunk });
+  const headersReceivedAt = Date.now();
+  await onLifecycle('base_upstream_headers_received', {
+    status: upstream.status,
+    header_wait_ms: headersReceivedAt - requestStartedAt,
+  });
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, text || 'vLLM rejected the request.', {
+      code: 'vllm_request_failed', retryable: upstream.status >= 500,
+    });
+  }
+  const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('text/event-stream')) {
+    return collectAnthropicMessageFromSse(upstream, {
+      onUsage,
+      onFirstEvent: async ({ event, type, block_type }) => onLifecycle('base_upstream_first_event', {
+        upstream_event: event,
+        upstream_type: type,
+        block_type,
+        first_event_wait_ms: Date.now() - requestStartedAt,
+        first_event_after_headers_ms: Date.now() - headersReceivedAt,
+      }),
+      onComplete: async ({ firstModelEventObserved } = {}) => onLifecycle('base_upstream_stream_completed', {
+        total_stream_ms: Date.now() - requestStartedAt,
+        first_model_event_observed: Boolean(firstModelEventObserved),
+      }),
+    });
+  }
+
+  const text = await upstream.text();
+  let payload;
+  try { payload = text ? JSON.parse(text) : {}; } catch {
+    throw new HttpError(502, 'vLLM returned neither Anthropic SSE nor valid JSON for a managed model round.', {
+      code: 'vllm_invalid_stream', retryable: true, details: { content_type: contentType, body_prefix: text.slice(0, 1000) },
+    });
+  }
+  await onUsage({ stage: 'json_response', usage: normalizeAnthropicUsage(payload?.usage) });
+  await onLifecycle('base_upstream_stream_completed', {
+    total_stream_ms: Date.now() - requestStartedAt,
+    first_model_event_observed: false,
+    compatibility_json: true,
+  });
+  return payload;
 }
 
 async function streamTransformedBase(request, res, config, incomingHeaders, signal, path = '/v1/messages') {
@@ -449,6 +511,62 @@ export function createProxyServer(config, dependencies = {}) {
     const progressTiming = { mode: 'initial', startedAt: Date.now(), position: 0 };
     const url = new URL(req.url || '/', 'http://localhost');
 
+    const externalLanguageProcessorAvailable = () => Boolean(
+      config.webFetchProcessor?.enabled
+      && config.webFetchProcessor?.url
+      && config.webFetchProcessor?.model
+    );
+
+    const applyFinalPresentationLanguage = async (response, sourceRequest) => {
+      const onLanguageEvent = async (event, fields = {}) => {
+        const level = event.endsWith('_failed') ? 'warn' : 'info';
+        log(config, level, event, { requestId, ...fields });
+        if (event === 'final_language_repair_started' && progress) {
+          await progress.update(statusText(config.responseLanguage, 'finalLanguageRepair'), {
+            force: true,
+            details: { phase: 'final_language_repair', backend: fields.backend, target: config.responseLanguage },
+          });
+        }
+      };
+
+      const rewriteExternal = externalLanguageProcessorAvailable()
+        ? (segments, locale) => rewriteFinalSegmentsWithExternalProcessor(segments, {
+          locale,
+          processor: config.webFetchProcessor,
+          signal: abortController.signal,
+          acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
+          onEvent: onLanguageEvent,
+        })
+        : undefined;
+
+      const rewriteBase = async (segments, locale) => {
+        const repairRequest = buildBaseLanguageRepairRequest(segments, {
+          locale,
+          model: sourceRequest?.model || response?.model || '',
+          maxTokens: Number.isInteger(sourceRequest?.max_tokens) && sourceRequest.max_tokens > 0
+            ? sourceRequest.max_tokens
+            : 16384,
+        });
+        const repaired = await callUpstreamJson(
+          repairRequest,
+          config,
+          req.headers,
+          abortController.signal,
+          '/v1/messages',
+          { onResponseChunk: onBaseResponseChunk },
+        );
+        return extractLanguageRepairSegmentsFromAnthropic(repaired, segments.length);
+      };
+
+      const gated = await applyFinalLanguageGate(response, {
+        locale: config.responseLanguage,
+        rewriteExternal,
+        rewriteBase,
+        onEvent: onLanguageEvent,
+      });
+      return gated.response;
+    };
+
     res.on('close', () => {
       if (!completed && !abortController.signal.aborted) {
         abortController.abort(new DOMException('Client disconnected.', 'AbortError'));
@@ -684,12 +802,6 @@ export function createProxyServer(config, dependencies = {}) {
         });
       }
 
-      const languagePolicy = injectResponseLanguagePolicy(original, config.responseLanguage);
-      if (languagePolicy.changed) {
-        original = languagePolicy.request;
-        requestRewritten = true;
-      }
-
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
@@ -712,29 +824,60 @@ export function createProxyServer(config, dependencies = {}) {
 
       if (!initiallyManaged) {
         releaseIngress(); releaseIngress = null;
-        if (requestRewritten) {
-          log(config, 'info', 'route_decision', {
-            requestId, method: req.method, path: url.pathname,
-            decision: historyRewritten || protocolTools.changed ? 'protocol_sanitize' : 'response_language_policy',
-            reason: historyRewritten
-              ? 'malformed_protocol_history'
-              : protocolTools.changed
-                ? 'tool_description_protocol_tags'
-                : 'model_response_language',
-            response_language: config.responseLanguage || 'en-US',
-          });
-          if (messagesPath === '/v1/messages/count_tokens') {
+        if (messagesPath === '/v1/messages/count_tokens') {
+          if (requestRewritten) {
+            log(config, 'info', 'route_decision', {
+              requestId, method: req.method, path: url.pathname,
+              decision: 'protocol_sanitize',
+              reason: historyRewritten ? 'malformed_protocol_history' : 'tool_description_protocol_tags',
+            });
             const payload = await callUpstreamJson(original, config, req.headers, abortController.signal, messagesPath);
             completed = true;
             return sendJson(res, 200, payload);
           }
-          if (original.stream === true) await streamTransformedBase(original, res, config, req.headers, abortController.signal);
-          else sendJson(res, 200, await callUpstreamJson(original, config, req.headers, abortController.signal));
+          log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'plain_count_tokens' });
+          await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
           completed = true;
           return;
         }
-        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'bypass', reason: 'plain_anthropic_request' });
-        await forwardTransparent(req, res, config, { rawBody, signal: abortController.signal });
+
+        log(config, 'info', 'route_decision', {
+          requestId, method: req.method, path: url.pathname,
+          decision: 'final_language_gate',
+          reason: requestRewritten ? 'sanitized_plain_anthropic_request' : 'plain_anthropic_request',
+          response_language: config.responseLanguage || 'en-US',
+        });
+        if (original.stream === true) {
+          progress = new ProgressStream(res, {
+            model: original.model || 'vllm',
+            initialUsage: usageFromTokenCount({}),
+            pingIntervalMs: config.progressPingIntervalMs,
+            heartbeatIntervalMs: config.progressHeartbeatMs,
+            drainTimeoutMs: config.sseDrainTimeoutMs,
+            visibleAfterMs: config.progressVisibleAfterMs,
+            locale: config.responseLanguage,
+            getReceivedBytes: getBaseResponseBytes,
+          });
+          await progress.open();
+          const directStartedAt = Date.now();
+          await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
+            details: { phase: 'managed_model_round_start', round: 1 },
+          });
+          progress.startSemanticHeartbeat(() => statusText(config.responseLanguage, 'modelWaiting', {
+            seconds: Math.floor((Date.now() - directStartedAt) / 1000),
+            receivedBytes: getBaseResponseBytes(),
+          }));
+          let response = await callUpstreamManagedStream(
+            original, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk },
+          );
+          response = await applyFinalPresentationLanguage(response, original);
+          progress.stopSemanticHeartbeat();
+          await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
+        } else {
+          let response = await callUpstreamJson(original, config, req.headers, abortController.signal);
+          response = await applyFinalPresentationLanguage(response, original);
+          sendJson(res, 200, response);
+        }
         completed = true;
         return;
       }
@@ -743,7 +886,6 @@ export function createProxyServer(config, dependencies = {}) {
       const serverWebUiDeclaration = detectServerWebUiDeclaration(original);
       const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
       let request = normalizedWebTools.request;
-      request = injectResponseLanguageTail(request, config.responseLanguage).request;
       const managedWebPolicyEnforcer = createManagedWebPolicyEnforcer(normalizedWebTools.policies);
       if (normalizedWebTools.changed) {
         log(config, 'info', 'native_web_tools_normalized', {
@@ -864,8 +1006,28 @@ export function createProxyServer(config, dependencies = {}) {
           completed = true;
           return sendJson(res, 200, payload);
         }
-        if (request.stream === true) await streamTransformedBase(request, res, config, req.headers, abortController.signal);
-        else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
+        if (request.stream === true) {
+          progress = new ProgressStream(res, {
+            model: request.model || 'vllm',
+            initialUsage: usageFromTokenCount({}),
+            pingIntervalMs: config.progressPingIntervalMs,
+            heartbeatIntervalMs: config.progressHeartbeatMs,
+            drainTimeoutMs: config.sseDrainTimeoutMs,
+            visibleAfterMs: config.progressVisibleAfterMs,
+            locale: config.responseLanguage,
+            getReceivedBytes: getBaseResponseBytes,
+          });
+          await progress.open();
+          let response = await callUpstreamManagedStream(
+            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk },
+          );
+          response = await applyFinalPresentationLanguage(response, request);
+          await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
+        } else {
+          let response = await callUpstreamJson(request, config, req.headers, abortController.signal);
+          response = await applyFinalPresentationLanguage(response, request);
+          sendJson(res, 200, response);
+        }
         completed = true;
         return;
       }
@@ -1042,15 +1204,12 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => {
-        const tailed = injectResponseLanguageTail(body, config.responseLanguage).request;
-        return callUpstreamManagedStream(tailed, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
-      };
+      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
       if (hasManagedTools) {
-        const result = await runManagedLoop(request, {
+        let result = await runManagedLoop(request, {
           upstream,
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
             model: request.model || '',
@@ -1120,6 +1279,7 @@ export function createProxyServer(config, dependencies = {}) {
             : undefined,
           signal: abortController.signal,
         });
+        result = await applyFinalPresentationLanguage(result, request);
         await writeWebToolTrace(
           requestId,
           'proxy_response',
@@ -1142,23 +1302,23 @@ export function createProxyServer(config, dependencies = {}) {
           await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex, locale: config.responseLanguage });
         } else sendJson(res, 200, result);
       } else {
-        releaseManaged(); releaseManaged = null;
-        releaseLargeContext?.(); releaseLargeContext = null;
         if (request.stream === true) {
-          await streamManagedBase(progress, request, config, req.headers, abortController.signal, {
-            onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+          progressTiming.mode = 'model';
+          progressTiming.startedAt = Date.now();
+          await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
+          let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
             onUsage: ({ stage, usage }) => log(config, 'info', 'managed_stream_usage_observed', {
               requestId,
               stage,
-              input_tokens: usage.input_tokens || 0,
-              cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-              cache_read_input_tokens: usage.cache_read_input_tokens || 0,
-              output_tokens: usage.output_tokens || 0,
-              total_input_tokens: totalAnthropicInputTokens(usage),
+              input_tokens: usage?.input_tokens || 0,
+              cache_creation_input_tokens: usage?.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: usage?.cache_read_input_tokens || 0,
+              output_tokens: usage?.output_tokens || 0,
+              total_input_tokens: totalAnthropicInputTokens(usage || {}),
               preflight_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
               input_token_delta: stage === 'message_start'
-                ? totalAnthropicInputTokens(usage) - totalAnthropicInputTokens(initialStreamUsage)
+                ? totalAnthropicInputTokens(usage || {}) - totalAnthropicInputTokens(initialStreamUsage)
                 : undefined,
             }),
             onLifecycle: async (event, fields) => {
@@ -1178,10 +1338,30 @@ export function createProxyServer(config, dependencies = {}) {
                   status: fields.status,
                   header_wait_ms: fields.header_wait_ms,
                 });
+              } else if (event === 'base_upstream_first_event') {
+                const key = fields.block_type === 'thinking' ? 'streamingThinking'
+                  : (fields.block_type === 'tool_use' || fields.block_type === 'server_tool_use') ? 'streamingTool'
+                    : fields.block_type === 'text' ? 'streamingVisible' : 'streamingOutput';
+                await onProgress(statusText(config.responseLanguage, key), {
+                  phase: 'base_first_event',
+                  upstream_event: fields.upstream_event,
+                  block_type: fields.block_type,
+                  first_event_wait_ms: fields.first_event_wait_ms,
+                });
               }
             },
           });
-        } else sendJson(res, 200, await callUpstreamJson(request, config, req.headers, abortController.signal));
+          response = await applyFinalPresentationLanguage(response, request);
+          releaseManaged(); releaseManaged = null;
+          releaseLargeContext?.(); releaseLargeContext = null;
+          await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
+        } else {
+          let response = await callUpstreamJson(request, config, req.headers, abortController.signal);
+          response = await applyFinalPresentationLanguage(response, request);
+          releaseManaged(); releaseManaged = null;
+          releaseLargeContext?.(); releaseLargeContext = null;
+          sendJson(res, 200, response);
+        }
       }
 
       completed = true;

@@ -24,8 +24,6 @@ function hasReceivedBytes(value) {
 
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
-    modelInstruction: '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。\n除非使用者明確要求，否則不得切換為其他語言。',
-    modelTailInstruction: '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。',
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
     progressHeader: '目前處理進度：',
     status: Object.freeze({
@@ -44,6 +42,7 @@ const PROFILES = Object.freeze({
       finalChannelRecovery: () => '主模型答案通道異常；正在進行一次短格式修正…',
       continuationRecovery: () => '主模型未產生有效下一步；正在進行一次受控續接…',
       finalRoundReserved: () => '研究工具預算已停止擴張；保留時間給主模型完成下一步…',
+      finalLanguageRepair: () => '主模型已完成回答；正在轉換為繁體中文…',
       mediaCacheMiss: () => '正在處理新的文件與圖片內容…',
       mediaReady: () => '文件與圖片內容已就緒；正在交給主模型分析…',
       baseRequestStart: () => '正在將內容送往主模型…',
@@ -86,8 +85,6 @@ const PROFILES = Object.freeze({
     }),
   }),
   'zh-CN': Object.freeze({
-    modelInstruction: '在 think 思考区块之外，所有用户可见的自然语言内容都必须使用简体中文（zh-CN）。\n除非用户明确要求，否则不得切换为其他语言。',
-    modelTailInstruction: '若用户未明确要求其他语言，请使用简体中文（zh-CN）撰写给用户看的回答。',
     processorInstruction: 'Write the result in Simplified Chinese (zh-CN).',
     progressHeader: '当前处理进度：',
     status: Object.freeze({
@@ -106,6 +103,7 @@ const PROFILES = Object.freeze({
       finalChannelRecovery: () => '主模型答案通道异常；正在进行一次短格式修正…',
       continuationRecovery: () => '主模型未生成有效下一步；正在进行一次受控续接…',
       finalRoundReserved: () => '研究工具预算已停止扩张；保留时间给主模型完成下一步…',
+      finalLanguageRepair: () => '主模型已完成回答；正在转换为简体中文…',
       mediaCacheMiss: () => '正在处理新的文档与图片内容…',
       mediaReady: () => '文档与图片内容已就绪；正在交给主模型分析…',
       baseRequestStart: () => '正在将内容发送给主模型…',
@@ -148,8 +146,6 @@ const PROFILES = Object.freeze({
     }),
   }),
   'en-US': Object.freeze({
-    modelInstruction: 'Outside the think reasoning block, all user-visible natural-language content MUST be written in English (en-US).\nDo not switch to another language unless the user explicitly requests it.',
-    modelTailInstruction: 'Unless the user explicitly requests another language, write the user-visible answer in English (en-US).',
     processorInstruction: 'Write the result in English (en-US).',
     progressHeader: 'Current progress:',
     status: Object.freeze({
@@ -168,6 +164,7 @@ const PROFILES = Object.freeze({
       finalChannelRecovery: () => 'The main model response channel is malformed; applying one short format repair…',
       continuationRecovery: () => 'The main model produced no valid next step; applying one bounded continuation…',
       finalRoundReserved: () => 'Research tool expansion stopped; reserving time for the main model to finish the next step…',
+      finalLanguageRepair: () => 'The main model finished the answer; converting it to English…',
       mediaCacheMiss: () => 'Processing new document and image content…',
       mediaReady: () => 'Document and image content is ready; handing it to the main model for analysis…',
       baseRequestStart: () => 'Sending content to the main model…',
@@ -210,8 +207,6 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ja-JP': Object.freeze({
-    modelInstruction: 'think 推論ブロックの外では、ユーザーに表示されるすべての自然言語の内容を日本語（ja-JP）で記述しなければなりません。\nユーザーが明示的に要求しない限り、他の言語に切り替えないでください。',
-    modelTailInstruction: 'ユーザーが他の言語を明示的に要求していない限り、ユーザー向けの回答は日本語（ja-JP）で記述してください。',
     processorInstruction: 'Write the result in Japanese (ja-JP).',
     progressHeader: '現在の処理状況：',
     status: Object.freeze({
@@ -230,6 +225,7 @@ const PROFILES = Object.freeze({
       finalChannelRecovery: () => 'メインモデルの応答チャネルに異常があります。短い形式修正を1回実行します…',
       continuationRecovery: () => 'メインモデルが有効な次の手順を生成しませんでした。制限付きの継続処理を1回実行します…',
       finalRoundReserved: () => '調査ツールの拡張を停止し、メインモデルが次の手順を完了する時間を確保します…',
+      finalLanguageRepair: () => 'メインモデルの回答が完了しました。日本語に変換しています…',
       mediaCacheMiss: () => '新しい文書と画像の内容を処理しています…',
       mediaReady: () => '文書と画像の内容を準備しました。メインモデルに渡して分析します…',
       baseRequestStart: () => '内容をメインモデルに送信しています…',
@@ -272,8 +268,6 @@ const PROFILES = Object.freeze({
     }),
   }),
   'ko-KP': Object.freeze({
-    modelInstruction: 'think 추론 블록 밖에서는 사용자에게 표시되는 모든 자연어 내용을 한국어(ko-KP)로 작성해야 합니다.\n사용자가 명시적으로 요청하지 않는 한 다른 언어로 전환하지 마십시오.',
-    modelTailInstruction: '사용자가 다른 언어를 명시적으로 요청하지 않는 한, 사용자에게 보여 줄 답변은 한국어(ko-KP)로 작성하십시오.',
     processorInstruction: 'Write the result in Korean (ko-KP).',
     progressHeader: '현재 처리 상태:',
     status: Object.freeze({
@@ -292,6 +286,7 @@ const PROFILES = Object.freeze({
       finalChannelRecovery: () => '주 모델 응답 채널에 이상이 있습니다. 짧은 형식 수정을 한 번 수행합니다…',
       continuationRecovery: () => '주 모델이 유효한 다음 단계를 생성하지 못했습니다. 제한된 이어쓰기를 한 번 수행합니다…',
       finalRoundReserved: () => '조사 도구 확장을 중단하고 주 모델이 다음 단계를 완료할 시간을 확보합니다…',
+      finalLanguageRepair: () => '주 모델 답변이 완료되었습니다. 한국어로 변환하고 있습니다…',
       mediaCacheMiss: () => '새 문서와 그림 내용을 처리하고 있습니다…',
       mediaReady: () => '문서와 그림 내용이 준비되었습니다. 주 모델에 넘겨 분석합니다…',
       baseRequestStart: () => '내용을 주 모델에 보내고 있습니다…',

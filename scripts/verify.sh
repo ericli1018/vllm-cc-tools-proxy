@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.3'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.3'
+test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.4'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.4'
 
 
 test -f src/i18n/response-language.js
@@ -206,32 +206,24 @@ grep -Fq 'streaming inactivity' README.md
 grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
 
 
-# V0.2.26.2 locale-native visible-output release contract
-grep -Fq 'V0.2.26.2 native-language visible-output contract' README.md
-grep -Fq '在 think 思考區塊之外，所有使用者可見的自然語言內容都必須使用繁體中文（zh-TW）。' README.md
-grep -Fq '除非使用者明確要求，否則不得切換為其他語言。' README.md
-grep -Fq '0.2.26+hotfix.2' README.md
-node --input-type=module - <<'NODE'
-import { SUPPORTED_RESPONSE_LANGUAGES, languageProfile } from './src/i18n/response-language.js';
-for (const locale of SUPPORTED_RESPONSE_LANGUAGES) {
-  const instruction = languageProfile(locale).modelInstruction;
-  if (/<\/?think>/i.test(instruction) || /\btool\b|protocol|JSON/i.test(instruction)) process.exit(1);
-}
-NODE
+# V0.2.26.2 / V0.2.26.3 historical language-prompt contracts are documented but retired from runtime
+ grep -Fq 'V0.2.26.2 native-language visible-output contract' README.md
+ grep -Fq 'V0.2.26.3 generation-adjacent language tail' README.md
+ ! grep -Fq 'modelInstruction:' src/i18n/response-language.js
+ ! grep -Fq 'modelTailInstruction:' src/i18n/response-language.js
+ ! grep -Fq 'injectResponseLanguagePolicy(' src/services/proxy-server.js
+ ! grep -Fq 'injectResponseLanguageTail(' src/services/proxy-server.js
 
-
-# V0.2.26.3 generation-adjacent language tail release contract
-grep -Fq 'V0.2.26.3 generation-adjacent language tail' README.md
-grep -Fq '若使用者未明確要求其他語言，請以繁體中文（zh-TW）撰寫給使用者看的回答。' README.md
-grep -Fq 'latest user turn' README.md
-grep -Fq 'every managed model round' README.md
-grep -Fq '0.2.26+hotfix.3' README.md
-grep -Fq 'modelTailInstruction' src/i18n/response-language.js
-grep -Fq 'injectResponseLanguageTail' src/services/proxy-server.js
-node --input-type=module - <<'NODE'
-import { SUPPORTED_RESPONSE_LANGUAGES, languageProfile } from './src/i18n/response-language.js';
-for (const locale of SUPPORTED_RESPONSE_LANGUAGES) {
-  const tail = languageProfile(locale).modelTailInstruction;
-  if (!tail || /<\/?think>/i.test(tail) || /tool|protocol|JSON/i.test(tail)) process.exit(1);
-}
-NODE
+# V0.2.26.4 Final Language Gate release contract
+ grep -Fq 'V0.2.26.4 Final Language Gate' README.md
+ grep -Fq 'Final Presentation Language' README.md
+ grep -Fq 'External Processor' README.md
+ grep -Fq 'isolated Base vLLM language repair' README.md
+ grep -Fq 'original Laguna final response' README.md
+ grep -Fq '0.2.26+hotfix.4' README.md
+ grep -Fq 'applyFinalLanguageGate' src/services/proxy-server.js
+ grep -Fq 'rewriteFinalSegmentsWithExternalProcessor' src/services/proxy-server.js
+ grep -Fq 'buildBaseLanguageRepairRequest' src/services/proxy-server.js
+ test -f src/proxy/final-language-gate.js
+ test -f src/services/final-language-repair.js
+ test -f V0.2.26.4-更新說明.md

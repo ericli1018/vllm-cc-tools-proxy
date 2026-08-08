@@ -82,3 +82,34 @@ test('V0.2.25.1 collector surfaces Anthropic SSE error events as retryable upstr
     return true;
   });
 });
+
+test('V0.2.26.4 collector preserves first-event usage and completion callbacks while buffering final message', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm4', type: 'message', role: 'assistant', model: 'laguna', content: [],
+      stop_reason: null, usage: { input_tokens: 321, output_tokens: 0 },
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Final answer' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 9 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+  const first = [];
+  const usages = [];
+  const completed = [];
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]), {
+    onFirstEvent: async (entry) => first.push(entry),
+    onUsage: async (entry) => usages.push(entry),
+    onComplete: async (entry) => completed.push(entry),
+  });
+
+  assert.equal(result.content[0].text, 'Final answer');
+  assert.deepEqual(first, [{ event: 'content_block_start', type: 'content_block_start', block_type: 'text' }]);
+  assert.equal(usages.length, 2);
+  assert.equal(usages[0].stage, 'message_start');
+  assert.equal(usages[0].usage.input_tokens, 321);
+  assert.equal(usages[1].stage, 'message_delta');
+  assert.equal(usages[1].usage.output_tokens, 9);
+  assert.deepEqual(completed, [{ firstModelEventObserved: true }]);
+});
