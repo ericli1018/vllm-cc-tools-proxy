@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.25 - 2026-08-08
+
+- Added a dedicated one-slot native WebSearch fast lane for exclusive `web_search_YYYYMMDD` child requests, independent of the general managed queue.
+- Added an internal one-slot large-context gate for streamed managed requests with at least 100000 preflight input tokens.
+- Added `native_web_search` and `large_context` admission state to `/health`, plus lane/classification diagnostics.
+- Split queue-wait elapsed time from Base-model-round elapsed time in localized progress heartbeats; model time now starts when the model round actually starts.
+- Preserved V0.2.24 cumulative Base-vLLM response-byte reporting.
+- Added conservative 90-second response-body stall detection that arms only after the current model round receives its first upstream byte; the existing model-round timeout remains the hard deadline.
+- Preserved V0.2.23.2 forced native WebSearch tool choice and the existing WebFetch/Ollama Processor lifecycle.
+
+## 0.2.24 - 2026-08-08
+
+- Added request-scoped cumulative counting of raw Base-vLLM response-body bytes for managed requests.
+- Added binary byte formatting (`B / KB / MB / GB`) and localized received-byte wording for all five `MODEL_RESPONSE_LANGUAGE` profiles.
+- Added the cumulative byte count to the first visible progress header and semantic heartbeat messages.
+- Counted bytes at the Base-vLLM HTTP response boundary before JSON/SSE parsing; request bytes, Claude Code SSE bytes, SearXNG, WebFetch Processor and visual-model traffic are excluded.
+- Preserved V0.2.23.2 native WebSearch forced-choice behavior and existing WebSearch/WebFetch lifecycle boundaries.
+
 ## 0.2.23.2 - 2026-08-08
 
 - Kept the external hotfix label `V0.2.23.2` while using npm-valid package metadata `0.2.23+hotfix.2`.

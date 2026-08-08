@@ -167,12 +167,12 @@ export class MediaProgressTracker {
     return statusText(this.locale, 'mediaReady');
   }
 
-  renderHeartbeat() {
+  renderHeartbeat({ receivedBytes } = {}) {
     const reference = this.mediaReadyAt ?? this.lastStatusAt;
     const seconds = Math.max(0, Math.floor((this.now() - reference) / 1000));
     if (this.mediaReadyAt !== null) {
       const prefix = this.current ? this.#fileLabel(this.current) : mediaText(this.locale, 'currentTask');
-      return [prefix, mediaText(this.locale, 'status', { message: statusText(this.locale, 'modelWaiting', { seconds }) })].join(this.profile.media.separator);
+      return [prefix, mediaText(this.locale, 'status', { message: statusText(this.locale, 'modelWaiting', { seconds, receivedBytes }) })].join(this.profile.media.separator);
     }
     const prefix = this.current ? this.#fileLabel(this.current) : mediaText(this.locale, 'currentTask');
     return [prefix, mediaText(this.locale, 'status', { message: statusText(this.locale, 'currentStepWaiting', { seconds }) })].join(this.profile.media.separator);

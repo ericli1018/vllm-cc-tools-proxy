@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.23.2 hotfix release', async () => {
+test('package version is V0.2.25 release', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.23+hotfix.2');
-  assert.equal(lock.version, '0.2.23+hotfix.2');
-  assert.equal(lock.packages[''].version, '0.2.23+hotfix.2');
+  assert.equal(packageJson.version, '0.2.25');
+  assert.equal(lock.version, '0.2.25');
+  assert.equal(lock.packages[''].version, '0.2.25');
 });
 
 
@@ -279,4 +279,25 @@ test('README documents V0.2.23.2 native WebSearch forced-choice hotfix', () => {
   assert.match(readme, /managed_forced_tool_choice_satisfied/);
   assert.match(readme, /0\.2\.23\+hotfix\.2/);
   assert.match(readme, /Mixed native Search plus any other tool/);
+});
+
+
+test('README documents V0.2.24 cumulative Base vLLM response byte progress', () => {
+  assert.match(readme, /V0\.2\.24 cumulative Base vLLM response byte progress/);
+  assert.match(readme, /B \/ KB \/ MB \/ GB/);
+  assert.match(readme, /Base vLLM response body/);
+  assert.match(readme, /目前處理進度（已收到 20 B）：/);
+  assert.match(readme, /主模型仍在處理本輪請求，已等待 30 秒（已收到 1\.22 KB）/);
+});
+
+
+test('README documents V0.2.25 multi-Agent research scheduling', () => {
+  assert.match(readme, /V0\.2\.25 multi-Agent research scheduling/);
+  assert.match(readme, /native WebSearch fast lane/i);
+  assert.match(readme, /100000/);
+  assert.match(readme, /large-context gate/i);
+  assert.match(readme, /managed_model_stall_timeout/);
+  assert.match(readme, /not armed during TTFT/i);
+  assert.match(readme, /native_web_search/);
+  assert.match(readme, /large_context/);
 });

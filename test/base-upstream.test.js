@@ -76,3 +76,28 @@ test('Base upstream exposes a fetch-compatible streaming facade', async (t) => {
   assert.equal(response.headers.get('x-test'), 'yes');
   assert.match(await response.text(), /message_stop/);
 });
+
+test('V0.2.24 Base upstream reports raw response bytes as chunks arrive before completion', async (t) => {
+  let releaseSecondChunk;
+  const secondChunkGate = new Promise((resolve) => { releaseSecondChunk = resolve; });
+  const server = http.createServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.write('abc');
+    await secondChunkGate;
+    res.end('defgh');
+  });
+  const url = await listen(server);
+  t.after(() => server.close());
+
+  const observed = [];
+  const response = await requestBaseUpstream(`${url}/v1/messages`, {
+    method: 'POST', body: '{}', onResponseChunk: (bytes) => observed.push(bytes),
+  }, { ...timeouts, bodyTimeoutMs: 500 });
+  const textPromise = response.text();
+
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(observed, [3]);
+  releaseSecondChunk();
+  assert.equal(await textPromise, 'abcdefgh');
+  assert.equal(observed.reduce((sum, value) => sum + value, 0), 8);
+});

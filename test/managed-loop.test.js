@@ -979,3 +979,40 @@ test('V0.2.23 managed WebSearch progress follows the configured locale', async (
   assert.match(progress.join('\n'), /Searching: libuv TLS…/);
   assert.match(progress.join('\n'), /Search completed: libuv TLS\./);
 });
+
+test('V0.2.25 model stall deadline does not arm before the first upstream response byte', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0 };
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'slow ttft' }] }, {
+    upstream: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 45));
+      return { id: 'ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 100,
+    modelStallTimeoutMs: 20,
+    getUpstreamActivity: () => ({ ...activity }),
+  });
+  assert.equal(result.content[0].text, 'done');
+});
+
+test('V0.2.25 model stall deadline aborts after response bytes start and then stop', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0 };
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'stalled body' }] }, {
+    upstream: async (_body, signal) => {
+      setTimeout(() => {
+        activity.receivedBytes = 64;
+        activity.lastByteAt = Date.now();
+      }, 5);
+      await new Promise((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 200,
+    modelStallTimeoutMs: 25,
+    getUpstreamActivity: () => ({ ...activity }),
+  }), (error) => {
+    assert.equal(error.code, 'managed_model_stall_timeout');
+    return true;
+  });
+});

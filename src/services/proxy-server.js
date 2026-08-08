@@ -52,13 +52,14 @@ function upstreamHeaders(incomingHeaders, config) {
   return headers;
 }
 
-async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages') {
+async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null } = {}) {
   try {
     return await requestBaseUpstream(upstreamEndpoint(config.vllmBaseUrl, path), {
       method: 'POST',
       headers: upstreamHeaders(incomingHeaders, config),
       body: JSON.stringify(request),
       signal,
+      onResponseChunk,
     }, config.vllmBaseTimeouts);
   } catch (error) {
     if (error instanceof HttpError || error?.name === 'AbortError') throw error;
@@ -68,8 +69,8 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
   }
 }
 
-async function callUpstreamJson(request, config, incomingHeaders, signal, path = '/v1/messages') {
-  const response = await fetchUpstream({ ...request, stream: false }, config, incomingHeaders, signal, path);
+async function callUpstreamJson(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null } = {}) {
+  const response = await fetchUpstream({ ...request, stream: false }, config, incomingHeaders, signal, path, { onResponseChunk });
   const text = await response.text();
   let payload;
   try { payload = text ? JSON.parse(text) : {}; } catch {
@@ -131,7 +132,7 @@ function evidenceByteLength(value) {
 }
 
 async function streamManagedBase(progress, request, config, incomingHeaders, signal, {
-  onDiagnostic = () => {}, onLifecycle = () => {}, onUsage = () => {},
+  onDiagnostic = () => {}, onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null,
 } = {}) {
   const outbound = { ...request, stream: true };
   const requestStartedAt = Date.now();
@@ -140,7 +141,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
     message_count: Array.isArray(outbound.messages) ? outbound.messages.length : 0,
     evidence_bytes: evidenceByteLength(outbound.messages),
   });
-  const upstream = await fetchUpstream(outbound, config, incomingHeaders, signal);
+  const upstream = await fetchUpstream(outbound, config, incomingHeaders, signal, '/v1/messages', { onResponseChunk });
   const headersReceivedAt = Date.now();
   await onLifecycle('base_upstream_headers_received', {
     status: upstream.status,
@@ -370,10 +371,23 @@ export function createProxyServer(config, dependencies = {}) {
     let progress = null;
     let completed = false;
     let releaseManaged = null;
+    let releaseLargeContext = null;
     let releaseIngress = null;
     let preparedMedia = null;
     let mediaProgress = null;
     let initialStreamUsage = usageFromTokenCount({});
+    let baseResponseBytes = 0;
+    let lastBaseResponseChunkAt = 0;
+    const onBaseResponseChunk = (bytes) => {
+      const value = Number(bytes);
+      if (Number.isFinite(value) && value > 0) {
+        baseResponseBytes += value;
+        lastBaseResponseChunkAt = Date.now();
+      }
+    };
+    const getBaseResponseBytes = () => baseResponseBytes;
+    const getBaseUpstreamActivity = () => ({ receivedBytes: baseResponseBytes, lastByteAt: lastBaseResponseChunkAt });
+    const progressTiming = { mode: 'initial', startedAt: Date.now(), position: 0 };
     const url = new URL(req.url || '/', 'http://localhost');
 
     res.on('close', () => {
@@ -414,6 +428,8 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, {
           status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: VERSION, revision: config.gitRevision,
           managed: { active: state.managed.active, limit: state.managed.limit, queued: state.managed.queued, queue_limit: state.managed.queueLimit },
+          native_web_search: { active: state.nativeWebSearch.active, limit: state.nativeWebSearch.limit, queued: state.nativeWebSearch.queued, queue_limit: state.nativeWebSearch.queueLimit },
+          large_context: { active: state.largeContext.active, limit: state.largeContext.limit, queued: state.largeContext.queued, queue_limit: state.largeContext.queueLimit, threshold_tokens: 100000 },
           vision: { active: state.vision.active, limit: state.vision.limit },
           web_fetch_processor: { active: state.webFetchProcessor.active, limit: state.webFetchProcessor.limit, queued: state.webFetchProcessor.queued },
           cache: { ...cacheState, ...registryState },
@@ -689,6 +705,11 @@ export function createProxyServer(config, dependencies = {}) {
       const passthroughClientWebTools = hasManagedTools
         && serverWebUiDeclaration.native_count === 0
         && serverWebUiDeclaration.alias_count > 0;
+      const nativeWebSearchFastLane = hasManagedTools
+        && normalizedWebTools.forcedNativeSearchChoice === true
+        && serverWebUiDeclaration.native_count === 1
+        && serverWebUiDeclaration.search === true
+        && serverWebUiDeclaration.fetch === false;
       if (hasManagedTools) {
         log(config, 'info', 'server_web_ui_bridge_selected', {
           requestId,
@@ -783,7 +804,10 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
-      if (!admission.canAcceptManaged()) {
+      const laneCanAccept = nativeWebSearchFastLane
+        ? admission.canAcceptNativeWebSearch()
+        : admission.canAcceptManaged();
+      if (!laneCanAccept) {
         throw new HttpError(429, 'Proxy managed-task queue is full.', { code: 'proxy_queue_full', retryable: true });
       }
 
@@ -805,6 +829,7 @@ export function createProxyServer(config, dependencies = {}) {
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
           locale: config.responseLanguage,
+          getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {
               requestId,
@@ -839,9 +864,24 @@ export function createProxyServer(config, dependencies = {}) {
           },
         });
         await progress.open();
-        const semanticHeartbeatStartedAt = Date.now();
-        progress.startSemanticHeartbeat(() => mediaProgress?.renderHeartbeat()
-          || statusText(config.responseLanguage, 'modelWaiting', { seconds: Math.floor((Date.now() - semanticHeartbeatStartedAt) / 1000) }));
+        progress.startSemanticHeartbeat(() => {
+          if (progressTiming.mode === 'queue') {
+            return statusText(config.responseLanguage, 'queueWait', {
+              position: progressTiming.position,
+              seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
+            });
+          }
+          if (progressTiming.mode === 'model') {
+            return statusText(config.responseLanguage, 'modelWaiting', {
+              seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
+              receivedBytes: getBaseResponseBytes(),
+            });
+          }
+          return mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() })
+            || statusText(config.responseLanguage, 'currentStepWaiting', {
+              seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
+            });
+        });
       }
 
       const onProgress = async (message, details = {}) => {
@@ -857,20 +897,52 @@ export function createProxyServer(config, dependencies = {}) {
       original = null;
       releaseIngress(); releaseIngress = null;
 
-      const beforeAcquire = admission.health().managed;
+      const inputTokens = totalAnthropicInputTokens(initialStreamUsage);
+      const isLargeContext = request.stream === true && inputTokens >= 100000 && !nativeWebSearchFastLane;
+      if (isLargeContext) {
+        const largeQueuedAt = Date.now();
+        log(config, 'info', 'managed_request_classified', {
+          requestId, class: 'large_context', input_tokens: inputTokens, threshold_tokens: 100000,
+        });
+        releaseLargeContext = await admission.acquireLargeContext({
+          requestId,
+          signal: abortController.signal,
+          onPosition: (position) => {
+            progressTiming.mode = 'queue';
+            progressTiming.startedAt = largeQueuedAt;
+            progressTiming.position = position;
+            log(config, 'info', 'large_context_job_enqueued', { requestId, position, queued: admission.health().largeContext.queued });
+            progress?.update(statusText(config.responseLanguage, 'queueWait', { position, seconds: Math.floor((Date.now() - largeQueuedAt) / 1000) }), { force: true, details: { phase: 'queue_wait', lane: 'large_context', position } }).catch(() => {});
+          },
+        });
+        log(config, 'info', 'large_context_job_admitted', { requestId, queue_wait_ms: Date.now() - largeQueuedAt, input_tokens: inputTokens });
+      }
+
+      const lane = nativeWebSearchFastLane ? 'native_web_search' : 'managed';
+      const laneState = nativeWebSearchFastLane ? admission.health().nativeWebSearch : admission.health().managed;
       const queuedAt = Date.now();
-      releaseManaged = await admission.acquireManaged({
+      const acquireLane = nativeWebSearchFastLane
+        ? (options) => admission.acquireNativeWebSearch(options)
+        : (options) => admission.acquireManaged(options);
+      releaseManaged = await acquireLane({
         requestId,
         signal: abortController.signal,
         onPosition: (position) => {
-          log(config, 'info', 'managed_job_enqueued', { requestId, position, queued: admission.health().managed.queued });
-          progress?.update(statusText(config.responseLanguage, 'queueWait', { position }), { force: true, details: { phase: 'queue_wait' } }).catch(() => {});
+          progressTiming.mode = 'queue';
+          progressTiming.startedAt = queuedAt;
+          progressTiming.position = position;
+          const state = nativeWebSearchFastLane ? admission.health().nativeWebSearch : admission.health().managed;
+          log(config, 'info', 'managed_job_enqueued', { requestId, lane, position, queued: state.queued });
+          progress?.update(statusText(config.responseLanguage, 'queueWait', { position, seconds: Math.floor((Date.now() - queuedAt) / 1000) }), { force: true, details: { phase: 'queue_wait', lane, position } }).catch(() => {});
         },
       });
-      if (beforeAcquire.active >= beforeAcquire.limit) {
-        await progress?.update(statusText(config.responseLanguage, 'queueAdmitted'), { force: true, details: { phase: 'queue_admitted' } });
+      progressTiming.mode = 'admitted';
+      progressTiming.startedAt = Date.now();
+      progressTiming.position = 0;
+      if (laneState.active >= laneState.limit) {
+        await progress?.update(statusText(config.responseLanguage, 'queueAdmitted'), { force: true, details: { phase: 'queue_admitted', lane } });
       }
-      log(config, 'info', 'managed_job_admitted', { requestId, queue_wait_ms: Date.now() - queuedAt });
+      log(config, 'info', 'managed_job_admitted', { requestId, lane, queue_wait_ms: Date.now() - queuedAt, input_tokens: inputTokens });
 
       if (hasMedia) {
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
@@ -890,7 +962,7 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal);
+      const upstream = (body, signal) => callUpstreamJson(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
@@ -911,6 +983,20 @@ export function createProxyServer(config, dependencies = {}) {
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
+          modelStallTimeoutMs: 90000,
+          getUpstreamActivity: getBaseUpstreamActivity,
+          onModelRoundState: async ({ phase, round, startedAt, endedAt, startBytes }) => {
+            if (phase === 'start') {
+              progressTiming.mode = 'model';
+              progressTiming.startedAt = startedAt;
+              progressTiming.position = 0;
+              log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
+            } else {
+              progressTiming.mode = 'step';
+              progressTiming.startedAt = endedAt || Date.now();
+              log(config, 'info', 'managed_model_round_completed', { requestId, lane, round, elapsed_ms: (endedAt || Date.now()) - startedAt, received_bytes: getBaseResponseBytes() });
+            }
+          },
           locale: config.responseLanguage,
           releaseForcedManagedToolChoiceAfterUse: normalizedWebTools.forcedNativeSearchChoice,
           onProgress,
@@ -952,6 +1038,7 @@ export function createProxyServer(config, dependencies = {}) {
           { response: result, diagnostic_state: webToolDiagnosticController.snapshot() },
         );
         releaseManaged(); releaseManaged = null;
+        releaseLargeContext?.(); releaseLargeContext = null;
         if (request.stream === true) {
           const observedUsage = normalizeAnthropicUsage(result?.usage);
           log(config, 'info', 'managed_response_usage_observed', {
@@ -966,9 +1053,11 @@ export function createProxyServer(config, dependencies = {}) {
         } else sendJson(res, 200, result);
       } else {
         releaseManaged(); releaseManaged = null;
+        releaseLargeContext?.(); releaseLargeContext = null;
         if (request.stream === true) {
           await streamManagedBase(progress, request, config, req.headers, abortController.signal, {
             onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+            onResponseChunk: onBaseResponseChunk,
             onUsage: ({ stage, usage }) => log(config, 'info', 'managed_stream_usage_observed', {
               requestId,
               stage,
@@ -985,6 +1074,8 @@ export function createProxyServer(config, dependencies = {}) {
             onLifecycle: async (event, fields) => {
               log(config, 'info', event, { requestId, ...fields });
               if (event === 'base_upstream_request_start') {
+                progressTiming.mode = 'model';
+                progressTiming.startedAt = Date.now();
                 await onProgress('正在將內容送往主模型…', {
                   phase: 'base_request_start',
                   request_bytes: fields.request_bytes,
@@ -1027,6 +1118,7 @@ export function createProxyServer(config, dependencies = {}) {
     } finally {
       releaseIngress?.();
       releaseManaged?.();
+      releaseLargeContext?.();
       await preparedMedia?.cleanup();
     }
   });

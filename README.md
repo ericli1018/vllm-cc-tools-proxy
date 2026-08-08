@@ -1,6 +1,62 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.23.2 is a focused native-WebSearch reliability hotfix on top of V0.2.23.1. It preserves the Claude Code-owned WebSearch/WebFetch lifecycle introduced in V0.2.22 and the response-language behavior from V0.2.23.1.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25 optimizes multi-Agent research scheduling with an independent native-WebSearch fast lane, a large-context gate, truthful queue/model timers, and conservative response-body stall detection while preserving the existing Claude Code-owned WebSearch/WebFetch lifecycle.
+
+## V0.2.25 multi-Agent research scheduling
+
+V0.2.25 targets Claude Code workloads where several subagents research in parallel and repeatedly enter WebSearch/WebFetch. It keeps the existing general managed concurrency limit, but removes the worst head-of-line blocking patterns observed with 20K–140K-token Agent turns.
+
+### Native WebSearch fast lane
+
+An exclusive Claude Code native `web_search_YYYYMMDD` child request now uses a dedicated one-slot admission lane instead of the general managed queue. This lane still preserves V0.2.23.2 behavior: the first model round sees only normalized `web_search` with forced `tool_choice`, SearXNG executes the search, and the continuation returns to `tool_choice=auto`. The fast lane prevents a tiny Search dependency from waiting behind two long general Agent turns.
+
+The fast lane is intentionally narrow. Main-agent `WebSearch`/`WebFetch`, native WebFetch, mixed tools, media work, and ordinary managed requests remain on their existing paths.
+
+### Large-context gate
+
+For streamed managed requests whose preflight usage is at least `100000` input tokens, V0.2.25 applies an internal one-slot large-context gate before general managed admission. This prevents two 100K+ prefills from simultaneously consuming the normal two managed slots and amplifying vLLM latency. Smaller managed requests may still use the remaining general capacity. No new ENV setting is required.
+
+`/health` now exposes `native_web_search` and `large_context` lane state in addition to the existing `managed`, `vision`, and `web_fetch_processor` state. Diagnostics include `managed_request_classified`, `large_context_job_enqueued`, `large_context_job_admitted`, and a `lane` field on `managed_job_enqueued` / `managed_job_admitted`.
+
+### Queue time vs model time
+
+Progress heartbeat time is now phase-aware. Time spent waiting for admission is reported as queue time; when a Base-model round actually starts, the model timer starts from zero. The cumulative Base-vLLM byte counter from V0.2.24 remains request-scoped.
+
+Example:
+
+```text
+目前處理進度（已收到 0 B）：
+正在等待主模型執行資源，已排隊 60 秒，目前前方有 1 個任務…
+任務已開始處理…
+主模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…
+```
+
+### Conservative response-body stall detection
+
+The existing `MANAGED_MODEL_ROUND_TIMEOUT_MS` remains the hard model-round deadline. V0.2.25 additionally watches Base-vLLM response-body activity with an internal 90-second stall window. The stall timer is **not armed during TTFT**: it begins only after the current model round has received its first response byte. If response bytes begin and then stop for the full stall window, the round fails with `managed_model_stall_timeout`. This avoids misclassifying a long non-streaming JSON TTFT as a stalled response.
+
+WebFetch/Ollama Processor concurrency remains unchanged at the configured `WEB_FETCH_PROCESSOR_CONCURRENCY`; V0.2.25 does not move WebFetch Processor work into the Base-model lanes.
+
+## V0.2.24 cumulative Base vLLM response byte progress
+
+V0.2.24 shows how many raw response bytes the Proxy has actually received from the **Base vLLM response body** while a managed Claude Code request is still running. This is intended to distinguish a genuinely idle/stalled model from a model that is still returning data slowly.
+
+The count is cumulative for the current managed request and is measured at the Base-vLLM HTTP response-body boundary before JSON or SSE decoding. It does **not** count request bytes, Proxy-to-Claude-Code SSE bytes, SearXNG bytes, WebFetch Processor bytes, or visual-model bytes.
+
+Display uses binary units with automatic scaling: `B / KB / MB / GB`.
+
+Example with `MODEL_RESPONSE_LANGUAGE=zh-TW`:
+
+```text
+目前處理進度（已收到 20 B）：
+主模型仍在處理本輪請求，已等待 30 秒（已收到 1.22 KB）…
+主模型仍在處理本輪請求，已等待 60 秒（已收到 1.12 MB）…
+主模型已完成本輪回答；正在回傳結果…
+```
+
+The same received-byte value is localized through the existing five response-language profiles (`zh-TW`, `zh-CN`, `en-US`, `ja-JP`, `ko-KP`). No new ENV variable is required; the existing `PROGRESS_HEARTBEAT_MS` cadence still controls heartbeat timing.
+
+For native Server Tool flows, the progress text block still closes when the server-tool lifecycle begins. V0.2.24 does not change that Claude Code SSE/tool boundary merely to keep heartbeat text open.
 
 ## V0.2.23.2 native WebSearch forced-choice hotfix
 

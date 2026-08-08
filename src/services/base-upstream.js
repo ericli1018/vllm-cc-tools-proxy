@@ -43,7 +43,7 @@ function headerBag(headers) {
   };
 }
 
-function responseFacade(response, bodyTimeoutMs) {
+function responseFacade(response, bodyTimeoutMs, onResponseChunk = null) {
   let bodyTimeoutError = null;
   if (bodyTimeoutMs > 0) {
     response.setTimeout(bodyTimeoutMs, () => {
@@ -52,13 +52,25 @@ function responseFacade(response, bodyTimeoutMs) {
     });
   }
 
+  const body = {
+    async *[Symbol.asyncIterator]() {
+      try {
+        for await (const chunk of response) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          if (typeof onResponseChunk === 'function') {
+            try { onResponseChunk(buffer.length); } catch {}
+          }
+          yield buffer;
+        }
+      } catch (error) {
+        throw bodyTimeoutError || mapNetworkError(error);
+      }
+    },
+  };
+
   const text = async () => {
     const chunks = [];
-    try {
-      for await (const chunk of response) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    } catch (error) {
-      throw bodyTimeoutError || mapNetworkError(error);
-    }
+    for await (const chunk of body) chunks.push(chunk);
     return Buffer.concat(chunks).toString('utf8');
   };
 
@@ -66,7 +78,7 @@ function responseFacade(response, bodyTimeoutMs) {
     status: response.statusCode || 0,
     ok: (response.statusCode || 0) >= 200 && (response.statusCode || 0) < 300,
     headers: headerBag(response.headers),
-    body: response,
+    body,
     text,
   };
 }
@@ -113,7 +125,7 @@ export function requestBaseUpstream(urlValue, options = {}, timeoutConfig = {}) 
         response.once('end', clearAbort);
         response.once('close', clearAbort);
       }
-      resolve(responseFacade(response, bodyTimeoutMs));
+      resolve(responseFacade(response, bodyTimeoutMs, options.onResponseChunk));
     });
 
     request.once('socket', (socket) => {

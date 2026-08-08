@@ -29,8 +29,13 @@ function stripLegacyText(text) {
 }
 
 function isDedicatedProgressText(text) {
-  return typeof text === 'string'
-    && ALL_PROGRESS_BLOCK_HEADERS.some((header) => text.startsWith(`${header}\n`));
+  if (typeof text !== 'string') return false;
+  const firstLine = text.split(/\r?\n/, 1)[0];
+  return ALL_PROGRESS_BLOCK_HEADERS.some((header) => {
+    if (firstLine === header) return true;
+    const stem = header.replace(/[：:]$/, '');
+    return firstLine.startsWith(`${stem}（`) || firstLine.startsWith(`${stem} (`);
+  });
 }
 
 function isDedicatedProgressBlock(block) {
@@ -85,7 +90,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW',
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -96,7 +101,8 @@ export class ProgressStream {
     this.onWrite = onWrite;
     this.initialUsage = normalizeAnthropicUsage(initialUsage);
     this.onStateChange = onStateChange;
-    this.progressBlockHeader = progressBlockHeader(locale);
+    this.locale = locale;
+    this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -226,7 +232,7 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${this.progressBlockHeader}\n${entry.message}` },
+          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale, { receivedBytes: this.getReceivedBytes ? this.getReceivedBytes() : undefined })}\n${entry.message}` },
         }), metadata);
       } else {
         await this.#write(event('content_block_delta', {

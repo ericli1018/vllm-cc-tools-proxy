@@ -306,3 +306,34 @@ test('V0.2.23 ProgressStream emits localized headers and strips every supported 
     assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: 'answer' }]);
   }
 });
+
+test('V0.2.24 ProgressStream renders current cumulative Base vLLM bytes in the first visible header', async () => {
+  const response = new FakeResponse();
+  let receivedBytes = 20;
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    locale: 'zh-TW',
+    getReceivedBytes: () => receivedBytes,
+  });
+  await progress.open();
+  await progress.update('正在將內容送往主模型…', { force: true });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.match(stream, /目前處理進度（已收到 20 B）：/);
+});
+
+test('V0.2.24 dynamic byte progress header is recognized and stripped from history', () => {
+  const header = '目前處理進度（已收到 1.22 KB）：';
+  const messages = [{
+    role: 'assistant',
+    content: [
+      { type: 'text', text: `${header}\n主模型仍在處理本輪請求，已等待 30 秒（已收到 1.22 KB）…` },
+      { type: 'text', text: '真正答案' },
+    ],
+  }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});

@@ -22,6 +22,7 @@ import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from '
 
 const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 1_800_000;
 const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
+const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -37,10 +38,12 @@ function managedActionSignature(toolUses) {
 }
 
 function managedTimeoutError(code, timeoutMs, phase) {
-  const task = code === 'managed_task_timeout';
-  return new HttpError(504, task
+  const message = code === 'managed_task_timeout'
     ? 'Managed task exceeded its total execution deadline.'
-    : 'Base model did not complete the managed round within the bounded model deadline.', {
+    : code === 'managed_model_stall_timeout'
+      ? 'Base model response stalled after upstream response bytes began arriving.'
+      : 'Base model did not complete the managed round within the bounded model deadline.';
+  return new HttpError(504, message, {
     code,
     retryable: true,
     details: { timeout_ms: timeoutMs, phase },
@@ -83,6 +86,76 @@ async function runWithBoundedTime(operation, {
   } finally {
     clearTimeout(timer);
     if (signal && parentAbort) signal.removeEventListener('abort', parentAbort);
+  }
+}
+
+
+async function runModelWithActivityDeadline(operation, {
+  signal,
+  timeoutMs,
+  timeoutCode = 'managed_model_timeout',
+  stallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  getUpstreamActivity = null,
+  onRoundState = () => {},
+  round = 0,
+}) {
+  if (signal?.aborted) throw signal.reason || new Error('Aborted');
+  const startedAt = Date.now();
+  const initialActivity = typeof getUpstreamActivity === 'function' ? (getUpstreamActivity() || {}) : {};
+  const startBytes = Number(initialActivity.receivedBytes) || 0;
+  const controller = new AbortController();
+  let parentAbort;
+  let hardTimer;
+  let stallTimer;
+  let settled = false;
+  let rejectStall;
+  const hardError = managedTimeoutError(timeoutCode, timeoutMs, 'model');
+  const hardPromise = new Promise((_, reject) => {
+    hardTimer = setTimeout(() => {
+      controller.abort(hardError);
+      reject(hardError);
+    }, timeoutMs);
+  });
+  const parentAbortPromise = new Promise((_, reject) => {
+    if (!signal) return;
+    parentAbort = () => {
+      const reason = signal.reason || new Error('Aborted');
+      controller.abort(reason);
+      reject(reason);
+    };
+    signal.addEventListener('abort', parentAbort, { once: true });
+  });
+  const stallPromise = new Promise((_, reject) => { rejectStall = reject; });
+  const pollMs = Math.max(5, Math.min(1000, Math.floor(stallTimeoutMs / 4) || 5));
+  if (typeof getUpstreamActivity === 'function' && stallTimeoutMs > 0) {
+    stallTimer = setInterval(() => {
+      if (settled) return;
+      const activity = getUpstreamActivity() || {};
+      const bytes = Number(activity.receivedBytes) || 0;
+      const lastByteAt = Number(activity.lastByteAt) || 0;
+      const startedThisRound = bytes > startBytes && lastByteAt >= startedAt;
+      if (!startedThisRound || Date.now() - lastByteAt < stallTimeoutMs) return;
+      const error = managedTimeoutError('managed_model_stall_timeout', stallTimeoutMs, 'model');
+      controller.abort(error);
+      rejectStall(error);
+    }, pollMs);
+    stallTimer.unref?.();
+  }
+
+  await onRoundState({ phase: 'start', round, startedAt, startBytes });
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => operation(controller.signal)),
+      hardPromise,
+      parentAbortPromise,
+      stallPromise,
+    ]);
+  } finally {
+    settled = true;
+    clearTimeout(hardTimer);
+    if (stallTimer) clearInterval(stallTimer);
+    if (signal && parentAbort) signal.removeEventListener('abort', parentAbort);
+    await onRoundState({ phase: 'end', round, startedAt, endedAt: Date.now() });
   }
 }
 
@@ -384,6 +457,9 @@ export async function runManagedLoop(initialRequest, {
   modelRoundTimeoutMs = DEFAULT_MODEL_ROUND_TIMEOUT_MS,
   locale = 'zh-TW',
   releaseForcedManagedToolChoiceAfterUse = false,
+  modelStallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  getUpstreamActivity = null,
+  onModelRoundState = () => {},
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
@@ -411,9 +487,17 @@ export async function runManagedLoop(initialRequest, {
       timeout_ms: boundedMs,
       request: structuredClone(body),
     });
-    const rawResponse = await runWithBoundedTime(
+    const rawResponse = await runModelWithActivityDeadline(
       (boundedSignal) => upstream(body, boundedSignal),
-      { signal: upstreamSignal, timeoutMs: boundedMs, timeoutCode, phase: 'model' },
+      {
+        signal: upstreamSignal,
+        timeoutMs: boundedMs,
+        timeoutCode,
+        stallTimeoutMs: modelStallTimeoutMs,
+        getUpstreamActivity,
+        onRoundState: onModelRoundState,
+        round: activeRound,
+      },
     );
     await onTrace('base_model_response', {
       round: activeRound,

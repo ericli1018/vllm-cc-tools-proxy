@@ -119,6 +119,8 @@ test('admission controller exposes managed vision and WebFetch Processor health'
   const releaseProcessor = await admission.acquireWebFetchProcessor();
   assert.deepEqual(admission.health(), {
     managed: { active: 1, limit: 2, queued: 0, queueLimit: 4 },
+    nativeWebSearch: { active: 0, limit: 1, queued: 0, queueLimit: 4 },
+    largeContext: { active: 0, limit: 1, queued: 0, queueLimit: 4 },
     vision: { active: 1, limit: 1, queued: 0 },
     webFetchProcessor: { active: 1, limit: 3, queued: 0 },
   });
@@ -147,4 +149,20 @@ test('WebFetch Processor admission allows three global model calls and queues th
   releases[1]();
   releases[2]();
   assert.deepEqual(admission.health().webFetchProcessor, { active: 0, limit: 3, queued: 0 });
+});
+
+test('V0.2.25 admission exposes an independent native WebSearch fast lane and large-context gate', async () => {
+  const admission = new AdmissionController({ managedLimit: 1, queueLimit: 4, queueTimeoutMs: 1000, visionLimit: 1, webFetchProcessorLimit: 3 });
+  const releaseManaged = await admission.acquireManaged({ requestId: 'general' });
+  const releaseFast = await admission.acquireNativeWebSearch({ requestId: 'search-child' });
+  const releaseLarge = await admission.acquireLargeContext({ requestId: 'large-a' });
+  const waitingLarge = admission.acquireLargeContext({ requestId: 'large-b' });
+  await expectPending(waitingLarge);
+  assert.deepEqual(admission.health().nativeWebSearch, { active: 1, limit: 1, queued: 0, queueLimit: 4 });
+  assert.deepEqual(admission.health().largeContext, { active: 1, limit: 1, queued: 1, queueLimit: 4 });
+  assert.equal(admission.health().managed.active, 1);
+  releaseFast();
+  releaseLarge();
+  (await waitingLarge)();
+  releaseManaged();
 });

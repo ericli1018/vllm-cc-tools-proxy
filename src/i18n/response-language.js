@@ -3,6 +3,25 @@ export const SUPPORTED_RESPONSE_LANGUAGES = Object.freeze(['zh-TW', 'zh-CN', 'en
 
 const CANONICAL_BY_LOWER = new Map(SUPPORTED_RESPONSE_LANGUAGES.map((locale) => [locale.toLowerCase(), locale]));
 
+export function formatReceivedBytes(value) {
+  const bytes = Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let amount = bytes;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  const rendered = unit === 0 || Number.isInteger(amount)
+    ? String(Math.round(amount))
+    : amount.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  return `${rendered} ${units[unit]}`;
+}
+
+function hasReceivedBytes(value) {
+  return Number.isFinite(Number(value)) && Number(value) >= 0;
+}
+
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
     modelInstruction: 'Respond in Traditional Chinese (zh-TW).',
@@ -10,13 +29,13 @@ const PROFILES = Object.freeze({
     progressHeader: '目前處理進度：',
     status: Object.freeze({
       genericProcessing: () => '正在處理…',
-      modelWaiting: ({ seconds = 0 }) => `主模型仍在處理本輪請求，已等待 ${seconds} 秒…`,
+      modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `主模型仍在處理本輪請求，已執行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       searchStart: ({ query = '' }) => `正在搜尋：${query}…`,
       searchDone: ({ query = '' }) => `搜尋完成：${query}。`,
       fetchStart: ({ host = '網頁' }) => `正在讀取並整理 ${host}…`,
       fetchDone: ({ host = '網頁' }) => `${host} 內容已就緒。`,
       fetchError: ({ host = '網頁' }) => `${host} 讀取失敗；正在交由主模型改用其他來源。`,
-      queueWait: ({ position = 0 }) => `任務正在排隊，目前前方有 ${position} 個任務…`,
+      queueWait: ({ position = 0, seconds = 0 }) => `正在等待主模型執行資源，已排隊 ${seconds} 秒，目前前方有 ${position} 個任務…`,
       queueAdmitted: () => '任務已開始處理…',
       modelPlanning: () => '正在請主模型規劃下一步…',
       modelToolResults: () => '主模型正在整理工具結果…',
@@ -70,13 +89,13 @@ const PROFILES = Object.freeze({
     progressHeader: '当前处理进度：',
     status: Object.freeze({
       genericProcessing: () => '正在处理…',
-      modelWaiting: ({ seconds = 0 }) => `主模型仍在处理本轮请求，已等待 ${seconds} 秒…`,
+      modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `主模型仍在处理本轮请求，已执行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       searchStart: ({ query = '' }) => `正在搜索：${query}…`,
       searchDone: ({ query = '' }) => `搜索完成：${query}。`,
       fetchStart: ({ host = '网页' }) => `正在读取并整理 ${host}…`,
       fetchDone: ({ host = '网页' }) => `${host} 内容已就绪。`,
       fetchError: ({ host = '网页' }) => `${host} 读取失败；正在交由主模型改用其他来源。`,
-      queueWait: ({ position = 0 }) => `任务正在排队，目前前方有 ${position} 个任务…`,
+      queueWait: ({ position = 0, seconds = 0 }) => `正在等待主模型执行资源，已排队 ${seconds} 秒，目前前方有 ${position} 个任务…`,
       queueAdmitted: () => '任务已开始处理…',
       modelPlanning: () => '正在请主模型规划下一步…',
       modelToolResults: () => '主模型正在整理工具结果…',
@@ -130,13 +149,13 @@ const PROFILES = Object.freeze({
     progressHeader: 'Current progress:',
     status: Object.freeze({
       genericProcessing: () => 'Processing…',
-      modelWaiting: ({ seconds = 0 }) => `The main model is still processing this request. Waiting for ${seconds}s…`,
+      modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `The main model is still processing this request. Running for ${seconds}s${hasReceivedBytes(receivedBytes) ? ` (received ${formatReceivedBytes(receivedBytes)})` : ''}…`,
       searchStart: ({ query = '' }) => `Searching: ${query}…`,
       searchDone: ({ query = '' }) => `Search completed: ${query}.`,
       fetchStart: ({ host = 'web page' }) => `Fetching and processing ${host}…`,
       fetchDone: ({ host = 'web page' }) => `${host} content is ready.`,
       fetchError: ({ host = 'web page' }) => `Failed to fetch ${host}; the main model will use another source.`,
-      queueWait: ({ position = 0 }) => `Task queued; ${position} task(s) ahead…`,
+      queueWait: ({ position = 0, seconds = 0 }) => `Waiting for main-model capacity; queued for ${seconds}s with ${position} task(s) ahead…`,
       queueAdmitted: () => 'Task processing started…',
       modelPlanning: () => 'The main model is planning the next step…',
       modelToolResults: () => 'The main model is processing tool results…',
@@ -190,13 +209,13 @@ const PROFILES = Object.freeze({
     progressHeader: '現在の処理状況：',
     status: Object.freeze({
       genericProcessing: () => '処理中…',
-      modelWaiting: ({ seconds = 0 }) => `メインモデルがこのリクエストを処理中です。${seconds}秒経過しました…`,
+      modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `メインモデルがこのリクエストを処理中です。実行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（受信 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       searchStart: ({ query = '' }) => `検索中：${query}…`,
       searchDone: ({ query = '' }) => `検索完了：${query}。`,
       fetchStart: ({ host = 'Webページ' }) => `${host} を取得して処理しています…`,
       fetchDone: ({ host = 'Webページ' }) => `${host} の内容を取得しました。`,
       fetchError: ({ host = 'Webページ' }) => `${host} の取得に失敗しました。メインモデルが別の情報源を使用します。`,
-      queueWait: ({ position = 0 }) => `タスクは待機中です。前に ${position} 件あります…`,
+      queueWait: ({ position = 0, seconds = 0 }) => `メインモデルの実行枠を待機中です。${seconds} 秒待機、前に ${position} 件あります…`,
       queueAdmitted: () => 'タスクの処理を開始しました…',
       modelPlanning: () => 'メインモデルが次の手順を計画しています…',
       modelToolResults: () => 'メインモデルがツールの結果を処理しています…',
@@ -250,13 +269,13 @@ const PROFILES = Object.freeze({
     progressHeader: '현재 처리 상태:',
     status: Object.freeze({
       genericProcessing: () => '처리 중…',
-      modelWaiting: ({ seconds = 0 }) => `주 모델이 이 요청을 처리하고 있습니다. ${seconds}초 경과…`,
+      modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `주 모델이 이 요청을 처리하고 있습니다. ${seconds}초 실행${hasReceivedBytes(receivedBytes) ? ` (수신 ${formatReceivedBytes(receivedBytes)})` : ''}…`,
       searchStart: ({ query = '' }) => `검색 중: ${query}…`,
       searchDone: ({ query = '' }) => `검색 완료: ${query}.`,
       fetchStart: ({ host = '웹 페이지' }) => `${host}의 내용을 가져와 처리하고 있습니다…`,
       fetchDone: ({ host = '웹 페이지' }) => `${host}의 내용이 준비되었습니다.`,
       fetchError: ({ host = '웹 페이지' }) => `${host} 가져오기에 실패했습니다. 주 모델이 다른 자료원을 사용합니다.`,
-      queueWait: ({ position = 0 }) => `작업이 대기 중입니다. 앞에 ${position}개 작업이 있습니다…`,
+      queueWait: ({ position = 0, seconds = 0 }) => `주 모델 실행 자원을 기다리고 있습니다. ${seconds}초 대기, 앞에 ${position}개 작업이 있습니다…`,
       queueAdmitted: () => '작업 처리를 시작했습니다…',
       modelPlanning: () => '주 모델이 다음 단계를 계획하고 있습니다…',
       modelToolResults: () => '주 모델이 도구 실행 결과를 처리하고 있습니다…',
@@ -330,8 +349,17 @@ export function mediaText(locale, key, values = {}) {
   return '';
 }
 
-export function progressBlockHeader(locale) {
-  return languageProfile(locale).progressHeader;
+export function progressBlockHeader(locale, { receivedBytes } = {}) {
+  const resolved = resolveResponseLanguage(locale);
+  const base = languageProfile(resolved).progressHeader;
+  if (!hasReceivedBytes(receivedBytes)) return base;
+  const amount = formatReceivedBytes(receivedBytes);
+  const stem = base.replace(/[：:]$/, '');
+  if (resolved === 'zh-TW') return `${stem}（已收到 ${amount}）：`;
+  if (resolved === 'zh-CN') return `${stem}（已收到 ${amount}）：`;
+  if (resolved === 'ja-JP') return `${stem}（受信 ${amount}）：`;
+  if (resolved === 'ko-KP') return `${stem} (수신 ${amount}):`;
+  return `${stem} (received ${amount}):`;
 }
 
 export function allProgressBlockHeaders() {
