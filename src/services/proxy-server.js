@@ -402,11 +402,46 @@ export function createProxyServer(config, dependencies = {}) {
     let initialStreamUsage = usageFromTokenCount({});
     let baseResponseBytes = 0;
     let lastBaseResponseChunkAt = 0;
+    const modelRoundProgress = {
+      active: false,
+      round: 0,
+      lane: 'managed',
+      startedAt: 0,
+      startBytes: 0,
+      firstByteNotified: false,
+    };
     const onBaseResponseChunk = (bytes) => {
       const value = Number(bytes);
-      if (Number.isFinite(value) && value > 0) {
-        baseResponseBytes += value;
-        lastBaseResponseChunkAt = Date.now();
+      if (!Number.isFinite(value) || value <= 0) return;
+      baseResponseBytes += value;
+      lastBaseResponseChunkAt = Date.now();
+      if (!modelRoundProgress.active || modelRoundProgress.firstByteNotified || baseResponseBytes <= modelRoundProgress.startBytes) return;
+
+      modelRoundProgress.firstByteNotified = true;
+      const elapsedMs = Math.max(0, lastBaseResponseChunkAt - modelRoundProgress.startedAt);
+      const receivedThisRound = Math.max(0, baseResponseBytes - modelRoundProgress.startBytes);
+      log(config, 'info', 'managed_model_first_byte_received', {
+        requestId,
+        lane: modelRoundProgress.lane,
+        round: modelRoundProgress.round,
+        elapsed_ms: elapsedMs,
+        chunk_bytes: value,
+        received_bytes: baseResponseBytes,
+        round_received_bytes: receivedThisRound,
+      });
+      if (progress?.visible) {
+        progress.update(statusText(config.responseLanguage, 'modelFirstByte', {
+          seconds: Math.floor(elapsedMs / 1000),
+          receivedBytes: baseResponseBytes,
+        }), {
+          force: true,
+          details: {
+            phase: 'model_first_byte',
+            lane: modelRoundProgress.lane,
+            round: modelRoundProgress.round,
+            received_bytes: baseResponseBytes,
+          },
+        }).catch(() => {});
       }
     };
     const getBaseResponseBytes = () => baseResponseBytes;
@@ -883,6 +918,10 @@ export function createProxyServer(config, dependencies = {}) {
                 revision: entry.revision,
                 delivery_latency_ms: entry.deliveryLatencyMs,
                 writable_length: res.writableLength || 0,
+                upstream_received_bytes: getBaseResponseBytes(),
+                model_elapsed_ms: progressTiming.mode === 'model'
+                  ? Math.max(0, Date.now() - progressTiming.startedAt)
+                  : null,
               });
             }
           },
@@ -1014,8 +1053,15 @@ export function createProxyServer(config, dependencies = {}) {
               progressTiming.mode = 'model';
               progressTiming.startedAt = startedAt;
               progressTiming.position = 0;
+              modelRoundProgress.active = true;
+              modelRoundProgress.round = round;
+              modelRoundProgress.lane = lane;
+              modelRoundProgress.startedAt = startedAt;
+              modelRoundProgress.startBytes = startBytes;
+              modelRoundProgress.firstByteNotified = false;
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
+              modelRoundProgress.active = false;
               progressTiming.mode = 'step';
               progressTiming.startedAt = endedAt || Date.now();
               log(config, 'info', 'managed_model_round_completed', { requestId, lane, round, elapsed_ms: (endedAt || Date.now()) - startedAt, received_bytes: getBaseResponseBytes() });

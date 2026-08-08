@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25.1 fixes the Managed Base-model transport so live Anthropic SSE response bytes reach the Proxy during generation, making V0.2.24 byte progress and V0.2.25 stall detection reflect real upstream activity while preserving the multi-Agent scheduling changes introduced in V0.2.25.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25.2 closes the progress-sampling gap left after managed SSE streaming was enabled: once a long-running progress block is visible, the first Base-vLLM upstream response chunk now produces an immediate nonzero-byte update instead of waiting for the next 30-second heartbeat.
+
+
+## V0.2.25.2 first-byte progress hotfix
+
+V0.2.25.2 fixes a sampling-window problem in the byte-progress UI. V0.2.25.1 already changed managed Base-model rounds to `stream:true`, but semantic progress was still sampled on the normal heartbeat cadence. A request could therefore show `0 B` at 30 and 60 seconds, receive its first upstream bytes at 65 seconds, and finish at 87 seconds before the 90-second heartbeat ever had a chance to display the nonzero counter.
+
+For each managed model round, the Proxy now records the first upstream response chunk. If the progress block is already visible, that first chunk immediately emits one localized update such as:
+
+```text
+目前處理進度（已收到 0 B）：
+主模型仍在處理本輪請求，已執行 60 秒（已收到 0 B）…
+主模型已開始回傳資料，已執行 65 秒（已收到 284 B）…
+```
+
+Only the first upstream chunk of a model round triggers this immediate update. Later chunks continue to be sampled by the existing semantic heartbeat, so the Proxy does not generate one UI update per token/SSE chunk. Fast requests that never exposed a progress block remain quiet and do not flash a completion-only progress block.
+
+A new `managed_model_first_byte_received` diagnostic records `elapsed_ms`, `chunk_bytes`, request-scoped `received_bytes`, and `round_received_bytes`. `progress_sse_sent` diagnostics now also include `upstream_received_bytes` and `model_elapsed_ms`, making it possible to distinguish outgoing progress-packet size from actual Base-vLLM response activity.
+
+V0.2.25.2 does not change the V0.2.25.1 managed SSE transport, 90-second stall detector, hard model deadline, native WebSearch fast lane, large-context gate, WebFetch/Ollama Processor routing, response-language policy, or Claude Code-owned Web lifecycle. No new ENV variable is required.
 
 
 ## V0.2.25.1 managed SSE streaming hotfix

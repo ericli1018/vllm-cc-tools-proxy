@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.25+hotfix.1'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.25.1'
+test "$(node -p "require('./package.json').version")" = '0.2.25+hotfix.2'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.25.2'
 
 
 test -f src/i18n/response-language.js
@@ -186,3 +186,9 @@ grep -Fq 'sanitizeProtocolToolDefinitions' src/proxy/protocol-sanitizer.js
 grep -Fq 'protocol_tool_descriptions_sanitized' src/services/proxy-server.js
 
 echo 'Verification complete.'
+
+grep -Fq 'managed_model_first_byte_received' src/services/proxy-server.js
+grep -Fq 'upstream_received_bytes' src/services/proxy-server.js
+grep -Fq 'model_elapsed_ms' src/services/proxy-server.js
+grep -Fq 'modelFirstByte' src/i18n/response-language.js
+grep -Fq 'V0.2.25.2 first-byte progress hotfix' README.md

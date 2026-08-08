@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.25.2 - 2026-08-08
+
+- Kept the external hotfix label `V0.2.25.2` while using npm-valid package metadata `0.2.25+hotfix.2`.
+- Added one immediate localized progress update when the first Base-vLLM upstream response chunk arrives during an already-visible managed progress block.
+- Kept normal 30-second semantic heartbeat sampling for later chunks so token/SSE activity does not spam Claude Code UI.
+- Preserved quiet behavior for fast managed requests that complete before a progress block is shown.
+- Added `managed_model_first_byte_received` with first-byte timing and byte counters.
+- Added `upstream_received_bytes` and `model_elapsed_ms` to `progress_sse_sent` diagnostics.
+- Preserved V0.2.25.1 managed SSE collection, V0.2.25 scheduling, WebFetch/Ollama routing, stall timeout and hard deadline semantics.
+
 ## 0.2.25.1 - 2026-08-08
 
 - Kept the external hotfix label `V0.2.25.1` while using npm-valid package metadata `0.2.25+hotfix.1`.

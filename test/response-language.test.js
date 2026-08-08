@@ -103,3 +103,16 @@ test('V0.2.25 queue and model heartbeat vocabulary distinguish queue time from m
   assert.equal(language.statusText('en-US', 'queueWait', { position: 1, seconds: 90 }), 'Waiting for main-model capacity; queued for 90s with 1 task(s) ahead…');
   assert.equal(language.statusText('en-US', 'modelWaiting', { seconds: 30 }), 'The main model is still processing this request. Running for 30s…');
 });
+
+test('V0.2.25.2 localizes immediate first-byte model progress in every locale', () => {
+  const expected = {
+    'zh-TW': '主模型已開始回傳資料，已執行 45 秒（已收到 284 B）…',
+    'zh-CN': '主模型已开始返回数据，已执行 45 秒（已收到 284 B）…',
+    'en-US': 'The main model has started returning data. Running for 45s (received 284 B)…',
+    'ja-JP': 'メインモデルがデータを返し始めました。実行 45 秒（受信 284 B）…',
+    'ko-KP': '주 모델이 데이터를 반환하기 시작했습니다. 45초 실행 (수신 284 B)…',
+  };
+  for (const [locale, text] of Object.entries(expected)) {
+    assert.equal(language.statusText(locale, 'modelFirstByte', { seconds: 45, receivedBytes: 284 }), text);
+  }
+});

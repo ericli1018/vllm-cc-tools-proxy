@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.25.1 hotfix metadata', async () => {
+test('package version is V0.2.25.2 hotfix metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.25+hotfix.1');
-  assert.equal(lock.version, '0.2.25+hotfix.1');
-  assert.equal(lock.packages[''].version, '0.2.25+hotfix.1');
+  assert.equal(packageJson.version, '0.2.25+hotfix.2');
+  assert.equal(lock.version, '0.2.25+hotfix.2');
+  assert.equal(lock.packages[''].version, '0.2.25+hotfix.2');
 });
 
 
@@ -309,4 +309,13 @@ test('README documents V0.2.25.1 managed SSE streaming hotfix', () => {
   assert.match(readme, /Anthropic SSE/);
   assert.match(readme, /receivedBytes/);
   assert.match(readme, /managed_model_stall_timeout/);
+});
+
+
+test('README documents V0.2.25.2 first-byte progress hotfix', () => {
+  assert.match(readme, /V0\.2\.25\.2 first-byte progress hotfix/);
+  assert.match(readme, /managed_model_first_byte_received/);
+  assert.match(readme, /upstream_received_bytes/);
+  assert.match(readme, /model_elapsed_ms/);
+  assert.match(readme, /first upstream chunk/i);
 });

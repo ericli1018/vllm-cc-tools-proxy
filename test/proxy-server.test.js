@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.25.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.25.2', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2059,4 +2059,52 @@ test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero byt
   assert.deepEqual(observedStreams, [true]);
   assert.match(wire, /STREAMED/);
   assert.match(wire, /已收到 (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
+});
+
+test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arrive between heartbeats', async (t) => {
+  const logs = [];
+  const vllm = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.stream, true);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.flushHeaders();
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"late-first-byte","type":"message","role":"assistant","model":"m","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    res.end('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"DONE"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressHeartbeatMs: 50,
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'answer directly' }],
+    }),
+  });
+  const wire = await response.text();
+  assert.match(wire, /已執行 0 秒（已收到 0 B）/);
+  assert.match(wire, /主模型已開始回傳資料，已執行 \d+ 秒（已收到 (?!0 B)[^)]+）/);
+  assert.match(wire, /DONE/);
+
+  const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
+  assert.ok(firstByte, 'missing managed_model_first_byte_received');
+  assert.equal(firstByte.round, 1);
+  assert.ok(firstByte.received_bytes > 0);
+  assert.ok(firstByte.chunk_bytes > 0);
+  assert.ok(firstByte.elapsed_ms >= 65);
+
+  const progressLogs = logs.filter((entry) => entry.event === 'progress_sse_sent');
+  assert.ok(progressLogs.some((entry) => entry.upstream_received_bytes > 0 && Number.isFinite(entry.model_elapsed_ms)));
 });
