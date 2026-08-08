@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.25.2 hotfix metadata', async () => {
+test('package version is V0.2.26 release metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.25+hotfix.2');
-  assert.equal(lock.version, '0.2.25+hotfix.2');
-  assert.equal(lock.packages[''].version, '0.2.25+hotfix.2');
+  assert.equal(packageJson.version, '0.2.26');
+  assert.equal(lock.version, '0.2.26');
+  assert.equal(lock.packages[''].version, '0.2.26');
 });
 
 
@@ -318,4 +318,17 @@ test('README documents V0.2.25.2 first-byte progress hotfix', () => {
   assert.match(readme, /upstream_received_bytes/);
   assert.match(readme, /model_elapsed_ms/);
   assert.match(readme, /first upstream chunk/i);
+});
+
+
+test('README documents V0.2.26 recursive Vision evidence pipeline', () => {
+  assert.match(readme, /V0\.2\.26 recursive Vision evidence pipeline/i);
+  assert.match(readme, /before Base .*count_tokens/i);
+  assert.match(readme, /adaptive.*220.*320.*DPI/is);
+  assert.match(readme, /original PDF/i);
+  assert.match(readme, /original image pixels/i);
+  assert.match(readme, /recursive.*crop/i);
+  assert.match(readme, /vision_upstream_request/);
+  assert.match(readme, /media-v6/);
+  assert.match(readme, /visual-v5/);
 });

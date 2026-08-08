@@ -840,6 +840,12 @@ export function createProxyServer(config, dependencies = {}) {
         ...(dependencies.mediaAdapterDependencies || {}),
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
         onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+        onVisionEvent: (event, fields) => log(
+          config,
+          event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info',
+          event,
+          { requestId, ...fields },
+        ),
         mediaProgress,
       };
 
@@ -870,9 +876,30 @@ export function createProxyServer(config, dependencies = {}) {
         throw new HttpError(429, 'Proxy managed-task queue is full.', { code: 'proxy_queue_full', retryable: true });
       }
 
+      const deferredProgress = [];
+      const onProgress = async (message, details = {}) => {
+        const { force = false, ...stateDetails } = details;
+        const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
+        const rendered = mediaProgress?.render(localized, stateDetails) || localized;
+        log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
+        if (progress) await progress.update(rendered, { force, details: stateDetails });
+        else deferredProgress.push({ rendered, force, stateDetails });
+      };
+
+      if (hasMedia) {
+        if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
+        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
+        request.messages = await adaptMessages(request.messages, adapters);
+        request = injectEvidenceContract(request);
+        await preparedMedia.cleanup(); preparedMedia = null;
+        const readyMessage = mediaProgress?.renderMediaReady()
+          || statusText(config.responseLanguage, 'mediaReady');
+        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
+      }
+
       if (request.stream === true) {
         initialStreamUsage = await preflightManagedUsage(
-          usagePreflightRequest || request,
+          request,
           config,
           req.headers,
           abortController.signal,
@@ -945,17 +972,17 @@ export function createProxyServer(config, dependencies = {}) {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
             });
         });
+        for (const entry of deferredProgress.splice(0)) {
+          await progress.update(entry.rendered, { force: true, details: entry.stateDetails });
+        }
       }
 
-      const onProgress = async (message, details = {}) => {
-        const { force = false, ...stateDetails } = details;
-        const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
-        const rendered = mediaProgress?.render(localized, stateDetails) || localized;
-        log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
-        await progress?.update(rendered, { force, details: stateDetails });
-      };
+      if (hasMedia) {
+        const readyMessage = mediaProgress?.renderMediaReady()
+          || statusText(config.responseLanguage, 'mediaReady');
+        await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
+      }
 
-      if (hasMedia && !allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
       rawBody = null;
       original = null;
       releaseIngress(); releaseIngress = null;
@@ -1006,17 +1033,6 @@ export function createProxyServer(config, dependencies = {}) {
         await progress?.update(statusText(config.responseLanguage, 'queueAdmitted'), { force: true, details: { phase: 'queue_admitted', lane } });
       }
       log(config, 'info', 'managed_job_admitted', { requestId, lane, queue_wait_ms: Date.now() - queuedAt, input_tokens: inputTokens });
-
-      if (hasMedia) {
-        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
-        request.messages = await adaptMessages(request.messages, adapters);
-        request = injectEvidenceContract(request);
-        await preparedMedia.cleanup(); preparedMedia = null;
-        const readyMessage = mediaProgress?.renderMediaReady()
-          || statusText(config.responseLanguage, 'mediaReady');
-        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
-        await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
-      }
 
       if (messagesPath === '/v1/messages/count_tokens') {
         releaseManaged(); releaseManaged = null;

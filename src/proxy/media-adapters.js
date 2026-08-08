@@ -20,6 +20,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const preloadedCache = dependencies.preloadedCache || new Map();
   const onCacheEvent = dependencies.onCacheEvent || (() => {});
   const onDiagnostic = dependencies.onDiagnostic || (() => {});
+  const onVisionEvent = dependencies.onVisionEvent || (() => {});
   const mediaProgress = dependencies.mediaProgress || null;
   const { maxDecodedBytes, maxOutputChars } = config.limits;
 
@@ -48,7 +49,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const analyzeWithAdmission = async (assets, options) => {
     const release = await acquireVision({ signal: options?.signal || signal });
     try {
-      return await analyzeVisualAssets(assets, { ...options, onDiagnostic });
+      return await analyzeVisualAssets(assets, { ...options, onDiagnostic, onEvent: onVisionEvent });
     } finally {
       release();
     }
@@ -143,7 +144,15 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal: analysisSignal });
         const registry = new VisualAssetRegistry();
-        const asset = registry.add({ ...normalized, label: filename || 'Claude Code image' });
+        const asset = registry.add({
+          ...normalized,
+          label: filename || 'Claude Code image',
+          sourceKind: 'image',
+          originalBuffer: sourceBuffer,
+          originalMediaType: mediaType,
+          originalWidth: normalized.originalWidth || normalized.width,
+          originalHeight: normalized.originalHeight || normalized.height,
+        });
         await reportProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision' });
         const result = await analyzeWithAdmission([asset], {
           baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,

@@ -203,3 +203,69 @@ test('visual worker prompt forbids protocol markup and reports control tags with
     details: { tagCount: 2, tags: ['function_result', 'tool_call'] },
   }]);
 });
+
+test('V0.2.26 Vision worker can crop a crop using the registered derived source id', async (t) => {
+  const requests = [];
+  const server = http.createServer(async (req, res) => {
+    const payload = await read(req); requests.push(payload);
+    let message;
+    if (requests.length === 1) {
+      message = { content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'first zoom' }) } }] };
+    } else if (requests.length === 2) {
+      assert.match(JSON.stringify(payload.messages), /source_id=asset-2/);
+      message = { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-2', bbox: [250,250,750,750], purpose: 'second zoom' }) } }] };
+    } else {
+      assert.match(JSON.stringify(payload.messages), /source_id=asset-3/);
+      message = { content: 'Nested crop analysis complete.', tool_calls: [] };
+    }
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message }] }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({
+    buffer: Buffer.from('overview'), mediaType: 'image/png', width: 1000, height: 1000, label: 'image',
+    originalBuffer: Buffer.from('original'), originalMediaType: 'image/png', originalWidth: 2000, originalHeight: 2000,
+  });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'vision', provider: 'vllm', think: false, registry, maxCropRounds: 3,
+    cropImage: async (_source, authorization) => ({
+      buffer: Buffer.from(`crop-${authorization.depth}`), mediaType: 'image/png',
+      width: authorization.rootPixelBox.width, height: authorization.rootPixelBox.height,
+    }),
+  });
+  assert.equal(result.markdown, 'Nested crop analysis complete.');
+  assert.equal(result.cropCount, 2);
+  assert.equal(requests.length, 3);
+  assert.equal(registry.get('asset-3').depth, 2);
+});
+
+test('V0.2.26 Vision diagnostics expose safe Ollama backend routing and timing without image bytes', async (t) => {
+  const events = [];
+  const server = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'ok', tool_calls: [] } }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('secret-image-bytes'), mediaType: 'image/png', width: 640, height: 480, label: 'photo' });
+  await analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'qwen-vision', provider: 'ollama', think: false, registry,
+    onEvent: (event, fields) => events.push({ event, fields }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  const request = events.find((entry) => entry.event === 'vision_upstream_request');
+  const response = events.find((entry) => entry.event === 'vision_upstream_response');
+  assert.ok(request);
+  assert.equal(request.fields.provider, 'ollama');
+  assert.equal(request.fields.backend_host, new URL(url).host);
+  assert.equal(request.fields.endpoint_path, '/api/chat');
+  assert.equal(request.fields.model, 'qwen-vision');
+  assert.equal(request.fields.image_count, 1);
+  assert.deepEqual(request.fields.dimensions, ['640x480']);
+  assert.ok(response);
+  assert.equal(response.fields.http_status, 200);
+  assert.ok(Number.isFinite(response.fields.elapsed_ms));
+  assert.equal(JSON.stringify(events).includes('secret-image-bytes'), false);
+});

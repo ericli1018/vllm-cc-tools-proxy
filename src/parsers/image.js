@@ -62,9 +62,21 @@ export async function cropImage(asset, authorization, {
   const inputPath = path.join(directory, 'input.png');
   const outputPath = path.join(directory, 'crop.png');
   try {
-    await fs.writeFile(inputPath, asset.buffer, { mode: 0o600 });
-    const scale = width * height * 4 <= maxImagePixels ? '200%' : '100%';
-    await runner('convert', [inputPath, '-crop', `${width}x${height}+${left}+${top}`, '+repage', '-resize', scale, '-strip', outputPath], {
+    const rootBuffer = Buffer.isBuffer(asset.rootBuffer) ? asset.rootBuffer : asset.buffer;
+    const rootBox = authorization?.rootPixelBox || authorization?.pixelBox;
+    const cropLeft = rootBox?.left;
+    const cropTop = rootBox?.top;
+    const cropWidth = rootBox?.width;
+    const cropHeight = rootBox?.height;
+    if (![cropLeft, cropTop, cropWidth, cropHeight].every(Number.isFinite) || cropWidth < 1 || cropHeight < 1) {
+      throw new HttpError(422, 'Invalid authorized root crop.', { code: 'invalid_visual_crop' });
+    }
+    await fs.writeFile(inputPath, rootBuffer, { mode: 0o600 });
+    const longEdge = Math.max(cropWidth, cropHeight);
+    const scale = Math.max(0.5, Math.min(4, 2400 / longEdge));
+    const targetWidth = Math.max(1, Math.round(cropWidth * scale));
+    const targetHeight = Math.max(1, Math.round(cropHeight * scale));
+    await runner('convert', [inputPath, '-crop', `${cropWidth}x${cropHeight}+${cropLeft}+${cropTop}`, '+repage', '-resize', `${targetWidth}x${targetHeight}`, '-strip', outputPath], {
       timeoutMs: processTimeoutMs, signal, maxOutputBytes: 1024 * 1024,
     });
     const result = await normalizeImage(await fs.readFile(outputPath), { maxDecodedBytes, maxImagePixels, processTimeoutMs, signal, runner });

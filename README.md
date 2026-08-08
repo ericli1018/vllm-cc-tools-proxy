@@ -1,7 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.25.2 closes the progress-sampling gap left after managed SSE streaming was enabled: once a long-running progress block is visible, the first Base-vLLM upstream response chunk now produces an immediate nonzero-byte update instead of waiting for the next 30-second heartbeat.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26 restructures PDF/image handling into a recursive Vision evidence pipeline so raw media is resolved by the configured Vision provider before Base-model token preflight and inference.
 
+## V0.2.26 recursive Vision evidence pipeline
+
+V0.2.26 moves managed media adaptation **before Base `/v1/messages/count_tokens`**. Raw Claude Code PDF/image blocks are resolved through the media cache and configured Vision provider first, converted into neutral text evidence, and only then sent to Base vLLM for token counting, large-context classification, and Laguna inference. This prevents Base `/count_tokens` from receiving `image`, `proxy_file`, Base64, or raw PDF content merely to estimate usage. Existing `VLLM_VISION_PROVIDER=ollama` routing therefore remains isolated from the Base model. No new ENV variable is required.
+
+PDF visual processing is now selective rather than unconditional. Pages with sufficient native text and no raster-image inventory are kept as native-text evidence; low-text pages or pages reported by `pdfimages -list` as containing raster images are selected for Vision. Vector-only diagrams on otherwise text-rich pages are not automatically detected by this heuristic. If `pdfimages -list` is unavailable, PDF processing continues and records `pdf_image_inventory_unavailable`.
+
+Selected PDF pages use an **adaptive 220–320 DPI** overview raster targeting about 3500 pixels on the page long edge; A4 resolves to about 299–300 DPI. The 4096-pixel normalization ceiling remains a final VLM safety bound. If the Vision model requests more detail, the Proxy does not enlarge the overview bitmap: it maps the requested bbox back to the **original PDF** and rerenders that region at higher effective resolution. First-level PDF crops are bounded at 600 DPI and deeper recursive crops at 720 DPI.
+
+Normal JPEG/PNG files use the same recursive observation contract, but without pretending that DPI can create source detail. The overview may be normalized for VLM input while all crops are cut from the **original image pixels**. Crop presentation targets about 2400 pixels on the long edge with interpolation bounded to at most 4x; if the original pixels do not contain enough information, the Vision worker is expected to report uncertainty instead of guessing.
+
+Every successful crop is now registered as a first-class visual asset with `source_id`, `root_source_id`, `parent_source_id`, `depth`, and a root-coordinate bbox. The Vision model can therefore request multiple different regions and can crop a previous crop again. The internal recursive crop loop is bounded to 3 crop rounds, depth 3, no more than 4 crop requests in one model round, and 8 derived crops per root asset. Raw images are not handed to Main Laguna as a fallback when Vision cannot read them; successful media handling ends in text evidence, while unrecoverable Vision service errors remain explicit request errors.
+
+Vision routing is now observable without exposing image bytes. Each provider call records `vision_upstream_request` and `vision_upstream_response` with safe fields such as `provider`, `backend_host`, `endpoint_path`, `model`, image count/dimensions, HTTP status, and elapsed time. With the existing Ollama configuration this makes `/api/chat` routing directly visible in Proxy logs instead of requiring inference from vLLM/Ollama logs.
+
+Because raster policy, recursive crop lineage, and visual prompt behavior changed, the media cache contract advances to `media-v6` and `visual-v5`. Old 180-DPI/previous-prompt evidence will not silently satisfy the new pipeline.
 
 ## V0.2.25.2 first-byte progress hotfix
 

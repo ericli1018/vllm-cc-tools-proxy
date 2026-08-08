@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.25+hotfix.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.25.2'
+test "$(node -p "require('./package.json').version")" = '0.2.26'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26'
 
 
 test -f src/i18n/response-language.js
@@ -151,8 +151,8 @@ test -f src/proxy/protocol-diagnostics.js
 test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
-grep -Fq "pipelineVersion: 'media-v5'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v4'" src/config.js
+grep -Fq "pipelineVersion: 'media-v6'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v5'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v1'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
@@ -192,3 +192,9 @@ grep -Fq 'upstream_received_bytes' src/services/proxy-server.js
 grep -Fq 'model_elapsed_ms' src/services/proxy-server.js
 grep -Fq 'modelFirstByte' src/i18n/response-language.js
 grep -Fq 'V0.2.25.2 first-byte progress hotfix' README.md
+
+# V0.2.26 recursive Vision evidence release contract
+grep -Fq 'V0.2.26 recursive Vision evidence pipeline' README.md
+grep -Fq 'vision_upstream_request' README.md
+grep -Fq 'media-v6' README.md
+grep -Fq 'visual-v5' README.md

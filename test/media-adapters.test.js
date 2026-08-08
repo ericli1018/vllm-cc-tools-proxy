@@ -143,3 +143,20 @@ test('document adapter quarantines control tags from parser and visual output', 
   assert.equal(diagnostics[0].event, 'evidence_source_control_tags_detected');
   assert.deepEqual(diagnostics[0].details.tags.sort(), ['function', 'generated_info', 'think', 'tool_call']);
 });
+
+test('V0.2.26 image adapter preserves original image bytes and dimensions as the crop root', async () => {
+  const original = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let observedAsset;
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'ollama', vllmVisionThink: false,
+  }, undefined, undefined, {
+    normalizeImage: async () => ({ buffer: Buffer.from('overview'), mediaType: 'image/png', width: 300, height: 90, originalWidth: 600, originalHeight: 180 }),
+    analyzeVisualAssets: async (assets) => { observedAsset = assets[0]; return { markdown: 'ok', warnings: [], cropCount: 0 }; },
+  });
+  await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: original.toString('base64') } });
+  assert.deepEqual(observedAsset.rootBuffer, original);
+  assert.equal(observedAsset.rootMediaType, 'image/png');
+  assert.equal(observedAsset.rootWidth, 600);
+  assert.equal(observedAsset.rootHeight, 180);
+});

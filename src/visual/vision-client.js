@@ -27,7 +27,7 @@ function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.
 function assetDescription(assets, prompt) {
   return [
     prompt,
-    ...assets.map((asset) => `source_id=${asset.sourceId}; label=${asset.label || asset.sourceId}; dimensions=${asset.width}x${asset.height}`),
+    ...assets.map((asset) => `source_id=${asset.sourceId}; root_source_id=${asset.rootSourceId || asset.sourceId}; parent_source_id=${asset.parentSourceId || 'none'}; depth=${asset.depth || 0}; label=${asset.label || asset.sourceId}; dimensions=${asset.width}x${asset.height}`),
   ].join('\n');
 }
 
@@ -41,7 +41,7 @@ function userMessageForAssets(provider, assets, prompt) {
   }
   const content = [{ type: 'text', text: prompt }];
   for (const asset of assets) {
-    content.push({ type: 'text', text: `source_id=${asset.sourceId}; label=${asset.label || asset.sourceId}; dimensions=${asset.width}x${asset.height}` });
+    content.push({ type: 'text', text: `source_id=${asset.sourceId}; root_source_id=${asset.rootSourceId || asset.sourceId}; parent_source_id=${asset.parentSourceId || 'none'}; depth=${asset.depth || 0}; label=${asset.label || asset.sourceId}; dimensions=${asset.width}x${asset.height}` });
     content.push({ type: 'image_url', image_url: { url: dataUrl(asset) } });
   }
   return { role: 'user', content };
@@ -88,6 +88,23 @@ function toolResultMessage(provider, call, result) {
   return { role: 'tool', tool_call_id: call?.id || `crop-${Date.now()}`, content };
 }
 
+
+function visionRequestSummary(endpoint, provider, model, assets) {
+  const url = new URL(endpoint);
+  return {
+    provider,
+    backend_host: url.host,
+    endpoint_path: url.pathname,
+    model,
+    image_count: assets.length,
+    dimensions: assets.map((asset) => `${asset.width}x${asset.height}`),
+  };
+}
+
+async function emitEvent(callback, event, fields) {
+  try { await callback(event, fields); } catch {}
+}
+
 function requestBody({ provider, model, messages, think, toolsEnabled }) {
   if (provider === 'ollama') {
     return {
@@ -120,7 +137,8 @@ export async function analyzeVisualAssets(assets, {
   signal,
   onProgress = () => {},
   onDiagnostic = () => {},
-  maxCropRounds = 2,
+  onEvent = () => {},
+  maxCropRounds = 3,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
   if (!baseUrl || !model) throw new HttpError(422, 'Visual endpoint is required for this media.', { code: 'vision_endpoint_required' });
@@ -133,14 +151,31 @@ export async function analyzeVisualAssets(assets, {
   let cropCount = 0;
   let cropRound = 0;
   let toolsEnabled = true;
+  const transmittedAssets = [...assets];
 
   while (true) {
-    const payload = await fetchJson(endpoint, {
-      method: 'POST',
-      signal,
-      headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
-      body: JSON.stringify(requestBody({ provider, model, messages, think, toolsEnabled })),
-    }, { errorCode: 'vision_service_error' });
+    const summary = visionRequestSummary(endpoint, provider, model, transmittedAssets);
+    const requestStartedAt = Date.now();
+    await emitEvent(onEvent, 'vision_upstream_request', summary);
+    let payload;
+    try {
+      payload = await fetchJson(endpoint, {
+        method: 'POST',
+        signal,
+        headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
+        body: JSON.stringify(requestBody({ provider, model, messages, think, toolsEnabled })),
+      }, { errorCode: 'vision_service_error' });
+      await emitEvent(onEvent, 'vision_upstream_response', { ...summary, http_status: 200, elapsed_ms: Date.now() - requestStartedAt });
+    } catch (error) {
+      await emitEvent(onEvent, 'vision_upstream_response', {
+        ...summary,
+        http_status: Number.isInteger(error?.status) ? error.status : null,
+        elapsed_ms: Date.now() - requestStartedAt,
+        code: error?.code || 'vision_service_error',
+        retryable: Boolean(error?.retryable),
+      });
+      throw error;
+    }
     const message = responseMessage(payload, provider);
     if (!message) throw new HttpError(502, 'Visual service returned no message.', { code: 'vision_invalid_response', retryable: true });
     const controlTags = scanControlTags(message.content || '');
@@ -180,8 +215,17 @@ export async function analyzeVisualAssets(assets, {
           processing = true;
           const crop = await cropImage(original, authorization, { signal });
           cropCount += 1;
-          result = { ok: true, source_id: args.source_id, purpose: authorization.purpose, crop_index: cropCount };
-          cropAssets.push({ ...crop, sourceId: `${args.source_id}-crop-${cropCount}`, label: `crop of ${args.source_id}: ${authorization.purpose}` });
+          const derived = registry.registerCrop(args.source_id, crop, authorization, { purpose: authorization.purpose });
+          result = {
+            ok: true,
+            source_id: derived.sourceId,
+            parent_source_id: args.source_id,
+            root_source_id: derived.rootSourceId,
+            depth: derived.depth,
+            purpose: authorization.purpose,
+            crop_index: cropCount,
+          };
+          cropAssets.push(derived);
         } catch (error) {
           const recovered = recoverableCropToolError(error, { processing });
           if (!recovered) throw error;
@@ -202,6 +246,7 @@ export async function analyzeVisualAssets(assets, {
 
     if (cropAssets.length > 0) {
       await onProgress(`視覺模型要求檢視 ${cropAssets.length} 個局部區域…`, { phase: 'vision_crop', round: cropRound, count: cropAssets.length });
+      transmittedAssets.push(...cropAssets);
       messages.push(userMessageForAssets(provider, cropAssets, 'Here are the requested high-resolution crops. Continue the analysis and return final Markdown, or request another precise crop only if still essential.'));
     } else if (rejected > 0) {
       messages.push({

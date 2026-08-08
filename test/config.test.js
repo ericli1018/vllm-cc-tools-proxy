@@ -18,8 +18,8 @@ test('loadConfig exposes the five vLLM settings and one proxy mode', () => {
   assert.equal(config.vllmVisionProvider, 'vllm');
   assert.equal(config.vllmVisionThink, false);
   assert.equal(config.vllmVisionApiProtocol, 'openai-chat');
-  assert.equal(config.cache.pipelineVersion, 'media-v5');
-  assert.equal(config.cache.visualPromptVersion, 'visual-v4');
+  assert.equal(config.cache.pipelineVersion, 'media-v6');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v5');
   assert.equal(config.cache.evidenceContractVersion, 'evidence-v1');
   assert.equal(config.port, 8080);
   assert.equal(config.usagePreflightEnabled, true);
@@ -331,4 +331,10 @@ test('V0.2.23 response language defaults to en-US and canonicalizes supported lo
   for (const locale of ['zh-TW', 'zh-CN', 'en-US', 'ja-JP', 'ko-KP']) {
     assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MODEL_RESPONSE_LANGUAGE: locale }).responseLanguage, locale);
   }
+});
+
+test('V0.2.26 bumps media and visual cache generations for recursive high-resolution evidence', () => {
+  const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(config.cache.pipelineVersion, 'media-v6');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v5');
 });

@@ -19,6 +19,37 @@ test('cropImage crops authorized pixel bounds and returns normalized PNG', async
   const normalized = await normalizeImage(buffer, limits);
   const result = await cropImage(normalized, { pixelBox: { left: 0, top: 0, width: 300, height: 180 } }, limits);
   assert.equal(result.mediaType, 'image/png');
-  assert.equal(result.width, 600);
-  assert.equal(result.height, 360);
+  assert.equal(result.width, 1200);
+  assert.equal(result.height, 720);
+});
+
+test('V0.2.26 cropImage reads the root original image and root pixel box instead of the normalized overview', async () => {
+  const fixture = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const rootBytes = Buffer.concat([fixture]);
+  const overviewBytes = Buffer.concat([fixture]);
+  let firstConvertInput = null;
+  let convertCalls = 0;
+  const runner = async (command, args) => {
+    if (command === 'convert') {
+      convertCalls += 1;
+      if (convertCalls === 1) {
+        firstConvertInput = await fs.readFile(args[0]);
+        assert.match(args.join(' '), /300x90\+150\+45/);
+      }
+      await fs.writeFile(args.at(-1), fixture);
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    }
+    if (command === 'identify') return { stdout: Buffer.from('600 180'), stderr: Buffer.alloc(0) };
+    throw new Error(`unexpected ${command}`);
+  };
+  const asset = {
+    buffer: overviewBytes, mediaType: 'image/png', width: 300, height: 90,
+    rootBuffer: rootBytes, rootMediaType: 'image/png', rootWidth: 600, rootHeight: 180,
+  };
+  const result = await cropImage(asset, {
+    pixelBox: { left: 75, top: 22, width: 150, height: 45 },
+    rootPixelBox: { left: 150, top: 45, width: 300, height: 90 },
+  }, { ...limits, runner });
+  assert.deepEqual(firstConvertInput, rootBytes);
+  assert.equal(result.mediaType, 'image/png');
 });

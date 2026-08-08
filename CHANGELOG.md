@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.26 - 2026-08-08
+
+- Moved managed media adaptation before Base `/v1/messages/count_tokens`, so raw PDF/image blocks no longer reach Base vLLM during usage preflight and large-context classification uses transformed evidence tokens.
+- Added selective PDF Vision routing for low-native-text pages and pages with raster images reported by `pdfimages -list`.
+- Replaced fixed 180-DPI PDF overview rendering with adaptive 220–320 DPI rendering targeting about 3500 pixels on the long edge.
+- Added original-PDF high-resolution regional rerendering for Vision-requested crops, bounded to 600 DPI at the first crop level and 720 DPI for deeper recursive crops.
+- Preserved original JPEG/PNG pixels as crop roots and bounded crop presentation interpolation to at most 4x.
+- Made derived crops first-class registered visual assets with root/parent/depth lineage, enabling crop-of-crop and multiple-region recursive inspection.
+- Increased the bounded internal Vision crop workflow to 3 rounds / depth 3 / 8 derived crops per root while retaining the per-round batch limit.
+- Added safe `vision_upstream_request` / `vision_upstream_response` diagnostics with provider/backend/model/image-dimension/timing metadata.
+- Advanced media cache generations to `media-v6` / `visual-v5`.
+- Preserved V0.2.25.2 managed streaming/progress, multi-Agent scheduling, WebSearch/WebFetch, response-language behavior, and all existing Vision ENV names. No new ENV variable was added.
+
 ## 0.2.25.2 - 2026-08-08
 
 - Kept the external hotfix label `V0.2.25.2` while using npm-valid package metadata `0.2.25+hotfix.2`.

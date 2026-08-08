@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.25.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.26', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2107,4 +2107,55 @@ test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arr
 
   const progressLogs = logs.filter((entry) => entry.event === 'progress_sse_sent');
   assert.ok(progressLogs.some((entry) => entry.upstream_received_bytes > 0 && Number.isFinite(entry.model_elapsed_ms)));
+});
+
+test('V0.2.26 adapts raw image to Vision evidence before Base count_tokens preflight', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const observed = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    observed.push({ path: req.url, payload });
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 120000 }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":120000,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'ollama',
+    usagePreflightEnabled: true,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180, warnings: [] }),
+      analyzeVisualAssets: async () => ({ markdown: 'VISION EVIDENCE', warnings: [], cropCount: 0 }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }] }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /OK/);
+  assert.deepEqual(observed.map((entry) => entry.path), ['/v1/messages/count_tokens', '/v1/messages']);
+  const preflightSerialized = JSON.stringify(observed[0].payload);
+  assert.doesNotMatch(preflightSerialized, /\"type\":\"image\"/);
+  assert.doesNotMatch(preflightSerialized, /proxy_file/);
+  assert.doesNotMatch(preflightSerialized, new RegExp(png.toString('base64').slice(0, 80)));
+  assert.match(preflightSerialized, /VCC_PROXY_EVIDENCE_BEGIN/);
+  assert.ok(logs.some((entry) => entry.event === 'managed_request_classified' && entry.class === 'large_context' && entry.input_tokens === 120000));
 });

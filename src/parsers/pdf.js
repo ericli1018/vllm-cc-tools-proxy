@@ -9,21 +9,90 @@ import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
 import { batchVisualPages } from '../visual/pdf-batcher.js';
 
+function parsePageSize(value) {
+  const match = String(value || '').match(/([0-9.]+)\s*x\s*([0-9.]+)\s*pts/i);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0 ? { width, height } : null;
+}
+
 function parsePdfInfo(text) {
   const values = {};
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(/^([^:]+):\s*(.*)$/);
     if (match) values[match[1].trim().toLowerCase().replaceAll(' ', '_')] = match[2].trim();
   }
-  return { pages: Number.parseInt(values.pages || '0', 10), encrypted: /^yes/i.test(values.encrypted || ''), title: values.title || '' };
+  return {
+    pages: Number.parseInt(values.pages || '0', 10),
+    encrypted: /^yes/i.test(values.encrypted || ''),
+    title: values.title || '',
+    pageSize: parsePageSize(values.page_size),
+  };
 }
 
-async function renderPage(inputPath, directory, page, limits, signal, runner) {
+function parsePdfImagePages(text) {
+  const pages = new Set();
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)\s+\d+\s+(image|smask|mask)\b/i);
+    if (match) pages.add(Number(match[1]));
+  }
+  return pages;
+}
+
+function overviewDpi(pageSize, { targetLongEdge = 3500, minDpi = 220, maxDpi = 320 } = {}) {
+  if (!pageSize) return 300;
+  const longEdgePoints = Math.max(pageSize.width, pageSize.height);
+  const dpi = Math.round((targetLongEdge * 72) / longEdgePoints);
+  return Math.max(minDpi, Math.min(maxDpi, dpi));
+}
+
+async function renderPage(inputPath, directory, page, limits, signal, runner, dpi) {
   const prefix = path.join(directory, `page-${page}`);
-  await runner('pdftoppm', ['-f', String(page), '-l', String(page), '-singlefile', '-png', '-r', '180', inputPath, prefix], {
+  await runner('pdftoppm', ['-f', String(page), '-l', String(page), '-singlefile', '-png', '-r', String(dpi), inputPath, prefix], {
     timeoutMs: limits.processTimeoutMs, signal, maxOutputBytes: 2 * 1024 * 1024,
   });
   return normalizeImage(await fs.readFile(`${prefix}.png`), { ...limits, signal, runner });
+}
+
+function cropDpi(pageWidthPoints, pageHeightPoints, rootBox, depth, overview) {
+  const [, , right, bottom] = rootBox;
+  const [left, top] = rootBox;
+  const cropWidthPoints = pageWidthPoints * Math.max(1, right - left) / 1000;
+  const cropHeightPoints = pageHeightPoints * Math.max(1, bottom - top) / 1000;
+  const desired = Math.round((2400 * 72) / Math.max(cropWidthPoints, cropHeightPoints));
+  const minDpi = Math.max(360, Number(overview) || 300);
+  const maxDpi = depth <= 1 ? 600 : 720;
+  return Math.max(minDpi, Math.min(maxDpi, desired));
+}
+
+async function renderPdfCrop(asset, authorization, limits, signal, runner) {
+  const metadata = asset?.sourceMetadata || {};
+  const page = Number(metadata.page);
+  const pageWidthPoints = Number(metadata.pageWidthPoints);
+  const pageHeightPoints = Number(metadata.pageHeightPoints);
+  if (asset?.sourceKind !== 'pdf_page' || !metadata.pdfPath || !Number.isInteger(page)
+    || !Number.isFinite(pageWidthPoints) || !Number.isFinite(pageHeightPoints)) {
+    throw new HttpError(422, 'PDF crop source metadata is unavailable.', { code: 'invalid_visual_crop_source' });
+  }
+  const dpi = cropDpi(pageWidthPoints, pageHeightPoints, authorization.rootBox, authorization.depth, metadata.overviewDpi);
+  const [leftN, topN, rightN, bottomN] = authorization.rootBox;
+  const pageWidthPx = (pageWidthPoints * dpi) / 72;
+  const pageHeightPx = (pageHeightPoints * dpi) / 72;
+  const left = Math.floor((leftN / 1000) * pageWidthPx);
+  const top = Math.floor((topN / 1000) * pageHeightPx);
+  const right = Math.ceil((rightN / 1000) * pageWidthPx);
+  const bottom = Math.ceil((bottomN / 1000) * pageHeightPx);
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const prefix = path.join(metadata.directory, `page-${page}-crop-${authorization.sourceId}-${authorization.depth}-${leftN}-${topN}-${rightN}-${bottomN}`);
+  await runner('pdftoppm', [
+    '-f', String(page), '-l', String(page), '-singlefile', '-png', '-r', String(dpi),
+    '-x', String(left), '-y', String(top), '-W', String(width), '-H', String(height),
+    metadata.pdfPath, prefix,
+  ], { timeoutMs: limits.processTimeoutMs, signal, maxOutputBytes: 2 * 1024 * 1024 });
+  const normalized = await normalizeImage(await fs.readFile(`${prefix}.png`), { ...limits, signal, runner });
+  return { ...normalized, renderDpi: dpi };
 }
 
 export async function parsePdf(buffer, options) {
@@ -70,21 +139,53 @@ export async function parsePdf(buffer, options) {
       throw new HttpError(422, 'Visual vLLM endpoint is required for scanned or low-text PDF pages.', { code: 'vision_endpoint_required' });
     }
     if (insufficientCount > 0 && !visionEnabled) warnings.push(`low_text_pages_without_visual_analysis:${insufficientCount}`);
+
+    let rasterImagePages = new Set();
+    if (visionEnabled) {
+      try {
+        const imagesResult = await runner('pdfimages', ['-list', inputPath], {
+          timeoutMs: limits.processTimeoutMs, signal, maxOutputBytes: 4 * 1024 * 1024,
+        });
+        rasterImagePages = parsePdfImagePages(imagesResult.stdout.toString('utf8'));
+      } catch {
+        warnings.push('pdf_image_inventory_unavailable');
+      }
+    }
+
     const visualBatches = [];
     let visualUsed = false;
-    if (visionEnabled) {
-      await onProgress(`正在準備 ${info.pages} 頁視覺內容…`, { phase: 'pdf_visual_prepare', total: info.pages });
+    const selectedVisualPages = visionEnabled
+      ? pages.filter((page) => page.insufficient || rasterImagePages.has(page.page))
+      : [];
+    if (selectedVisualPages.length > 0) {
+      await onProgress(`正在準備 ${selectedVisualPages.length} 頁視覺內容…`, { phase: 'pdf_visual_prepare', total: selectedVisualPages.length });
       const registry = new VisualAssetRegistry();
       const visualPages = [];
-      for (const page of pages) {
-        const normalized = await renderPage(inputPath, directory, page.page, limits, signal, runner);
-        const asset = registry.add({ ...normalized, label: `PDF page ${page.page}` });
+      const dpi = overviewDpi(info.pageSize);
+      for (const page of selectedVisualPages) {
+        const normalized = await renderPage(inputPath, directory, page.page, limits, signal, runner, dpi);
+        const pageWidthPoints = info.pageSize?.width || ((normalized.originalWidth || normalized.width) * 72) / dpi;
+        const pageHeightPoints = info.pageSize?.height || ((normalized.originalHeight || normalized.height) * 72) / dpi;
+        const asset = registry.add({
+          ...normalized,
+          label: `PDF page ${page.page}`,
+          sourceKind: 'pdf_page',
+          sourceMetadata: {
+            pdfPath: inputPath,
+            directory,
+            page: page.page,
+            pageWidthPoints,
+            pageHeightPoints,
+            overviewDpi: dpi,
+          },
+        });
         visualPages.push({ ...page, asset });
       }
       const batches = batchVisualPages(visualPages, limits.maxVisualPagesPerBatch || 4);
-      await onProgress(`已接收 ${info.pages} 頁 PDF；將分成 ${batches.length} 批進行視覺分析…`, {
+      await onProgress(`已接收 ${info.pages} 頁 PDF；其中 ${selectedVisualPages.length} 頁將分成 ${batches.length} 批進行視覺分析…`, {
         phase: 'pdf_visual_plan',
         received_pdf_pages: info.pages,
+        selected_visual_pages: selectedVisualPages.length,
         visual_batch_size: limits.maxVisualPagesPerBatch || 4,
         visual_batch_count: batches.length,
       });
@@ -95,17 +196,19 @@ export async function parsePdf(buffer, options) {
         const result = await analyzeVisualAssets(batch.map((entry) => entry.asset), {
           baseUrl: vllmVisionUrl, model: vllmVisionModel, apiKey: vllmVisionApiKey,
           provider: vllmVisionProvider, think: vllmVisionThink, registry, signal, onProgress,
-          cropImage: (asset, authorization, callOptions) => cropImage(asset, authorization, { ...limits, ...callOptions, runner }),
+          cropImage: (asset, authorization, callOptions) => asset?.sourceKind === 'pdf_page'
+            ? renderPdfCrop(asset, authorization, { ...limits, ...callOptions }, callOptions?.signal || signal, runner)
+            : cropImage(asset, authorization, { ...limits, ...callOptions, runner }),
           prompt: `Analyze PDF pages ${batch.map((entry) => entry.page).join(', ')}. Preserve each source_id and page number. Extract visible text when native text is missing; identify tables, diagrams, arrows, labels and relationships. Do not answer the final user task.`,
         });
         visualUsed = true;
         completed += batch.length;
         visualBatches.push({ pages: batch.map((entry) => entry.page), markdown: result.markdown, cropCount: result.cropCount });
         warnings.push(...(result.warnings || []));
-        await onProgress(`視覺模型已完成 ${completed}/${info.pages} 頁…`, {
+        await onProgress(`視覺模型已完成 ${completed}/${selectedVisualPages.length} 個選定頁面…`, {
           phase: 'pdf_visual_progress',
           completed,
-          total: info.pages,
+          total: selectedVisualPages.length,
           processed_pdf_pages: completed,
           received_pdf_pages: info.pages,
           visual_batch_count: batches.length,
