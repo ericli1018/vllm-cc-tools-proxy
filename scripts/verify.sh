@@ -27,8 +27,8 @@ grep -Fq 'CONCURRENCY_PROFILE: ${CONCURRENCY_PROFILE:-default}' compose.yaml
 grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
 grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
 grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
-grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-1800000}' compose.yaml
-grep -q '^MANAGED_TASK_TIMEOUT_MS=1800000$' .env.example
+grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-}' compose.yaml
+! grep -q '^MANAGED_TASK_TIMEOUT_MS=' .env.example
 grep -Fq 'MANAGED_MODEL_ROUND_TIMEOUT_MS: ${MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000}' compose.yaml
 grep -q '^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$' .env.example
 grep -Fq 'VISION_MAX_CONCURRENCY: ${VISION_MAX_CONCURRENCY:-}' compose.yaml
@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26'
+test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.1'
 
 
 test -f src/i18n/response-language.js
@@ -198,3 +198,9 @@ grep -Fq 'V0.2.26 recursive Vision evidence pipeline' README.md
 grep -Fq 'vision_upstream_request' README.md
 grep -Fq 'media-v6' README.md
 grep -Fq 'visual-v5' README.md
+
+# V0.2.26.1 activity-aware timeout release contract
+grep -Fq 'V0.2.26.1 activity-aware managed timeout hotfix' README.md
+grep -Fq 'first-byte deadline' README.md
+grep -Fq 'streaming inactivity' README.md
+grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md

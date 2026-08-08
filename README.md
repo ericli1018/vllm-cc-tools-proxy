@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26 restructures PDF/image handling into a recursive Vision evidence pipeline so raw media is resolved by the configured Vision provider before Base-model token preflight and inference.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.1 makes managed Base-model timeouts activity-aware so healthy long-running streams are not terminated solely by round wall-clock time.
+
+## V0.2.26.1 activity-aware managed timeout hotfix
+
+V0.2.26.1 changes the managed Base-model deadline from an unconditional round wall-clock cap into a **first-byte deadline** when upstream response activity is observable. `MANAGED_MODEL_ROUND_TIMEOUT_MS=360000` still protects TTFT: if the current round produces no Base-vLLM response byte within six minutes, the request fails with `managed_model_timeout`.
+
+Once the current round receives its first upstream response byte, the first-byte deadline is disarmed for that round. Liveness is then controlled by the existing 90-second **streaming inactivity** detector. Every new upstream response-body chunk advances `lastByteAt`; only a full 90 seconds with no new bytes after streaming has begun raises `managed_model_stall_timeout`. A model that continues producing bytes may therefore run longer than six minutes and complete normally.
+
+The whole-task hard deadline is now **disabled by default**. `MANAGED_TASK_TIMEOUT_MS` is retained only as an opt-in compatibility/safety override: unset, blank, or `0` means disabled; a positive configured value enables the previous absolute task deadline. There is no default `1800000` value in `.env.example` or Compose. Model token/context limits, per-tool/processor timeouts, loop protection, client cancellation, and disconnect handling remain the normal termination boundaries.
+
+No new ENV variable is introduced. V0.2.26 Media/Vision behavior and all WebSearch/WebFetch/scheduling behavior remain unchanged.
 
 ## V0.2.26 recursive Vision evidence pipeline
 
@@ -492,18 +502,17 @@ WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
 
 `WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama` and defaults to `vllm`. A Processor base URL such as `http://192.168.10.169:11434` is normalized to `/v1/chat/completions`; an already complete `/v1/chat/completions` endpoint is preserved. A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
 
-### Slow-model managed budgets
+### Activity-aware managed timeouts
 
-Defaults are increased to:
+The default Base-model first-byte deadline is:
 
 ```env
-MANAGED_TASK_TIMEOUT_MS=1800000
 MANAGED_MODEL_ROUND_TIMEOUT_MS=360000
 ```
 
-This gives a managed workflow a 30-minute hard safety cap while allowing an individual Base-model round up to 6 minutes. Loop protection still comes from `MAX_TOOL_ROUNDS`, exact repeated-action detection, protocol validation and recovery, not from aggressively killing a slow but progressing model.
+For streaming-capable managed Base requests, this value bounds time to the first upstream response byte rather than total generation wall time. After first byte, a 90-second sliding inactivity window controls liveness and is refreshed by every new upstream response chunk.
 
-When completed managed evidence exists and the remaining hard-cap budget falls to one model-round budget or less, the proxy removes only WebSearch/WebFetch from the next Base request and emits `managed_final_round_reserved`. Claude Code client tools such as Read/Write/Bash remain available, so the model can continue implementation or return a final response instead of spending the final budget on more research.
+There is no whole-task deadline by default. `MANAGED_TASK_TIMEOUT_MS` is an optional compatibility override and is intentionally omitted from `.env.example`; unset, blank, or `0` means disabled. If explicitly set to a positive bounded value, it again acts as an absolute deadline across managed model/tool work and may trigger final-round reservation near exhaustion. Loop protection remains independent through `MAX_TOOL_ROUNDS`, repeated-action detection, protocol validation, and recovery. When that optional deadline is enabled and the remaining budget falls to one model-round budget or less, the existing `managed_final_round_reserved` behavior may reserve the final Base round by removing only managed research tools.
 
 ### WebSearch argument normalization
 
@@ -563,34 +572,26 @@ managed_no_progress
 
 This prevents repeated WebSearch/WebFetch calls from consuming the remaining round budget without adding evidence. The normal `MAX_TOOL_ROUNDS` limit still applies to changing actions.
 
-### 5. Bounded model rounds and bounded managed tasks
+### 5. Activity-aware model rounds and optional managed-task deadline
 
-One additional simple override is available:
+Current V0.2.26.1 behavior supersedes the original V0.2.19 absolute-round policy. `MANAGED_MODEL_ROUND_TIMEOUT_MS` defaults to 360000 ms and is a first-byte deadline when upstream activity telemetry is available. After first byte, continued response-body activity may extend the round beyond six minutes; 90 seconds of post-start inactivity raises `managed_model_stall_timeout`.
 
-```env
-MANAGED_TASK_TIMEOUT_MS=1800000
-```
-
-Defaults:
-
-```text
-entire managed task: 1800000 ms (30 minutes)
-one Base-model managed round: 360000 ms (6 minutes)
-```
-
-The model-round cap is configurable with `MANAGED_MODEL_ROUND_TIMEOUT_MS`. The effective round budget is always the smaller of that value and the remaining task budget.
+`MANAGED_TASK_TIMEOUT_MS` is optional and disabled by default. Unset, blank, or `0` means no whole-task absolute deadline. A positive configured value enables the compatibility safety cap and can raise `managed_task_timeout`.
 
 Timeout codes:
 
 ```text
 managed_model_timeout
-  one Base-model round exceeded its bounded generation window
+  no first Base-model response byte arrived within the first-byte deadline
+
+managed_model_stall_timeout
+  Base-model response bytes started, then no new bytes arrived for the inactivity window
 
 managed_task_timeout
-  the complete proxy-managed workflow exhausted its total deadline
+  optional whole-task deadline was explicitly enabled and exhausted
 ```
 
-The total deadline also bounds proxy-owned tool execution. These limits are independent of the more general `VLLM_BASE_HEADERS_TIMEOUT_MS` / `VLLM_BASE_BODY_TIMEOUT_MS` transport protections.
+These semantic limits are independent of the more general `VLLM_BASE_HEADERS_TIMEOUT_MS` / `VLLM_BASE_BODY_TIMEOUT_MS` transport protections.
 
 ## Quick start
 

@@ -46,7 +46,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_MAX_CONCURRENCY:\s*\$\{MANAGED_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MANAGED_MAX_QUEUE:\s*\$\{MANAGED_MAX_QUEUE:-\}/);
   assert.match(compose, /MANAGED_QUEUE_TIMEOUT_MS:\s*\$\{MANAGED_QUEUE_TIMEOUT_MS:-\}/);
-  assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-1800000\}/);
+  assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-\}/);
   assert.match(compose, /MANAGED_MODEL_ROUND_TIMEOUT_MS:\s*\$\{MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
@@ -75,7 +75,7 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /VLLM_BASE_BODY_TIMEOUT_MS:\s*\$\{VLLM_BASE_BODY_TIMEOUT_MS:-900000\}/);
   assert.match(envExample, /^PROGRESS_HEARTBEAT_MS=30000$/m);
   assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
-  assert.match(envExample, /^MANAGED_TASK_TIMEOUT_MS=1800000$/m);
+  assert.doesNotMatch(envExample, /^MANAGED_TASK_TIMEOUT_MS=/m);
   assert.match(envExample, /^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_PROVIDER=vllm$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.26 release metadata', async () => {
+test('package version is V0.2.26.1 hotfix metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.26');
-  assert.equal(lock.version, '0.2.26');
-  assert.equal(lock.packages[''].version, '0.2.26');
+  assert.equal(packageJson.version, '0.2.26+hotfix.1');
+  assert.equal(lock.version, '0.2.26+hotfix.1');
+  assert.equal(lock.packages[''].version, '0.2.26+hotfix.1');
 });
 
 
@@ -331,4 +331,12 @@ test('README documents V0.2.26 recursive Vision evidence pipeline', () => {
   assert.match(readme, /vision_upstream_request/);
   assert.match(readme, /media-v6/);
   assert.match(readme, /visual-v5/);
+});
+
+
+test('README documents V0.2.26.1 activity-aware timeout policy', () => {
+  assert.match(readme, /V0\.2\.26\.1/);
+  assert.match(readme, /first-byte/i);
+  assert.match(readme, /inactivity/i);
+  assert.match(readme, /MANAGED_TASK_TIMEOUT_MS.*disabled/is);
 });

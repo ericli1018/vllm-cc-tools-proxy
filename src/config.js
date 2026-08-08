@@ -29,6 +29,15 @@ function intValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGE
   return parsed;
 }
 
+function optionalTimeoutValue(value, name, { min = 60000, max = 3600000 } = {}) {
+  if (value === undefined || value === '' || String(value).trim() === '0') return 0;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    throw new Error(`${name} must be 0 (disabled) or an integer between ${min} and ${max}`);
+  }
+  return parsed;
+}
+
 function enumValue(value, fallback, name, allowed) {
   const candidate = String(value ?? fallback).trim().toLowerCase();
   if (!allowed.includes(candidate)) throw new Error(`${name} must be one of: ${allowed.join(', ')}`);
@@ -189,7 +198,7 @@ export function loadConfig(env = process.env) {
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
     usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
-    managedTaskTimeoutMs: intValue(env.MANAGED_TASK_TIMEOUT_MS, 1800000, 'MANAGED_TASK_TIMEOUT_MS', { min: 60000, max: 3600000 }),
+    managedTaskTimeoutMs: optionalTimeoutValue(env.MANAGED_TASK_TIMEOUT_MS, 'MANAGED_TASK_TIMEOUT_MS'),
     managedModelRoundTimeoutMs: intValue(env.MANAGED_MODEL_ROUND_TIMEOUT_MS, 360000, 'MANAGED_MODEL_ROUND_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),

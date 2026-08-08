@@ -252,9 +252,9 @@ test('protocol diagnostics use an internal timestamped temporary directory witho
   assert.match(config.protocolDiagnosticsDir, /vllm-cc-tools-proxy[\\/]protocol-snippets$/);
 });
 
-test('V0.2.19.1 managed time budgets favor slow local models with bounded overrides', () => {
+test('V0.2.26.1 managed task deadline is disabled by default with bounded opt-in override', () => {
   const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
-  assert.equal(defaults.managedTaskTimeoutMs, 1800000);
+  assert.equal(defaults.managedTaskTimeoutMs, 0);
   assert.equal(defaults.managedModelRoundTimeoutMs, 360000);
   const custom = loadConfig({
     VLLM_BASE_URL: 'http://vllm:8000',
@@ -262,6 +262,8 @@ test('V0.2.19.1 managed time budgets favor slow local models with bounded overri
     MANAGED_MODEL_ROUND_TIMEOUT_MS: '480000',
   });
   assert.equal(custom.managedTaskTimeoutMs, 1200000);
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '0' }).managedTaskTimeoutMs, 0);
+  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '' }).managedTaskTimeoutMs, 0);
   assert.equal(custom.managedModelRoundTimeoutMs, 480000);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_TASK_TIMEOUT_MS: '1000' }), /MANAGED_TASK_TIMEOUT_MS/);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MANAGED_MODEL_ROUND_TIMEOUT_MS: '1000' }), /MANAGED_MODEL_ROUND_TIMEOUT_MS/);

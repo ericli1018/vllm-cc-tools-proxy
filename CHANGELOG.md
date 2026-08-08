@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.26.1 - 2026-08-08
+
+- Reinterpreted `MANAGED_MODEL_ROUND_TIMEOUT_MS` as a first-response-byte deadline when Base upstream activity telemetry is available.
+- A managed model round that has started receiving upstream bytes is no longer terminated merely because total round wall time reaches 360 seconds.
+- Preserved the 90-second sliding response-body inactivity detector after first byte; every new upstream chunk refreshes `lastByteAt`, and a true post-start stall still fails with `managed_model_stall_timeout`.
+- Kept `managed_model_timeout` for rounds that do not produce any first response byte within the configured first-byte deadline.
+- Disabled the whole-task absolute deadline by default. `MANAGED_TASK_TIMEOUT_MS` remains backward-compatible as an optional positive override; unset, blank, or `0` means disabled.
+- Removed the forced `1800000` Compose/default-env task deadline while keeping `MANAGED_MODEL_ROUND_TIMEOUT_MS=360000`.
+- Preserved V0.2.26 Media/Vision behavior, managed scheduling, WebSearch/WebFetch, response-language policy, and existing timeout error codes. No new ENV variable was added.
+
 ## 0.2.26 - 2026-08-08
 
 - Moved managed media adaptation before Base `/v1/messages/count_tokens`, so raw PDF/image blocks no longer reach Base vLLM during usage preflight and large-context classification uses transformed evidence tokens.

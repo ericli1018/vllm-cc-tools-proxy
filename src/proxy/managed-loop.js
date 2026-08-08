@@ -20,7 +20,7 @@ import { injectManagedWebResultInstruction, renderManagedToolResult } from './we
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 
 
-const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 1_800_000;
+const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 0;
 const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
 const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 
@@ -109,9 +109,24 @@ async function runModelWithActivityDeadline(operation, {
   let stallTimer;
   let settled = false;
   let rejectStall;
+  const currentRoundActivity = () => {
+    if (typeof getUpstreamActivity !== 'function') return { started: false, bytes: startBytes, lastByteAt: 0 };
+    const activity = getUpstreamActivity() || {};
+    const bytes = Number(activity.receivedBytes) || 0;
+    const lastByteAt = Number(activity.lastByteAt) || 0;
+    return {
+      started: bytes > startBytes && lastByteAt >= startedAt,
+      bytes,
+      lastByteAt,
+    };
+  };
   const hardError = managedTimeoutError(timeoutCode, timeoutMs, 'model');
   const hardPromise = new Promise((_, reject) => {
     hardTimer = setTimeout(() => {
+      // With activity telemetry, this deadline only bounds time-to-first-byte.
+      // Once the current round has produced upstream bytes, the sliding stall
+      // detector below owns liveness instead of total wall-clock round time.
+      if (currentRoundActivity().started) return;
       controller.abort(hardError);
       reject(hardError);
     }, timeoutMs);
@@ -130,11 +145,8 @@ async function runModelWithActivityDeadline(operation, {
   if (typeof getUpstreamActivity === 'function' && stallTimeoutMs > 0) {
     stallTimer = setInterval(() => {
       if (settled) return;
-      const activity = getUpstreamActivity() || {};
-      const bytes = Number(activity.receivedBytes) || 0;
-      const lastByteAt = Number(activity.lastByteAt) || 0;
-      const startedThisRound = bytes > startBytes && lastByteAt >= startedAt;
-      if (!startedThisRound || Date.now() - lastByteAt < stallTimeoutMs) return;
+      const activity = currentRoundActivity();
+      if (!activity.started || Date.now() - activity.lastByteAt < stallTimeoutMs) return;
       const error = managedTimeoutError('managed_model_stall_timeout', stallTimeoutMs, 'model');
       controller.abort(error);
       rejectStall(error);
@@ -476,29 +488,46 @@ export async function runManagedLoop(initialRequest, {
     else externalServerPrefix.push(structuredClone(block));
   };
 
-  const remainingTaskMs = () => taskTimeoutMs - (Date.now() - taskStartedAt);
+  const taskDeadlineEnabled = Number.isFinite(taskTimeoutMs) && taskTimeoutMs > 0;
+  const remainingTaskMs = () => taskDeadlineEnabled
+    ? taskTimeoutMs - (Date.now() - taskStartedAt)
+    : Number.POSITIVE_INFINITY;
   const containedUpstream = async (body, upstreamSignal) => {
     const remaining = remainingTaskMs();
-    if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'model');
-    const boundedMs = Math.max(1, Math.min(modelRoundTimeoutMs, remaining));
-    const timeoutCode = remaining <= modelRoundTimeoutMs ? 'managed_task_timeout' : 'managed_model_timeout';
+    if (taskDeadlineEnabled && remaining <= 0) {
+      throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'model');
+    }
     await onTrace('base_model_request', {
       round: activeRound,
-      timeout_ms: boundedMs,
+      timeout_ms: modelRoundTimeoutMs,
+      first_byte_timeout_ms: modelRoundTimeoutMs,
+      task_timeout_ms: taskDeadlineEnabled ? taskTimeoutMs : 0,
+      task_remaining_ms: taskDeadlineEnabled ? Math.max(0, remaining) : null,
       request: structuredClone(body),
     });
-    const rawResponse = await runModelWithActivityDeadline(
+    const runModel = (modelSignal) => runModelWithActivityDeadline(
       (boundedSignal) => upstream(body, boundedSignal),
       {
-        signal: upstreamSignal,
-        timeoutMs: boundedMs,
-        timeoutCode,
+        signal: modelSignal,
+        timeoutMs: modelRoundTimeoutMs,
+        timeoutCode: 'managed_model_timeout',
         stallTimeoutMs: modelStallTimeoutMs,
         getUpstreamActivity,
         onRoundState: onModelRoundState,
         round: activeRound,
       },
     );
+    const rawResponse = taskDeadlineEnabled
+      ? await runWithBoundedTime(
+        (taskSignal) => runModel(taskSignal),
+        {
+          signal: upstreamSignal,
+          timeoutMs: Math.max(1, remaining),
+          timeoutCode: 'managed_task_timeout',
+          phase: 'model',
+        },
+      )
+      : await runModel(upstreamSignal);
     await onTrace('base_model_response', {
       round: activeRound,
       response: structuredClone(rawResponse),
@@ -535,11 +564,13 @@ export async function runManagedLoop(initialRequest, {
       let error = null;
       try {
         const remaining = remainingTaskMs();
-        if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
-        output = await runWithBoundedTime(
-          (boundedSignal) => executeTool(internalToolUse, boundedSignal),
-          { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
-        );
+        if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
+        output = taskDeadlineEnabled
+          ? await runWithBoundedTime(
+            (boundedSignal) => executeTool(internalToolUse, boundedSignal),
+            { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
+          )
+          : await executeTool(internalToolUse, signal);
         serverUsageCounts[canonical] += 1;
       } catch (caught) {
         if (caught instanceof HttpError && caught.code === 'managed_task_timeout') throw caught;
@@ -701,11 +732,13 @@ export async function runManagedLoop(initialRequest, {
       });
       try {
         const remaining = remainingTaskMs();
-        if (remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
-        const output = await runWithBoundedTime(
-          (boundedSignal) => executeTool(toolUse, boundedSignal),
-          { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
-        );
+        if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
+        const output = taskDeadlineEnabled
+          ? await runWithBoundedTime(
+            (boundedSignal) => executeTool(toolUse, boundedSignal),
+            { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
+          )
+          : await executeTool(toolUse, signal);
         const inventory = inventoryProtocolTags(output);
         if (inventory.total > 0) {
           await onDiagnostic('managed_tool_result_protocol_inventory', {
@@ -767,7 +800,7 @@ export async function runManagedLoop(initialRequest, {
       });
     }
 
-    if (remainingTaskMs() <= modelRoundTimeoutMs && Array.isArray(request.tools)) {
+    if (taskDeadlineEnabled && remainingTaskMs() <= modelRoundTimeoutMs && Array.isArray(request.tools)) {
       const before = request.tools.length;
       request.tools = request.tools.filter((tool) => !isManagedToolName(tool?.name));
       const removed = before - request.tools.length;

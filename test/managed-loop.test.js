@@ -995,6 +995,31 @@ test('V0.2.25 model stall deadline does not arm before the first upstream respon
   assert.equal(result.content[0].text, 'done');
 });
 
+test('V0.2.26.1 streaming activity past the first-byte deadline is allowed to complete', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0 };
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'long healthy stream' }] }, {
+    upstream: async () => {
+      const timer = setInterval(() => {
+        activity.receivedBytes += 128;
+        activity.lastByteAt = Date.now();
+      }, 10);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 75));
+        return { id: 'ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'stream completed' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
+      } finally {
+        clearInterval(timer);
+      }
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 40,
+    modelStallTimeoutMs: 25,
+    taskTimeoutMs: 0,
+    getUpstreamActivity: () => ({ ...activity }),
+  });
+  assert.equal(result.content[0].text, 'stream completed');
+  assert.ok(activity.receivedBytes > 0);
+});
+
 test('V0.2.25 model stall deadline aborts after response bytes start and then stop', async () => {
   const activity = { receivedBytes: 0, lastByteAt: 0 };
   await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'stalled body' }] }, {

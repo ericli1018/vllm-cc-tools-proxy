@@ -1061,7 +1061,7 @@ export function createProxyServer(config, dependencies = {}) {
           }),
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
-          modelRoundTimeoutMs: Math.min(config.managedModelRoundTimeoutMs || 360000, config.managedTaskTimeoutMs || 1800000),
+          modelRoundTimeoutMs: config.managedModelRoundTimeoutMs || 360000,
           modelStallTimeoutMs: 90000,
           getUpstreamActivity: getBaseUpstreamActivity,
           onModelRoundState: async ({ phase, round, startedAt, endedAt, startBytes }) => {
