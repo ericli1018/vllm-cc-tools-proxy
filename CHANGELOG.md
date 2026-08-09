@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.27.1 - 2026-08-09
+
+- Opened managed SSE progress before PDF/Vision preprocessing completes by using a sanitized text-only usage bootstrap request for streamed media cache misses.
+- Kept raw PDF/image payloads, Base64, proxy file handles, paths, and cache keys out of the bootstrap `/v1/messages/count_tokens` request.
+- Added an exact cumulative `message_delta.usage` update after normalized media evidence is available, while keeping large-context admission based on the exact post-normalization token count.
+- Added per-tile render and per-tile-batch Vision progress for the V0.2.27 schematic pipeline.
+- Preserved client cancellation, recursive ROI, page merge, vLLM/Ollama Vision routing, and all existing ENV names.
+- Kept cache/evidence contracts at `media-v7`, `visual-v6`, and `evidence-v2` because evidence semantics are unchanged.
+
 ## 0.2.27 - 2026-08-09
 
 - Added low-resolution PDF page routing with the bounded `TEXT`, `DIAGRAM`, `SCHEMATIC`, and `DENSE_PAGE` classes so text-rich vector-only technical drawings can enter Vision processing.

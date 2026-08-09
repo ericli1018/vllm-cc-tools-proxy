@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.27', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.27.1', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2160,8 +2160,12 @@ test('V0.2.26 adapts raw image to Vision evidence before Base count_tokens prefl
   });
   assert.equal(response.status, 200);
   assert.match(await response.text(), /OK/);
-  assert.deepEqual(observed.map((entry) => entry.path), ['/v1/messages/count_tokens', '/v1/messages']);
-  const preflightSerialized = JSON.stringify(observed[0].payload);
+  assert.deepEqual(observed.map((entry) => entry.path), ['/v1/messages/count_tokens', '/v1/messages/count_tokens', '/v1/messages']);
+  const bootstrapSerialized = JSON.stringify(observed[0].payload);
+  const preflightSerialized = JSON.stringify(observed[1].payload);
+  assert.match(bootstrapSerialized, /pending image evidence/);
+  assert.doesNotMatch(bootstrapSerialized, /proxy_file/);
+  assert.doesNotMatch(bootstrapSerialized, new RegExp(png.toString('base64').slice(0, 80)));
   assert.doesNotMatch(preflightSerialized, /\"type\":\"image\"/);
   assert.doesNotMatch(preflightSerialized, /proxy_file/);
   assert.doesNotMatch(preflightSerialized, new RegExp(png.toString('base64').slice(0, 80)));
@@ -2434,4 +2438,113 @@ test('V0.2.26.5 native web search lane bypasses Final Language Gate even when it
   const finalText = body.content.find((block) => block?.type === 'text')?.text;
   assert.equal(finalText, 'Internal web search result in English.');
   assert.equal(processorCalls, 0);
+});
+
+test('V0.2.27.1 streamed media exposes live progress before Vision preprocessing completes', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const observed = [];
+  let countCalls = 0;
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    observed.push({ path: req.url, payload });
+    if (req.url === '/v1/messages/count_tokens') {
+      countCalls += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: countCalls === 1 ? 80000 : 120000 }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":120000,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+
+  let markVisionStarted;
+  const visionStarted = new Promise((resolve) => { markVisionStarted = resolve; });
+  let releaseVision;
+  const visionGate = new Promise((resolve) => { releaseVision = resolve; });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'ollama',
+    usagePreflightEnabled: true,
+    progressVisibleAfterMs: 0,
+    progressHeartbeatMs: 60000,
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180, warnings: [] }),
+      analyzeVisualAssets: async () => {
+        markVisionStarted();
+        await visionGate;
+        return { markdown: 'VISION EVIDENCE', warnings: [], cropCount: 0 };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const responsePromise = fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'inspect this image' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } },
+      ] }],
+    }),
+  });
+
+  await visionStarted;
+  let earlyResponse = null;
+  try {
+    earlyResponse = await Promise.race([
+      responsePromise,
+      new Promise((resolve) => setTimeout(() => resolve(null), 150)),
+    ]);
+    assert.ok(earlyResponse, 'stream headers must reach Claude Code while Vision is still running');
+
+    const reader = earlyResponse.body.getReader();
+    const decoder = new TextDecoder();
+    let earlyWire = '';
+    const deadline = Date.now() + 300;
+    while (!earlyWire.includes('正在使用視覺模型分析圖片') && Date.now() < deadline) {
+      const item = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 40)),
+      ]);
+      if (item?.timeout) continue;
+      if (item.done) break;
+      earlyWire += decoder.decode(item.value, { stream: true });
+    }
+    assert.match(earlyWire, /"input_tokens":80000/);
+    assert.match(earlyWire, /正在使用視覺模型分析圖片/);
+
+    releaseVision();
+    let rest = '';
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+      rest += decoder.decode(item.value, { stream: true });
+    }
+    rest += decoder.decode();
+    const wire = earlyWire + rest;
+    assert.match(wire, /"input_tokens":120000/);
+    assert.match(wire, /OK/);
+  } finally {
+    releaseVision();
+    if (!earlyResponse) await responsePromise.catch(() => {});
+  }
+
+  assert.deepEqual(observed.map((entry) => entry.path), [
+    '/v1/messages/count_tokens',
+    '/v1/messages/count_tokens',
+    '/v1/messages',
+  ]);
+  const bootstrap = JSON.stringify(observed[0].payload);
+  const exact = JSON.stringify(observed[1].payload);
+  assert.match(bootstrap, /pending image evidence/);
+  assert.doesNotMatch(bootstrap, /VISION EVIDENCE/);
+  assert.doesNotMatch(bootstrap, /proxy_file/);
+  assert.match(exact, /VISION EVIDENCE/);
+  assert.doesNotMatch(exact, /proxy_file/);
 });

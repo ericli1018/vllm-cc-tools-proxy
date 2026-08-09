@@ -337,3 +337,26 @@ test('V0.2.24 dynamic byte progress header is recognized and stripped from histo
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
 });
+
+test('V0.2.27.1 ProgressStream can publish exact cumulative input usage after early message_start', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    initialUsage: { input_tokens: 80000, output_tokens: 0 },
+  });
+  await progress.open();
+  await progress.update('正在解析 PDF…', { force: true, details: { phase: 'pdf_start' } });
+  await progress.updateUsage({ input_tokens: 120000, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, output_tokens: 0 }, {
+    phase: 'media_usage_exact',
+  });
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  const startPos = stream.indexOf('"input_tokens":80000');
+  const exactPos = stream.indexOf('"input_tokens":120000');
+  assert.ok(startPos >= 0);
+  assert.ok(exactPos > startPos);
+  assert.match(stream, /event: message_delta/);
+  assert.match(stream, /"stop_reason":null/);
+});

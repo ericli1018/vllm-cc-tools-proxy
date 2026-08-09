@@ -200,6 +200,7 @@ test('V0.2.27 routes a text-rich vector-only page to schematic tiling', async ()
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const renders = [];
   const analysis = [];
+  const progress = [];
   const runner = async (command, args) => {
     if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
     if (command === 'pdftotext') return { stdout: Buffer.from('U15 RTL8211F ETH_CLK RESET_N GPIOZ3 '.repeat(15)), stderr: Buffer.alloc(0) };
@@ -215,6 +216,7 @@ test('V0.2.27 routes a text-rich vector-only page to schematic tiling', async ()
   };
   const result = await parsePdf(buffer, {
     limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    onProgress: async (message, details) => progress.push({ message, details }),
     classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'dense nets' }),
     analyzeVisualAssets: async (assets, options) => {
       analysis.push({ assets, options });
@@ -225,6 +227,12 @@ test('V0.2.27 routes a text-rich vector-only page to schematic tiling', async ()
   assert.ok(analysis.length >= 2, 'schematic must analyze overview and tile regions');
   assert.match(result.markdown, /Page 1 — SCHEMATIC/);
   assert.match(result.markdown, /R109 connects ETH_CLK/);
+  const tileRenders = progress.filter((item) => item.details?.phase === 'pdf_schematic_tile_render');
+  const tileBatches = progress.filter((item) => item.details?.phase === 'pdf_schematic_tile_analyze');
+  assert.ok(tileRenders.length >= 2);
+  assert.equal(tileRenders.at(-1).details.completed, tileRenders.at(-1).details.total);
+  assert.ok(tileBatches.length >= 1);
+  assert.equal(tileBatches.at(-1).details.completed, tileBatches.at(-1).details.total);
 });
 
 test('V0.2.27 scanned text routes through Vision transcription without schematic tiling', async () => {

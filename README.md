@@ -1,6 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27 adds routed PDF visual processing with a schematic-specific evidence path while preserving the existing recursive Vision crop workflow.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.1 adds live PDF/media preprocessing progress to Claude Code while preserving V0.2.27 routed schematic evidence behavior and exact post-normalization usage accounting.
+
+## V0.2.27.1 live PDF/media progress hotfix
+
+V0.2.27.1 fixes the V0.2.27 progress-transport boundary where PDF/Vision preprocessing already emitted semantic progress internally but `proxy-server.js` buffered those events until media adaptation and exact `/v1/messages/count_tokens` had both completed. Claude Code therefore appeared idle during long PDF work and then received the accumulated progress all at once.
+
+For streamed media cache misses, the Proxy now performs one **sanitized bootstrap `/v1/messages/count_tokens`** request before media adaptation. PDF/image blocks are replaced only in that temporary counting clone by bounded text markers; raw Base64, `proxy_file`, file paths, cache keys, and raw media never enter Base vLLM. The returned non-media context count is used as the conservative initial `message_start.usage`, allowing `ProgressStream` to open before Vision preprocessing begins.
+
+Once the stream is open, PDF/image preprocessing updates are delivered live while Vision is still running. After media has been converted into normalized text evidence, the Proxy performs the existing exact `/v1/messages/count_tokens` preflight on that evidence and emits the **exact cumulative `message_delta.usage`** before continuing to Laguna. Large-context admission continues to use this exact post-normalization count rather than the bootstrap lower-bound.
+
+The V0.2.27 schematic path also gains finer progress phases: `pdf_schematic_tile_render` reports each deterministic tile as it is rendered from the original PDF, and `pdf_schematic_tile_analyze` reports each Vision tile batch before `pdf_schematic_merge`. Existing page classification, overview, recursive crop, merge, cancellation, and managed SSE lifecycle remain unchanged.
+
+This hotfix adds no ENV variable, no OCR engine, and no evidence-format change. The cache/evidence generations therefore remain `media-v7`, `visual-v6`, and `evidence-v2`.
 
 ## V0.2.27 routed schematic PDF pipeline
 

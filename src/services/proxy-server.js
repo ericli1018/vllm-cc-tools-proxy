@@ -15,6 +15,7 @@ import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
+import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
 import { localizeProgressMessage, statusText } from '../i18n/response-language.js';
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
@@ -114,7 +115,10 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
 }
 
 
-async function preflightManagedUsage(request, config, incomingHeaders, signal, onDiagnostic = () => {}) {
+async function preflightManagedUsage(request, config, incomingHeaders, signal, onDiagnostic = () => {}, {
+  successEvent = 'managed_usage_preflight_succeeded',
+  failureEvent = 'managed_usage_preflight_failed',
+} = {}) {
   if (config.usagePreflightEnabled === false) return usageFromTokenCount({});
   try {
     const payload = await callUpstreamJson(request, config, incomingHeaders, signal, '/v1/messages/count_tokens');
@@ -125,7 +129,7 @@ async function preflightManagedUsage(request, config, incomingHeaders, signal, o
       });
     }
     const usage = usageFromTokenCount(payload);
-    await onDiagnostic('managed_usage_preflight_succeeded', {
+    await onDiagnostic(successEvent, {
       input_tokens: usage.input_tokens,
       cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
       cache_read_input_tokens: usage.cache_read_input_tokens || 0,
@@ -134,7 +138,7 @@ async function preflightManagedUsage(request, config, incomingHeaders, signal, o
     return usage;
   } catch (error) {
     if (error?.name === 'AbortError') throw error;
-    await onDiagnostic('managed_usage_preflight_failed', {
+    await onDiagnostic(failureEvent, {
       code: typeof error?.code === 'string' ? error.code : 'vllm_token_count_failed',
       retryable: Boolean(error?.retryable),
     });
@@ -1049,30 +1053,11 @@ export function createProxyServer(config, dependencies = {}) {
         else deferredProgress.push({ rendered, force, stateDetails });
       };
 
-      if (hasMedia) {
-        if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
-        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
-        request.messages = await adaptMessages(request.messages, adapters);
-        request = injectEvidenceContract(request);
-        await preparedMedia.cleanup(); preparedMedia = null;
-        const readyMessage = mediaProgress?.renderMediaReady()
-          || statusText(config.responseLanguage, 'mediaReady');
-        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
-      }
-
-      if (request.stream === true) {
-        initialStreamUsage = await preflightManagedUsage(
-          request,
-          config,
-          req.headers,
-          abortController.signal,
-          (event, fields) => {
-            log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
-          },
-        );
+      const openManagedProgress = async (usage) => {
+        if (progress) return progress;
         progress = new ProgressStream(res, {
           model: request.model || 'vllm',
-          initialUsage: initialStreamUsage,
+          initialUsage: usage,
           pingIntervalMs: config.progressPingIntervalMs,
           heartbeatIntervalMs: config.progressHeartbeatMs,
           drainTimeoutMs: config.sseDrainTimeoutMs,
@@ -1098,7 +1083,7 @@ export function createProxyServer(config, dependencies = {}) {
                 waited_ms: entry.waitedMs,
               });
             }
-            if (['progress_delta', 'semantic_heartbeat'].includes(entry.kind)) {
+            if (['progress_delta', 'semantic_heartbeat', 'usage_delta'].includes(entry.kind)) {
               log(config, 'info', 'progress_sse_sent', {
                 requestId,
                 kind: entry.kind,
@@ -1137,6 +1122,54 @@ export function createProxyServer(config, dependencies = {}) {
         });
         for (const entry of deferredProgress.splice(0)) {
           await progress.update(entry.rendered, { force: true, details: entry.stateDetails });
+        }
+        return progress;
+      };
+
+      let mediaProgressOpenedEarly = false;
+      if (request.stream === true && hasMedia && !allMediaCached) {
+        const bootstrapRequest = buildMediaUsageBootstrapRequest(request);
+        const bootstrapUsage = await preflightManagedUsage(
+          bootstrapRequest,
+          config,
+          req.headers,
+          abortController.signal,
+          (event, fields) => {
+            log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
+          },
+          {
+            successEvent: 'managed_usage_bootstrap_succeeded',
+            failureEvent: 'managed_usage_bootstrap_failed',
+          },
+        );
+        await openManagedProgress(bootstrapUsage);
+        mediaProgressOpenedEarly = true;
+      }
+
+      if (hasMedia) {
+        if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
+        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
+        request.messages = await adaptMessages(request.messages, adapters);
+        request = injectEvidenceContract(request);
+        await preparedMedia.cleanup(); preparedMedia = null;
+        const readyMessage = mediaProgress?.renderMediaReady()
+          || statusText(config.responseLanguage, 'mediaReady');
+        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
+      }
+
+      if (request.stream === true) {
+        initialStreamUsage = await preflightManagedUsage(
+          request,
+          config,
+          req.headers,
+          abortController.signal,
+          (event, fields) => {
+            log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
+          },
+        );
+        if (!progress) await openManagedProgress(initialStreamUsage);
+        else if (mediaProgressOpenedEarly) {
+          await progress.updateUsage(initialStreamUsage, { phase: 'media_usage_exact' });
         }
       }
 

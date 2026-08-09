@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.27'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27'
+test "$(node -p "require('./package.json').version")" = '0.2.27.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27.1'
 
 
 test -f src/i18n/response-language.js
@@ -249,3 +249,13 @@ test -f V0.2.27-更新說明.md
 grep -Fq 'pdf_schematic_tile' src/parsers/pdf.js
 grep -Fq 'registerRegion' src/visual/asset-registry.js
 
+# V0.2.27.1 live PDF/media progress hotfix contract
+grep -Fq 'V0.2.27.1 live PDF/media progress hotfix' README.md
+grep -Fq 'sanitized bootstrap' README.md
+grep -Fq 'exact cumulative `message_delta.usage`' README.md
+test -f src/proxy/media-usage-bootstrap.js
+test -f V0.2.27.1-更新說明.md
+grep -Fq 'managed_usage_bootstrap_succeeded' src/services/proxy-server.js
+grep -Fq 'media_usage_exact' src/services/proxy-server.js
+grep -Fq 'pdf_schematic_tile_render' src/parsers/pdf.js
+grep -Fq 'pdf_schematic_tile_analyze' src/parsers/pdf.js

@@ -336,6 +336,9 @@ export async function parsePdf(buffer, options) {
       });
       const tileEntries = [];
       for (const tile of tiles) {
+        await onProgress(`正在建立第 ${page.page} 頁 schematic tile ${tile.index}/${tiles.length}…`, {
+          phase: 'pdf_schematic_tile_render', page: page.page, completed: tile.index, total: tiles.length,
+        });
         const image = await renderPdfRegion(root, tile.bbox, 360, limits, signal, runner, `tile-${tile.index}`);
         const asset = analysisRegistry.registerRegion(root.sourceId, image, {
           rootBox: tile.bbox,
@@ -350,6 +353,9 @@ export async function parsePdf(buffer, options) {
       const tileBatches = batchVisualPages(tileEntries, limits.maxVisualPagesPerBatch || 4);
       for (let index = 0; index < tileBatches.length; index += 1) {
         const batch = tileBatches[index];
+        await onProgress(`正在分析第 ${page.page} 頁 schematic tile batch ${index + 1}/${tileBatches.length}…`, {
+          phase: 'pdf_schematic_tile_analyze', page: page.page, completed: index + 1, total: tileBatches.length,
+        });
         const result = await analyzeVisualAssets(batch.map((entry) => entry.asset), {
           ...commonOptions,
           prompt: `Analyze schematic tiles for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve each source_id. Duplicate overlap is expected; do not invent continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.`,

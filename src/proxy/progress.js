@@ -99,7 +99,8 @@ export class ProgressStream {
     this.heartbeatIntervalMs = heartbeatIntervalMs;
     this.drainTimeoutMs = drainTimeoutMs;
     this.onWrite = onWrite;
-    this.initialUsage = normalizeAnthropicUsage(initialUsage);
+    this.initialUsage = normalizeAnthropicUsage(initialUsage, { includeZeroCacheFields: true });
+    this.authoritativeUsage = this.initialUsage;
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
@@ -242,6 +243,29 @@ export class ProgressStream {
         }), metadata);
       }
     });
+  }
+
+  usageForDelta(observed = {}) {
+    const current = normalizeAnthropicUsage(this.authoritativeUsage, { includeZeroCacheFields: true });
+    const next = normalizeAnthropicUsage(observed);
+    return normalizeAnthropicUsage({
+      input_tokens: Math.max(current.input_tokens || 0, next.input_tokens || 0),
+      cache_creation_input_tokens: Math.max(current.cache_creation_input_tokens || 0, next.cache_creation_input_tokens || 0),
+      cache_read_input_tokens: Math.max(current.cache_read_input_tokens || 0, next.cache_read_input_tokens || 0),
+      output_tokens: next.output_tokens || 0,
+      server_tool_use: next.server_tool_use || current.server_tool_use,
+    }, { includeZeroCacheFields: true });
+  }
+
+  async updateUsage(usage, { phase = 'usage_update' } = {}) {
+    if (this.closed) return;
+    const normalized = this.usageForDelta(usage);
+    this.authoritativeUsage = normalized;
+    await this.writeRaw(event('message_delta', {
+      type: 'message_delta',
+      delta: { stop_reason: null, stop_sequence: null },
+      usage: normalized,
+    }), { kind: 'usage_delta', phase });
   }
 
   async update(message, { force = false, kind = 'progress_delta', details = {} } = {}) {

@@ -11,6 +11,11 @@ function responseContent(response) {
   return Array.isArray(response?.content) ? response.content : [];
 }
 
+function usageForProgress(progress, observed = {}) {
+  if (typeof progress?.usageForDelta === 'function') return progress.usageForDelta(observed);
+  return normalizeAnthropicUsage(observed);
+}
+
 export function describeFinalAnthropicProgress(response, { locale = 'zh-TW' } = {}) {
   const blocks = responseContent(response);
   const toolNames = blocks
@@ -198,10 +203,7 @@ export async function emitFinalAnthropicResponse(progress, response, { startInde
       stop_reason: response.stop_reason ?? 'end_turn',
       stop_sequence: response.stop_sequence ?? null,
     },
-    usage: {
-      output_tokens: response.usage?.output_tokens ?? 0,
-      ...(response.usage?.server_tool_use ? { server_tool_use: response.usage.server_tool_use } : {}),
-    },
+    usage: usageForProgress(progress, response.usage || {}),
   }));
   progress.stopKeepalive();
   await progress.writeRaw(formatSseEvent('message_stop', { type: 'message_stop' }));
@@ -323,6 +325,10 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
     }
     if (parsed.name === 'message_stop' && !progressClosedForModel) await closeProgressForModel();
     if (parsed.name === 'message_stop') progress.stopKeepalive();
+
+    if (parsed.name === 'message_delta' && payload) {
+      payload = { ...payload, usage: usageForProgress(progress, payload.usage || {}) };
+    }
 
     if (payload) {
       if (payload?.type === 'content_block_delta') {
