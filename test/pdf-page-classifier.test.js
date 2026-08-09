@@ -24,4 +24,6 @@ test('V0.2.27 page classifier disables crop tools and falls back conservatively'
   assert.equal(calls.length, 1);
   assert.equal(calls[0].options.allowCrops, false);
   assert.match(calls[0].options.prompt, /TEXT.*DIAGRAM.*SCHEMATIC.*DENSE_PAGE/s);
+  assert.match(calls[0].options.prompt, /reference designators.*pins.*nets.*wires/is);
+  assert.match(calls[0].options.prompt, /flow ?charts?.*screenshots?.*architecture.*not.*SCHEMATIC/is);
 });

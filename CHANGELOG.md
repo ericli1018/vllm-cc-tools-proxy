@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.28.4 - 2026-08-09
+
+- Isolated SCHEMATIC overlapping tiles so each tile is sent in one sequential Vision request instead of grouping up to four large tile images in one request.
+- Added tile-level fault containment: expected `vision_*` failures produce `pdf_schematic_tile_failed`, a bounded evidence-gap marker, and a warning while later tiles continue; unexpected programming errors still propagate.
+- Added safe transport-cause diagnostics (`transport_code`, `transport_phase`) for headers/body/connect/connection failures while retaining the public `vision_service_error` code.
+- Tightened SCHEMATIC routing to require visible electronic circuit/wiring evidence and explicitly exclude flow charts, screenshots, UI procedures, architecture/block diagrams, and sequence diagrams.
+- Advanced cache generations to `media-v7` / `visual-v10` / `evidence-v6`.
+- Added no ENV variables and did not introduce Vision streaming or change the V0.2.28.3 Vision Evidence Quality Gate.
 ## 0.2.28.3 - 2026-08-09
 
 - Added a Vision Evidence Quality Gate so non-empty refusal-like, metadata-only, and very short non-observable outputs are not treated as valid evidence.

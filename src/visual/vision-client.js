@@ -227,6 +227,8 @@ export async function analyzeVisualAssets(assets, {
         elapsed_ms: Date.now() - requestStartedAt,
         code: error?.code || 'vision_service_error',
         retryable: Boolean(error?.retryable),
+        ...(error?.details?.transport_code ? { transport_code: error.details.transport_code } : {}),
+        ...(error?.details?.transport_phase ? { transport_phase: error.details.transport_phase } : {}),
       });
       throw error;
     }

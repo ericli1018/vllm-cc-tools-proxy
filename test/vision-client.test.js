@@ -467,3 +467,24 @@ test('V0.2.28.3 accepts concise Traditional Chinese observable evidence without 
   assert.equal(requests.length, 1);
   assert.equal(result.markdown, '紅色人物位於畫面左側。');
 });
+
+test('V0.2.28.4 Vision failure diagnostic exposes safe transport cause without payload content', async (t) => {
+  const events = [];
+  globalThis.fetch = async () => {
+    const error = new TypeError('fetch failed');
+    error.cause = { code: 'UND_ERR_HEADERS_TIMEOUT' };
+    throw error;
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('secret-image-bytes'), mediaType: 'image/png', width: 1602, height: 2265, label: 'tile' });
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm', provider: 'ollama', registry,
+    onEvent: (event, details) => events.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_service_error');
+  const response = events.find((entry) => entry.event === 'vision_upstream_response');
+  assert.equal(response?.details.transport_code, 'UND_ERR_HEADERS_TIMEOUT');
+  assert.equal(response?.details.transport_phase, 'headers');
+  assert.equal(JSON.stringify(response).includes('secret-image-bytes'), false);
+});

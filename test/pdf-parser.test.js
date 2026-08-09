@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { parsePdf } from '../src/parsers/pdf.js';
+import { HttpError } from '../src/lib/http.js';
 
 const limits = { maxDecodedBytes: 10 * 1024 * 1024, maxPdfPages: 20, maxOutputChars: 100000, processTimeoutMs: 20000, nativeTextMinCharsPerPage: 80, maxImagePixels: 20_000_000, maxVisualPagesPerBatch: 4 };
 
@@ -220,7 +221,7 @@ test('V0.2.27 routes a text-rich vector-only page to schematic tiling', async ()
     classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'dense nets' }),
     analyzeVisualAssets: async (assets, options) => {
       analysis.push({ assets, options });
-      return { markdown: assets.length === 1 ? 'Overview Ethernet schematic' : 'R109 connects ETH_CLK', warnings: [], cropCount: 0 };
+      return { markdown: assets[0]?.regionKind === 'schematic_tile' ? 'R109 connects ETH_CLK' : 'Overview Ethernet schematic', warnings: [], cropCount: 0 };
     },
   });
   assert.ok(renders.some((args) => args.includes('-x')), 'schematic tiles must use original-PDF region rendering');
@@ -233,6 +234,84 @@ test('V0.2.27 routes a text-rich vector-only page to schematic tiling', async ()
   assert.equal(tileRenders.at(-1).details.completed, tileRenders.at(-1).details.total);
   assert.ok(tileBatches.length >= 1);
   assert.equal(tileBatches.at(-1).details.completed, tileBatches.at(-1).details.total);
+});
+
+test('V0.2.28.4 isolates every schematic tile into one sequential Vision request', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const calls = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('U15 R109 ETH_CLK RESET_N GPIOZ3 '.repeat(15)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'electronic schematic with reference designators and nets' }),
+    analyzeVisualAssets: async (assets) => {
+      calls.push(assets);
+      return { markdown: assets[0].regionKind === 'schematic_tile' ? `Tile evidence ${assets[0].sourceId}` : 'Overview schematic', warnings: [], cropCount: 0 };
+    },
+  });
+  const tileCalls = calls.filter((assets) => assets[0]?.regionKind === 'schematic_tile');
+  assert.ok(tileCalls.length >= 2);
+  assert.equal(tileCalls.every((assets) => assets.length === 1), true);
+});
+
+test('V0.2.28.4 contains an expected schematic tile Vision failure and continues later tiles', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let tileCall = 0;
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('U15 R109 ETH_CLK RESET_N GPIOZ3 '.repeat(15)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'electronic schematic with reference designators and nets' }),
+    analyzeVisualAssets: async (assets) => {
+      if (assets[0]?.regionKind !== 'schematic_tile') return { markdown: 'Overview schematic', warnings: [], cropCount: 0 };
+      tileCall += 1;
+      if (tileCall === 2) throw new HttpError(502, 'Vision headers timeout.', { code: 'vision_service_error', retryable: true, details: { transport_code: 'UND_ERR_HEADERS_TIMEOUT' } });
+      return { markdown: `Observed tile ${tileCall}: R109 connects ETH_CLK.`, warnings: [], cropCount: 0 };
+    },
+  });
+  assert.ok(tileCall >= 3, 'later tiles must continue after one upstream tile failure');
+  assert.match(result.markdown, /Observed tile 1/);
+  assert.match(result.markdown, /Observed tile 3/);
+  assert.match(result.markdown, /evidence unavailable.*vision_service_error/i);
+  assert.ok(result.warnings.includes('schematic_tile_vision_service_error'));
+});
+
+test('V0.2.28.4 does not hide programming errors from schematic tile analysis', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('U15 R109 ETH_CLK RESET_N GPIOZ3 '.repeat(15)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  await assert.rejects(() => parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'electronic schematic with reference designators and nets' }),
+    analyzeVisualAssets: async (assets) => {
+      if (assets[0]?.regionKind !== 'schematic_tile') return { markdown: 'Overview schematic', warnings: [], cropCount: 0 };
+      throw new Error('programming-bug');
+    },
+  }), /programming-bug/);
 });
 
 test('V0.2.27 scanned text routes through Vision transcription without schematic tiling', async () => {

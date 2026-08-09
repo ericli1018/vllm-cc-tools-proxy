@@ -1,6 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.3 adds a Vision Evidence Quality Gate and Adaptive Thinking Recovery so non-empty but refusal-like, metadata-only, or otherwise weak visual output cannot become cached evidence. A weak/empty terminal Vision result receives exactly one recovery attempt with thinking enabled; reasoning remains private and only good visible evidence may reach Laguna or Media Cache. Existing PDF/Image routing, focused reread, media progress, Final Language Gate, and managed-loop behavior remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.4 adds PDF schematic tile isolation and Vision transport diagnostics so a multi-tile schematic cannot stall one oversized multimodal request for minutes, and one failed tile cannot abort the entire PDF. Vision quality gating from V0.2.28.3 remains unchanged.
+
+## V0.2.28.4 PDF schematic tile isolation + Vision transport diagnostics
+
+V0.2.28.4 changes only the high-cost SCHEMATIC region workload. Deterministic overlapping tiles are still rendered from the original PDF, but **one tile now equals one Vision request** and tiles are analyzed sequentially. `MAX_VISUAL_PAGES_PER_BATCH` continues to apply to ordinary DIAGRAM/DENSE_PAGE work; it no longer groups schematic tiles into one multi-image request.
+
+An expected tile-level Vision failure (`vision_*` `HttpError`) is contained at the tile boundary. The Proxy emits `pdf_schematic_tile_failed`, records a bounded uncertainty/evidence-gap marker for that source_id, and continues later tiles. Unexpected programming errors are not swallowed. This keeps partial schematic evidence usable instead of turning one slow or failed tile into a whole-document 502. No new ENV variable is added.
+
+Vision transport failures keep the existing public `vision_service_error` contract but now preserve safe root-cause metadata such as `transport_code=UND_ERR_HEADERS_TIMEOUT` and `transport_phase=headers`. Connection refusal/reset and body/header timeout causes are distinguished without logging request bodies, image bytes, or raw model output. The user-facing transport message no longer reports every timeout as a generic inability to reach the service.
+
+The PDF classifier is also stricter: SCHEMATIC is reserved for visible electronic circuit/wiring evidence such as reference designators, component symbols, pins, nets, and wires. Flow charts, screenshots, UI procedures, architecture/block diagrams, sequence diagrams, and ordinary process drawings are explicitly not SCHEMATIC.
+
+Because schematic evidence granularity and the classifier prompt changed, cache generations advance to `media-v7`, `visual-v10`, and `evidence-v6`. Media identity is unchanged; prior visual/evidence cache entries are intentionally invalidated.
 
 ## V0.2.28.3 Vision Evidence Quality Gate + Adaptive Thinking Recovery
 

@@ -61,15 +61,47 @@ export function serviceEndpoint(baseUrl, defaultPath) {
   return url.toString();
 }
 
+
+function safeTransportCause(error) {
+  const rawCode = error?.cause?.code || error?.code || '';
+  const code = /^[A-Z0-9_]{2,80}$/.test(String(rawCode)) ? String(rawCode) : '';
+  const phases = {
+    UND_ERR_HEADERS_TIMEOUT: 'headers',
+    UND_ERR_BODY_TIMEOUT: 'body',
+    UND_ERR_CONNECT_TIMEOUT: 'connect',
+    ECONNREFUSED: 'connect',
+    ETIMEDOUT: 'connect',
+    ENETUNREACH: 'connect',
+    EHOSTUNREACH: 'connect',
+    ECONNRESET: 'connection',
+    EPIPE: 'connection',
+  };
+  return { code, phase: phases[code] || 'transport' };
+}
+
+function transportFailureMessage(host, transport) {
+  if (transport.code === 'UND_ERR_HEADERS_TIMEOUT') return `Service did not return response headers before the HTTP client timeout: ${host}`;
+  if (transport.code === 'UND_ERR_BODY_TIMEOUT') return `Service response body did not complete before the HTTP client timeout: ${host}`;
+  if (transport.phase === 'connect') return `Unable to connect to service: ${host}`;
+  if (transport.phase === 'connection') return `Service connection was interrupted: ${host}`;
+  return `Unable to reach service: ${host}`;
+}
+
 export async function fetchJson(url, options = {}, { errorCode = 'upstream_service_error' } = {}) {
   let response;
   try {
     response = await fetch(url, options);
   } catch (error) {
     if (error?.name === 'AbortError') throw error;
-    throw new HttpError(502, `Unable to reach service: ${new URL(url).host}`, {
+    const host = new URL(url).host;
+    const transport = safeTransportCause(error);
+    throw new HttpError(502, transportFailureMessage(host, transport), {
       code: errorCode,
       retryable: true,
+      details: {
+        ...(transport.code ? { transport_code: transport.code } : {}),
+        transport_phase: transport.phase,
+      },
     });
   }
   const text = await response.text();

@@ -386,22 +386,35 @@ export async function parsePdf(buffer, options) {
       }
 
       const regionEvidence = [];
-      const tileBatches = batchVisualPages(tileEntries, limits.maxVisualPagesPerBatch || 4);
-      for (let index = 0; index < tileBatches.length; index += 1) {
-        const batch = tileBatches[index];
-        await onProgress(`正在分析第 ${page.page} 頁 schematic tile batch ${index + 1}/${tileBatches.length}…`, {
-          phase: 'pdf_schematic_tile_analyze', page: page.page, completed: index + 1, total: tileBatches.length,
+      for (let index = 0; index < tileEntries.length; index += 1) {
+        const entry = tileEntries[index];
+        await onProgress(`正在分析第 ${page.page} 頁 schematic tile ${index + 1}/${tileEntries.length}…`, {
+          phase: 'pdf_schematic_tile_analyze', page: page.page, completed: index + 1, total: tileEntries.length,
+          tile: entry.tile.index,
         });
-        const result = await analyzeVisualAssets(batch.map((entry) => entry.asset), {
-          ...commonOptions,
-          prompt: `Analyze schematic tiles for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve each source_id. Duplicate overlap is expected; do not invent continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.`,
-        });
-        visualBatchCount += 1;
-        warnings.push(...(result.warnings || []));
-        regionEvidence.push({
-          sourceId: batch.map((entry) => entry.asset.sourceId).join(','),
-          markdown: result.markdown,
-        });
+        try {
+          const result = await analyzeVisualAssets([entry.asset], {
+            ...commonOptions,
+            prompt: `Analyze schematic tile ${entry.tile.index}/${tileEntries.length} for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve source_id. The tile overlaps neighboring regions; do not invent off-tile continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.`,
+          });
+          visualBatchCount += 1;
+          warnings.push(...(result.warnings || []));
+          regionEvidence.push({ sourceId: entry.asset.sourceId, markdown: result.markdown });
+        } catch (error) {
+          const expectedVisionFailure = error instanceof HttpError && Boolean(error.retryable) && Number(error.status) >= 500;
+          if (!expectedVisionFailure) throw error;
+          visualBatchCount += 1;
+          const code = String(error.code || 'vision_service_error').slice(0, 80);
+          warnings.push(`schematic_tile_${code}`);
+          regionEvidence.push({
+            sourceId: entry.asset.sourceId,
+            markdown: `Uncertain: schematic tile ${entry.tile.index}/${tileEntries.length} evidence unavailable due to ${code}. Neighboring tile evidence may be incomplete.`,
+          });
+          await onProgress(`第 ${page.page} 頁 schematic tile ${entry.tile.index}/${tileEntries.length} 分析失敗；將保留缺口並繼續下一個 tile。`, {
+            phase: 'pdf_schematic_tile_failed', page: page.page, tile: entry.tile.index,
+            completed: index + 1, total: tileEntries.length, code, retryable: Boolean(error.retryable),
+          });
+        }
       }
       await onProgress(`正在合併第 ${page.page} 頁 schematic evidence…`, { phase: 'pdf_schematic_merge', page: page.page });
       const merged = mergePageEvidence({

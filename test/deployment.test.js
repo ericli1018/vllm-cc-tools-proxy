@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28.3 metadata', async () => {
+test('package version is V0.2.28.4 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28.3');
-  assert.equal(lock.version, '0.2.28.3');
-  assert.equal(lock.packages[''].version, '0.2.28.3');
+  assert.equal(packageJson.version, '0.2.28.4');
+  assert.equal(lock.version, '0.2.28.4');
+  assert.equal(lock.packages[''].version, '0.2.28.4');
 });
 
 
@@ -441,4 +441,17 @@ test('README documents V0.2.28.3 Vision evidence quality gate and adaptive think
   assert.match(readme, /vision_quality_retry/);
   assert.match(readme, /visual-v9/);
   assert.match(readme, /evidence-v5/);
+});
+
+
+test('README documents V0.2.28.4 schematic tile isolation and transport diagnostics', async () => {
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /V0\.2\.28\.4.*schematic tile isolation/i);
+  assert.match(readme, /one tile.*one Vision request/is);
+  assert.match(readme, /pdf_schematic_tile_failed/);
+  assert.match(readme, /transport_code/);
+  assert.match(readme, /UND_ERR_HEADERS_TIMEOUT/);
+  assert.match(readme, /visual-v10/);
+  assert.match(readme, /evidence-v6/);
+  assert.match(readme, /no new ENV/i);
 });
