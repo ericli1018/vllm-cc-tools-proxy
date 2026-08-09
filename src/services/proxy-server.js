@@ -499,7 +499,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (progress?.visible) {
         progress.update(statusText(config.responseLanguage, 'modelFirstByte', {
           seconds: Math.floor(elapsedMs / 1000),
-          receivedBytes: baseResponseBytes,
+          receivedBytes: receivedThisRound,
         }), {
           force: true,
           details: {
@@ -507,11 +507,17 @@ export function createProxyServer(config, dependencies = {}) {
             lane: modelRoundProgress.lane,
             round: modelRoundProgress.round,
             received_bytes: baseResponseBytes,
+            round_received_bytes: receivedThisRound,
           },
         }).catch(() => {});
       }
     };
     const getBaseResponseBytes = () => baseResponseBytes;
+    const getCurrentRoundResponseBytes = () => (
+      modelRoundProgress.active
+        ? Math.max(0, baseResponseBytes - modelRoundProgress.startBytes)
+        : 0
+    );
     const getBaseUpstreamActivity = () => ({ receivedBytes: baseResponseBytes, lastByteAt: lastBaseResponseChunkAt });
     const progressTiming = { mode: 'initial', startedAt: Date.now(), position: 0 };
     const url = new URL(req.url || '/', 'http://localhost');
@@ -1112,6 +1118,7 @@ export function createProxyServer(config, dependencies = {}) {
                 delivery_latency_ms: entry.deliveryLatencyMs,
                 writable_length: res.writableLength || 0,
                 upstream_received_bytes: getBaseResponseBytes(),
+                round_received_bytes: modelRoundProgress.active ? getCurrentRoundResponseBytes() : null,
                 model_elapsed_ms: progressTiming.mode === 'model'
                   ? Math.max(0, Date.now() - progressTiming.startedAt)
                   : null,
@@ -1130,7 +1137,7 @@ export function createProxyServer(config, dependencies = {}) {
           if (progressTiming.mode === 'model') {
             return statusText(config.responseLanguage, 'modelWaiting', {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
-              receivedBytes: getBaseResponseBytes(),
+              receivedBytes: getCurrentRoundResponseBytes(),
             });
           }
           return mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() })

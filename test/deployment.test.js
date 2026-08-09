@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.27.2 metadata', async () => {
+test('package version is V0.2.27.3 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.27.2');
-  assert.equal(lock.version, '0.2.27.2');
-  assert.equal(lock.packages[''].version, '0.2.27.2');
+  assert.equal(packageJson.version, '0.2.27.3');
+  assert.equal(lock.version, '0.2.27.3');
+  assert.equal(lock.packages[''].version, '0.2.27.3');
 });
 
 
@@ -347,6 +347,15 @@ test('README documents V0.2.27 routed schematic PDF pipeline', () => {
 
 
 
+
+
+test('README documents V0.2.27.3 per-round continuation byte accounting hotfix', () => {
+  assert.match(readme, /V0\.2\.27\.3.*per-round.*continuation.*byte/i);
+  assert.match(readme, /round_received_bytes/);
+  assert.match(readme, /request.*cumulative.*bytes/i);
+  assert.match(readme, /0 B/);
+  assert.match(readme, /no ENV/i);
+});
 test('README documents V0.2.27.2 native Read.pages focused PDF refinement', () => {
   assert.match(readme, /V0\.2\.27\.2.*Read\.pages.*focused PDF/i);
   assert.match(readme, /page-scoped cache/i);

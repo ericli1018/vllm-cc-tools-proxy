@@ -1,6 +1,17 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.2 adds native Claude Code `Read.pages` focused PDF refinement with page-scoped caching while preserving V0.2.27.1 live media progress and V0.2.27 schematic evidence behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.3 fixes per-round continuation byte accounting in visible managed progress while preserving V0.2.27.2 native `Read.pages` focused PDF refinement, V0.2.27.1 live media progress, and V0.2.27 schematic evidence behavior.
+
+
+## V0.2.27.3 per-round continuation byte accounting hotfix
+
+V0.2.27.3 fixes the managed-loop progress display after a controlled continuation. The Proxy has always kept the Base upstream byte counter cumulative for the whole request, while each managed model round also records its own `startBytes`. V0.2.27.2 correctly logged `round_received_bytes`, but the visible `modelWaiting` and `modelFirstByte` status still rendered the request-wide cumulative byte count. After a thinking-only response of roughly 70 KB, a continuation could therefore start at `70 KB` even before that new round had received any data.
+
+Visible model-round progress now uses `round_received_bytes = max(0, request_received_bytes - startBytes)`. A continuation heartbeat therefore restarts at `0 B`, and the first returned chunk reports only bytes received in that continuation round. The request-wide cumulative counter is **not reset**: diagnostics still retain cumulative `received_bytes` / `upstream_received_bytes`, and `progress_sse_sent` also exposes the current `round_received_bytes` while a model round is active.
+
+The dedicated progress-block header may continue to represent request-wide cumulative traffic; only text explicitly describing the **current model round** is reset to the round-local counter. This keeps throughput diagnostics intact while making Claude Code visible progress semantically consistent with the per-round elapsed timer.
+
+This hotfix adds no ENV variable, changes no managed-loop recovery policy, and does not modify PDF routing, `Read.pages`, Vision, cache, evidence, language repair, or WebSearch/WebFetch behavior. Cache/evidence generations remain `media-v7`, `visual-v6`, and `evidence-v2`.
 
 ## V0.2.27.2 native Read.pages focused PDF refinement
 

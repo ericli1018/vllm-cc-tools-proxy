@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.27.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27.2'
+test "$(node -p "require('./package.json').version")" = '0.2.27.3'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27.3'
 
 
 test -f src/i18n/response-language.js
@@ -271,5 +271,13 @@ grep -Fq 'mediaOccurrences' src/proxy/media-preflight.js
 grep -Fq 'pageScope' src/proxy/media-progress.js
 grep -Fq 'requested_pages' src/parsers/pdf.js
 grep -Fq 'page_scope_mode' src/parsers/pdf.js
+
+
+# V0.2.27.3 per-round continuation byte accounting hotfix contract
+grep -Fq 'V0.2.27.3 per-round continuation byte accounting hotfix' README.md
+grep -Fq 'round_received_bytes' README.md
+test -f V0.2.27.3-更新說明.md
+grep -Fq 'getCurrentRoundResponseBytes' src/services/proxy-server.js
+grep -Fq 'round_received_bytes: receivedThisRound' src/services/proxy-server.js
 
 echo 'Verification complete.'

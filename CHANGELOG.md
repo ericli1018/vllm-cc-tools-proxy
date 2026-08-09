@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.27.3 - 2026-08-09
+
+- Reset Claude Code visible `modelWaiting` / `modelFirstByte` byte counts at each managed model-round boundary by using `round_received_bytes` instead of request-wide cumulative bytes.
+- Preserved request-wide cumulative Base response bytes for throughput diagnostics and final request accounting.
+- Added `round_received_bytes` to managed progress diagnostics while a model round is active.
+- Added regression coverage for a large thinking-only round followed by controlled continuation: visible progress now restarts at `0 B` and then reports only the continuation round bytes.
+- Added no ENV variables and preserved V0.2.27.2 PDF `Read.pages`, V0.2.27.1 live media progress, managed recovery policy, and cache/evidence generations `media-v7`, `visual-v6`, `evidence-v2`.
+
 ## 0.2.27.2 - 2026-08-09
 
 - Added native Claude Code `Read.pages` correlation from `Read` tool-use history to returned PDF media without introducing a custom tool.

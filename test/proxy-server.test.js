@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.27.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.27.3', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -747,6 +747,68 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
   assert.ok(logs.some((entry) => entry.event === 'progress_state_changed' && entry.phase === 'base_headers_received'));
 });
 
+
+test('V0.2.27.3 continuation visible progress resets received bytes for the new model round', async (t) => {
+  const logs = [];
+  let call = 0;
+  const largeThinking = `analysis ${'x'.repeat(72 * 1024)}`;
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    call += 1;
+    if (call === 1) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'round-1', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'thinking', thinking: largeThinking }],
+        stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 100 },
+      }));
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1150));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'round-2', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'RECOVERED' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 11, output_tokens: 5 },
+    }));
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressHeartbeatMs: 100,
+    progressPingIntervalMs: 60_000,
+    progressVisibleAfterMs: 0,
+    logLevel: 'debug',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+      messages: [{ role: 'user', content: 'answer without using tools' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const stream = await response.text();
+  const continuationIndex = stream.indexOf('主模型未產生有效下一步；正在進行一次受控續接');
+  assert.ok(continuationIndex >= 0, 'missing continuation progress');
+  const continuationStream = stream.slice(continuationIndex);
+
+  assert.match(continuationStream, /主模型仍在處理本輪請求，已執行 \d+ 秒（已收到 0 B）…/);
+  assert.doesNotMatch(continuationStream, /主模型仍在處理本輪請求[^\n]*已收到 [0-9.]+ KB/);
+  assert.match(continuationStream, /主模型已開始回傳資料，已執行 \d+ 秒（已收到 \d+ B）…/);
+  assert.doesNotMatch(continuationStream, /主模型已開始回傳資料[^\n]*已收到 [0-9.]+ KB/);
+  assert.match(stream, /RECOVERED/);
+
+  const roundFirstByte = logs.filter((entry) => entry.event === 'managed_model_first_byte_received').at(-1);
+  assert.ok(roundFirstByte.received_bytes > 64 * 1024, 'request cumulative bytes should be preserved');
+  assert.ok(roundFirstByte.round_received_bytes > 0 && roundFirstByte.round_received_bytes < 1024, 'continuation round bytes should restart near zero');
+});
 
 test('managed request logs protocol provenance and repairs malformed final output without leaking tags', async (t) => {
   const logs = [];
