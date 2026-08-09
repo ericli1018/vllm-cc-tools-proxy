@@ -43,7 +43,7 @@ test('V0.2.26.4 external language processor rewrites segments with one tool-less
   assert.equal(observed.stream, false);
   assert.equal(observed.reasoning_effort, 'none');
   assert.equal(observed.chat_template_kwargs, undefined);
-  assert.match(observed.messages[0].content, /^\/nothink\b/);
+  assert.doesNotMatch(observed.messages[0].content, /^\/nothink\b/);
   assert.equal(observed.tools, undefined);
   assert.equal(observed.messages.length, 2);
   assert.match(observed.messages[1].content, /<<<VCC_LANG_SEGMENT_0>>>/);

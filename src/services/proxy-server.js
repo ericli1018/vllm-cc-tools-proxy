@@ -530,11 +530,18 @@ export function createProxyServer(config, dependencies = {}) {
     );
 
     const applyFinalPresentationLanguage = async (response, sourceRequest) => {
+      let externalLanguageRepairFailed = false;
       const onLanguageEvent = async (event, fields = {}) => {
         const level = event.endsWith('_failed') ? 'warn' : 'info';
         log(config, level, event, { requestId, ...fields });
+        if (event === 'final_language_repair_failed' && fields.backend === 'external' && fields.fallback === 'base') {
+          externalLanguageRepairFailed = true;
+        }
         if (event === 'final_language_repair_started' && progress) {
-          await progress.update(statusText(config.responseLanguage, 'finalLanguageRepair'), {
+          const statusKey = fields.backend === 'base' && externalLanguageRepairFailed
+            ? 'finalLanguageRepairFallbackBase'
+            : 'finalLanguageRepair';
+          await progress.update(statusText(config.responseLanguage, statusKey), {
             force: true,
             details: { phase: 'final_language_repair', backend: fields.backend, target: config.responseLanguage },
           });

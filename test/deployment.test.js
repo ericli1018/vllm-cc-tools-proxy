@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28.1 metadata', async () => {
+test('package version is V0.2.28.2 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28.1');
-  assert.equal(lock.version, '0.2.28.1');
-  assert.equal(lock.packages[''].version, '0.2.28.1');
+  assert.equal(packageJson.version, '0.2.28.2');
+  assert.equal(lock.version, '0.2.28.2');
+  assert.equal(lock.packages[''].version, '0.2.28.2');
 });
 
 
@@ -413,12 +413,23 @@ test('README documents V0.2.26.5 native WebSearch bypass and stricter Chinese va
 
 test('README documents V0.2.28.1 GLM output-contract hardening', () => {
   assert.match(readme, /V0\.2\.28\.1.*GLM.*output.*contract/i);
-  assert.match(readme, /post-validation/i);
+  assert.match(readme, /post-validat/i);
   assert.match(readme, /language_not_compliant/);
   assert.match(readme, /\/nothink/);
   assert.match(readme, /visual_reasoning_stripped/);
   assert.match(readme, /media-v7/);
   assert.match(readme, /visual-v7/);
   assert.match(readme, /evidence-v3/);
+  assert.match(readme, /no new ENV/i);
+});
+
+
+test('README documents V0.2.28.2 Vision empty-output contract hotfix', () => {
+  assert.match(readme, /V0\.2\.28\.2.*Vision.*empty-output.*hotfix/i);
+  assert.match(readme, /vision_output_observed/);
+  assert.match(readme, /vision_empty_output_retry/);
+  assert.match(readme, /vision_empty_output/);
+  assert.match(readme, /visual-v8/);
+  assert.match(readme, /evidence-v4/);
   assert.match(readme, /no new ENV/i);
 });

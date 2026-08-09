@@ -55,7 +55,7 @@ test('Ollama native vision requests carry think=false and native image messages'
   });
   assert.equal(result.markdown, 'OLLAMA RESULT');
   assert.equal(requests[0].think, false);
-  assert.match(requests[0].messages[0].content, /^\/nothink\b/);
+  assert.doesNotMatch(requests[0].messages[0].content, /^\/nothink\b/);
   assert.equal(requests[0].messages[1].images.length, 1);
   assert.equal(typeof requests[0].messages[1].content, 'string');
   assert.equal('reasoning_effort' in requests[0], false);
@@ -199,10 +199,12 @@ test('visual worker prompt forbids protocol markup and reports control tags with
   assert.match(observed.messages[0].content, /Return Markdown only/i);
   assert.match(observed.messages[0].content, /Do not emit.*tool-call/i);
   assert.equal(result.markdown, 'text </function_result> <tool_call>');
-  assert.deepEqual(diagnostics, [{
-    event: 'visual_control_tags_detected',
-    details: { tagCount: 2, tags: ['function_result', 'tool_call'] },
-  }]);
+  assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
+    && entry.details.tagCount === 2
+    && entry.details.tags.includes('function_result')
+    && entry.details.tags.includes('tool_call')));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed'
+    && entry.details.usable_content === true));
 });
 
 test('V0.2.26 Vision worker can crop a crop using the registered derived source id', async (t) => {
@@ -319,4 +321,47 @@ test('V0.2.28.1 strips native and inline Vision reasoning before producing evide
   assert.ok(diagnostics.some((entry) => entry.event === 'visual_reasoning_stripped'
     && entry.details.native_thinking === true
     && entry.details.inline_think_regions === 1));
+});
+
+
+test('V0.2.28.2 retries one empty Vision output and accepts the next visible result', async (t) => {
+  let calls = 0;
+  const diagnostics = [];
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: calls === 1 ? '' : 'Visible evidence after retry.', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 320, height: 240, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.markdown, 'Visible evidence after retry.');
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed' && entry.details.usable_content === false));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_empty_output_retry'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed' && entry.details.usable_content === true));
+});
+
+test('V0.2.28.2 rejects persistent empty Vision output instead of returning cacheable fallback evidence', async (t) => {
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 320, height: 240, label: 'image' });
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_empty_output');
+  assert.equal(calls, 2);
 });

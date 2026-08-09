@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.2 - 2026-08-09
+
+- Removed V0.2.28.1 manual `/nothink` system-prefix injection from Ollama GLM Vision and external language-repair requests; provider-native thinking controls remain in place.
+- Added `vision_output_observed` safe diagnostics for visible-content, thinking, tool-call, and control-tag counts without logging model content or reasoning.
+- Added one controlled retry for empty Vision output. Persistent empty output now raises `vision_empty_output` and cannot be written to Media Cache.
+- Preserved response-side Vision reasoning stripping (`message.thinking`, `<think>...</think>`, orphan think tags).
+- Advanced cache generations to `media-v7` / `visual-v8` / `evidence-v4` to invalidate V0.2.28.1 synthetic empty visual evidence.
+- Added distinct external-to-Base language-repair fallback progress text; no new ENV variables.
+
 ## 0.2.28.1 - 2026-08-09
 
 - Added post-validation after every Final Language repair backend. Structurally valid output that still clearly classifies as the wrong language is rejected with `language_not_compliant`; external repair falls back to Base repair.

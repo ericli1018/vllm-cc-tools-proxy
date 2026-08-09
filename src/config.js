@@ -163,8 +163,8 @@ export function loadConfig(env = process.env) {
     retentionMs: cacheProfile.retentionDays * 24 * 60 * 60 * 1000,
     limitMode: explicitCacheMb === 0 ? 'filesystem' : 'bounded',
     pipelineVersion: 'media-v7',
-    visualPromptVersion: 'visual-v7',
-    evidenceContractVersion: 'evidence-v3',
+    visualPromptVersion: 'visual-v8',
+    evidenceContractVersion: 'evidence-v4',
   });
 
   return Object.freeze({

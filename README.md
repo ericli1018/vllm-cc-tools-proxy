@@ -1,6 +1,14 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.1 hardens the external GLM output contract with final-language post-validation, provider-aware non-thinking controls, and Vision reasoning stripping while preserving the existing PDF/Image routing, focused reread, media progress, and managed-loop behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.2 fixes the V0.2.28.1 GLM Vision empty-output regression by removing manual `/nothink` system-prefix injection, validating usable Vision output, retrying one empty response, and refusing to cache persistent empty evidence while preserving response-side reasoning stripping and the existing PDF/Image routing, focused reread, media progress, and managed-loop behavior.
+
+## V0.2.28.2 Vision empty-output contract hotfix
+
+V0.2.28.2 removes the manual `/nothink` prefix that V0.2.28.1 injected into GLM system messages. Native Ollama Vision now relies on the provider-native `think=false` request field, Ollama OpenAI-compatible language repair keeps `reasoning_effort=none`, and vLLM keeps `chat_template_kwargs.enable_thinking=false` / `preserve_thinking=false`. Response-side reasoning sanitization remains authoritative: native `message.thinking` and inline `<think>...</think>` content are stripped before evidence production. No new ENV variable is introduced.
+
+Vision HTTP success is no longer sufficient for analysis success. Every Vision response emits safe `vision_output_observed` diagnostics containing only output-shape counts (`content_chars`, `thinking_chars`, `tool_call_count`, `control_tag_count`, `usable_content`). When a request finishes without tool calls and has no usable visible content after reasoning stripping, the Proxy performs exactly one controlled retry and emits `vision_empty_output_retry`. A second empty result raises `vision_empty_output`; no synthetic fallback evidence is produced, so the failed analysis is not written to Media Cache.
+
+Because V0.2.28.1 may already have cached synthetic empty Vision evidence, cache generations advance to `media-v7`, `visual-v8`, and `evidence-v4`. Media identity is unchanged; only visual/evidence cache entries are invalidated. Final-language fallback progress now distinguishes the external attempt from Base fallback instead of showing the same conversion message twice.
 
 ## V0.2.28.1 GLM output contract hardening
 

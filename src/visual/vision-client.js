@@ -23,14 +23,6 @@ const CROP_TOOL = Object.freeze({
 const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Return Markdown only. Do not emit XML, HTML, reasoning delimiters, tool-call wrappers, function-result wrappers, chat-template tokens, or meta closing tags. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with evidence-focused Markdown.';
 
 
-function isGlmModel(model) {
-  return /(^|[\/:._-])glm(?:[\d._-]|$)/i.test(String(model || ''));
-}
-
-function noThinkSystemPrompt(system, { provider, model, think }) {
-  if (think || provider !== 'ollama' || !isGlmModel(model)) return system;
-  return /^\s*\/nothink\b/i.test(String(system || '')) ? system : `/nothink\n${system}`;
-}
 
 function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.toString('base64')}`; }
 
@@ -177,12 +169,13 @@ export async function analyzeVisualAssets(assets, {
   if (!['vllm', 'ollama'].includes(provider)) throw new HttpError(500, 'Unsupported visual provider.', { code: 'vision_provider_invalid' });
   const endpoint = endpointFor(baseUrl, provider);
   const messages = [
-    { role: 'system', content: noThinkSystemPrompt(SYSTEM_PROMPT, { provider, model, think }) },
+    { role: 'system', content: SYSTEM_PROMPT },
     userMessageForAssets(provider, assets, prompt),
   ];
   let cropCount = 0;
   let cropRound = 0;
   let toolsEnabled = Boolean(allowCrops);
+  let emptyOutputRetries = 0;
   const transmittedAssets = [...assets];
 
   while (true) {
@@ -224,13 +217,35 @@ export async function analyzeVisualAssets(assets, {
       });
     }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    await onDiagnostic('vision_output_observed', {
+      content_chars: sanitized.content.length,
+      thinking_chars: typeof message?.thinking === 'string' ? message.thinking.length : 0,
+      tool_call_count: calls.length,
+      control_tag_count: controlTags.length,
+      usable_content: sanitized.content.length > 0,
+    });
 
     if (calls.length === 0 || !toolsEnabled) {
-      return {
-        markdown: sanitized.content || 'Visual analysis completed without additional readable detail.',
-        warnings: [],
-        cropCount,
-      };
+      if (sanitized.content) {
+        return {
+          markdown: sanitized.content,
+          warnings: [],
+          cropCount,
+        };
+      }
+      if (emptyOutputRetries < 1) {
+        emptyOutputRetries += 1;
+        await onDiagnostic('vision_empty_output_retry', {
+          attempt: emptyOutputRetries,
+          max_retries: 1,
+          tool_call_count: calls.length,
+        });
+        continue;
+      }
+      throw new HttpError(502, 'Visual service returned no usable visible content.', {
+        code: 'vision_empty_output',
+        retryable: true,
+      });
     }
 
     messages.push(assistantMessage(message, provider, sanitized.content));

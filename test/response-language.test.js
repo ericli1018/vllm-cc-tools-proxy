@@ -148,3 +148,11 @@ test('V0.2.26.4 tool_result history is not modified by language policy', () => {
   assert.equal(result.changed, false);
   assert.deepEqual(result.request, original);
 });
+
+
+test('V0.2.28.2 exposes distinct external-to-Base language repair fallback progress', () => {
+  assert.equal(
+    language.statusText('zh-TW', 'finalLanguageRepairFallbackBase'),
+    '外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
+  );
+});
