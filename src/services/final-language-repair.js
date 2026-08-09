@@ -21,6 +21,16 @@ const REPAIR_PROMPTS = Object.freeze({
   }),
 });
 
+
+function isGlmModel(model) {
+  return /(^|[\/:._-])glm(?:[\d._-]|$)/i.test(String(model || ''));
+}
+
+function noThinkSystemPrompt(system, { provider, model, think }) {
+  if (think || provider !== 'ollama' || !isGlmModel(model)) return system;
+  return /^\s*\/nothink\b/i.test(String(system || '')) ? system : `/nothink\n${system}`;
+}
+
 function prompt(locale) {
   return REPAIR_PROMPTS[locale] || REPAIR_PROMPTS['en-US'];
 }
@@ -98,7 +108,7 @@ export async function rewriteFinalSegmentsWithExternalProcessor(segments, {
     temperature: 0.1,
     max_tokens: Math.max(512, Math.min(32768, segments.join('\n').length * 2)),
     messages: [
-      { role: 'system', content: p.system },
+      { role: 'system', content: noThinkSystemPrompt(p.system, { provider, model: processor.model, think: Boolean(processor.think) }) },
       { role: 'user', content: encodeLanguageRepairSegments(segments, locale) },
     ],
   };

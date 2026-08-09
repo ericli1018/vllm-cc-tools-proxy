@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28'
+test "$(node -p "require('./package.json').version")" = '0.2.28.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.1'
 
 
 test -f src/i18n/response-language.js
@@ -152,8 +152,8 @@ test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v7'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v6'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v2'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v7'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v3'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
@@ -292,5 +292,16 @@ grep -Fq 'decodedBytes' src/proxy/media-preflight.js
 grep -Fq 'media-v7' README.md
 grep -Fq 'visual-v6' README.md
 grep -Fq 'evidence-v2' README.md
+
+# V0.2.28.1 GLM output-contract hardening release contract
+grep -Fq 'V0.2.28.1 GLM output contract hardening' README.md
+test -f V0.2.28.1-更新說明.md
+grep -Fq 'language_not_compliant' src/proxy/final-language-gate.js
+grep -Fq 'visual_reasoning_stripped' src/visual/vision-client.js
+grep -Fq '/nothink' src/visual/vision-client.js
+grep -Fq '/nothink' src/services/final-language-repair.js
+grep -Fq 'media-v7' README.md
+grep -Fq 'visual-v7' README.md
+grep -Fq 'evidence-v3' README.md
 
 echo 'Verification complete.'

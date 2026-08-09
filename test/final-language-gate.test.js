@@ -123,3 +123,43 @@ test('V0.2.26.5 short explicit Simplified/Traditional Chinese is discriminated f
     'compliant',
   );
 });
+
+test('V0.2.28.1 rejects structurally valid external repair that remains English and falls back to Base', async () => {
+  const events = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: 'The image shows two anime-style characters.' }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async () => ['The image shows two anime-style characters.'],
+    rewriteBase: async () => ['這張圖片顯示兩名動漫風格角色。'],
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.backend, 'base');
+  assert.equal(result.response.content[0].text, '這張圖片顯示兩名動漫風格角色。');
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_failed'
+    && entry.backend === 'external'
+    && entry.code === 'language_not_compliant'
+    && entry.detected === 'en'
+    && entry.decision === 'repair'
+    && entry.fallback === 'base'));
+});
+
+test('V0.2.28.1 rejects non-compliant Base repair and preserves the original response', async () => {
+  const original = {
+    stop_reason: 'end_turn', content: [{ type: 'text', text: 'The original English answer must still be delivered if every repair backend fails.' }],
+  };
+  const events = [];
+  const result = await applyFinalLanguageGate(original, {
+    locale: 'zh-TW',
+    rewriteExternal: async () => ['Still English from external processor.'],
+    rewriteBase: async () => ['Still English from the Base repair.'],
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.action, 'fallback_original');
+  assert.deepEqual(result.response, original);
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_failed'
+    && entry.backend === 'base'
+    && entry.code === 'language_not_compliant'));
+});

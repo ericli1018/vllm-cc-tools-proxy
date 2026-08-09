@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28 metadata', async () => {
+test('package version is V0.2.28.1 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28');
-  assert.equal(lock.version, '0.2.28');
-  assert.equal(lock.packages[''].version, '0.2.28');
+  assert.equal(packageJson.version, '0.2.28.1');
+  assert.equal(lock.version, '0.2.28.1');
+  assert.equal(lock.packages[''].version, '0.2.28.1');
 });
 
 
@@ -409,4 +409,16 @@ test('README documents V0.2.26.5 native WebSearch bypass and stricter Chinese va
   assert.match(readme, /native_web_search/);
   assert.match(readme, /bypass Final Language Gate/);
   assert.match(readme, /zh-TW \/ zh-CN/);
+});
+
+test('README documents V0.2.28.1 GLM output-contract hardening', () => {
+  assert.match(readme, /V0\.2\.28\.1.*GLM.*output.*contract/i);
+  assert.match(readme, /post-validation/i);
+  assert.match(readme, /language_not_compliant/);
+  assert.match(readme, /\/nothink/);
+  assert.match(readme, /visual_reasoning_stripped/);
+  assert.match(readme, /media-v7/);
+  assert.match(readme, /visual-v7/);
+  assert.match(readme, /evidence-v3/);
+  assert.match(readme, /no new ENV/i);
 });

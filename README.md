@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28 adds source-aware IMAGE wire-contract observability for Claude Code `Read(image)`, direct images, and generic tool-result images while preserving the existing Vision pipeline, media cache semantics, focused PDF refinement, live progress, and managed-loop behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.1 hardens the external GLM output contract with final-language post-validation, provider-aware non-thinking controls, and Vision reasoning stripping while preserving the existing PDF/Image routing, focused reread, media progress, and managed-loop behavior.
+
+## V0.2.28.1 GLM output contract hardening
+
+V0.2.28.1 fixes a production case where Final Language Gate correctly detected an English final answer, invoked the configured external GLM translator, received HTTP 200 with valid segment markers, and still delivered English because the repaired text was never classified again. Every repair backend is now post-validated with the existing language classifier. If the repaired text clearly still requires repair, the backend is rejected with `language_not_compliant`; external repair falls back to isolated Base repair, and Base repair falls back to the original successful answer only when no repair backend can produce acceptable output. Short or code-heavy results that remain classifier-`uncertain` are not rejected merely for lacking enough prose signal.
+
+GLM non-thinking control is now provider-aware. Native Ollama Vision keeps `think=false`; when the configured Ollama model is GLM and thinking is disabled, the system instruction is also prefixed with `/nothink` so the GLM chat template receives its native no-think hint. The Ollama OpenAI-compatible language processor keeps `reasoning_effort=none`, adds the same `/nothink` hint for GLM, and still omits vLLM-only `chat_template_kwargs`. vLLM processors continue to use `chat_template_kwargs.enable_thinking=false` / `preserve_thinking=false`. No new ENV variable is introduced.
+
+Vision responses are sanitized at the Vision boundary before they become document/image evidence. Native `message.thinking` remains internal and is never copied into evidence; complete `<think>...</think>` regions and orphan think tags are removed from visible Vision content. Raw response diagnostics still report `visual_control_tags_detected`, while actual removals additionally emit `visual_reasoning_stripped`. Visible Markdown, crop tool calls, source lineage, and recursive crop behavior are preserved.
+
+Because old cached Vision evidence may contain escaped reasoning material, cache generations advance to `media-v7`, `visual-v7`, and `evidence-v3`. Media identity is unchanged; only visual/evidence cache entries are intentionally invalidated.
 
 
 ## V0.2.28 IMAGE wire-contract observability

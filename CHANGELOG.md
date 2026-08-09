@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.28.1 - 2026-08-09
+
+- Added post-validation after every Final Language repair backend. Structurally valid output that still clearly classifies as the wrong language is rejected with `language_not_compliant`; external repair falls back to Base repair.
+- Normalized GLM no-thinking controls: native Ollama keeps `think=false` and receives `/nothink` for GLM models; Ollama OpenAI-compatible repair keeps `reasoning_effort=none` plus `/nothink`; vLLM keeps `chat_template_kwargs.enable_thinking=false` / `preserve_thinking=false`.
+- Stripped native Vision `message.thinking`, complete `<think>...</think>` regions, and orphan think tags before evidence production while retaining raw control-tag diagnostics and adding `visual_reasoning_stripped`.
+- Advanced cache generations to `media-v7` / `visual-v7` / `evidence-v3` so V0.2.28 visual evidence containing reasoning material cannot be reused.
+- Added no ENV variables and preserved PDF/Image routing, `Read.pages`, image payload observability, recursive crop, Managed Loop recovery, Final Language fallback semantics, and WebSearch/WebFetch behavior.
+
 ## 0.2.28 - 2026-08-09
 
 - Added source-aware IMAGE wire-contract diagnostics for Claude Code `Read(image)`, direct images, and generic tool-result images.

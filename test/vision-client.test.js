@@ -50,11 +50,12 @@ test('Ollama native vision requests carry think=false and native image messages'
   const registry = new VisualAssetRegistry();
   const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
   const result = await analyzeVisualAssets([asset], {
-    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: false, registry,
+    baseUrl: url, model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL', provider: 'ollama', think: false, registry,
     cropImage: async () => { throw new Error('not expected'); },
   });
   assert.equal(result.markdown, 'OLLAMA RESULT');
   assert.equal(requests[0].think, false);
+  assert.match(requests[0].messages[0].content, /^\/nothink\b/);
   assert.equal(requests[0].messages[1].images.length, 1);
   assert.equal(typeof requests[0].messages[1].content, 'string');
   assert.equal('reasoning_effort' in requests[0], false);
@@ -289,4 +290,33 @@ test('V0.2.27 classification-only Vision request omits crop tools', async (t) =>
   assert.match(result.markdown, /ROUTE: TEXT/);
   assert.equal('tools' in requests[0], false);
   assert.equal('tool_choice' in requests[0], false);
+});
+
+test('V0.2.28.1 strips native and inline Vision reasoning before producing evidence', async (t) => {
+  const diagnostics = [];
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    message: {
+      role: 'assistant',
+      thinking: 'native private reasoning',
+      content: '<think>inline private reasoning</think>\n## Visible evidence\nTwo characters are visible.',
+      tool_calls: [],
+    },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 320, height: 240, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+
+  assert.equal(result.markdown, '## Visible evidence\nTwo characters are visible.');
+  assert.equal(result.markdown.includes('inline private reasoning'), false);
+  assert.equal(result.markdown.includes('native private reasoning'), false);
+  assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
+    && entry.details.tags.includes('think')));
+  assert.ok(diagnostics.some((entry) => entry.event === 'visual_reasoning_stripped'
+    && entry.details.native_thinking === true
+    && entry.details.inline_think_regions === 1));
 });

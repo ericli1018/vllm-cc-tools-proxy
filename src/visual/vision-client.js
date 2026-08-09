@@ -22,6 +22,16 @@ const CROP_TOOL = Object.freeze({
 
 const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Return Markdown only. Do not emit XML, HTML, reasoning delimiters, tool-call wrappers, function-result wrappers, chat-template tokens, or meta closing tags. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with evidence-focused Markdown.';
 
+
+function isGlmModel(model) {
+  return /(^|[\/:._-])glm(?:[\d._-]|$)/i.test(String(model || ''));
+}
+
+function noThinkSystemPrompt(system, { provider, model, think }) {
+  if (think || provider !== 'ollama' || !isGlmModel(model)) return system;
+  return /^\s*\/nothink\b/i.test(String(system || '')) ? system : `/nothink\n${system}`;
+}
+
 function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.toString('base64')}`; }
 
 function assetDescription(assets, prompt) {
@@ -71,10 +81,31 @@ function responseMessage(payload, provider) {
   return provider === 'ollama' ? payload?.message : payload?.choices?.[0]?.message;
 }
 
-function assistantMessage(message, provider) {
+function sanitizeVisionContent(message) {
+  const raw = String(message?.content || '');
+  let inlineThinkRegions = 0;
+  let orphanThinkTags = 0;
+  let content = raw.replace(/<think\b[^>]*>[\s\S]*?<\/think\s*>/gi, () => {
+    inlineThinkRegions += 1;
+    return '';
+  });
+  content = content.replace(/<\/?think\b[^>]*>/gi, () => {
+    orphanThinkTags += 1;
+    return '';
+  });
+  content = content.trim();
+  return {
+    content,
+    nativeThinking: typeof message?.thinking === 'string' && message.thinking.trim().length > 0,
+    inlineThinkRegions,
+    orphanThinkTags,
+  };
+}
+
+function assistantMessage(message, provider, visibleContent = String(message?.content || '')) {
   return {
     role: 'assistant',
-    content: String(message?.content || ''),
+    content: visibleContent,
     ...(provider === 'ollama' && typeof message?.thinking === 'string' && message.thinking ? { thinking: message.thinking } : {}),
     ...(Array.isArray(message?.tool_calls) ? { tool_calls: message.tool_calls } : {}),
   };
@@ -146,7 +177,7 @@ export async function analyzeVisualAssets(assets, {
   if (!['vllm', 'ollama'].includes(provider)) throw new HttpError(500, 'Unsupported visual provider.', { code: 'vision_provider_invalid' });
   const endpoint = endpointFor(baseUrl, provider);
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: noThinkSystemPrompt(SYSTEM_PROMPT, { provider, model, think }) },
     userMessageForAssets(provider, assets, prompt),
   ];
   let cropCount = 0;
@@ -184,17 +215,25 @@ export async function analyzeVisualAssets(assets, {
       const tags = [...new Set(controlTags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))];
       await onDiagnostic('visual_control_tags_detected', { tagCount: controlTags.length, tags });
     }
+    const sanitized = sanitizeVisionContent(message);
+    if (sanitized.nativeThinking || sanitized.inlineThinkRegions > 0 || sanitized.orphanThinkTags > 0) {
+      await onDiagnostic('visual_reasoning_stripped', {
+        native_thinking: sanitized.nativeThinking,
+        inline_think_regions: sanitized.inlineThinkRegions,
+        orphan_think_tags: sanitized.orphanThinkTags,
+      });
+    }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
     if (calls.length === 0 || !toolsEnabled) {
       return {
-        markdown: String(message.content || '') || 'Visual analysis completed without additional readable detail.',
+        markdown: sanitized.content || 'Visual analysis completed without additional readable detail.',
         warnings: [],
         cropCount,
       };
     }
 
-    messages.push(assistantMessage(message, provider));
+    messages.push(assistantMessage(message, provider, sanitized.content));
     cropRound += 1;
     const batchTooLarge = calls.length > 4;
     const cropAssets = [];

@@ -34,14 +34,16 @@ test('V0.2.26.4 external language processor rewrites segments with one tool-less
   const result = await rewriteFinalSegmentsWithExternalProcessor(['First.', 'Second.'], {
     locale: 'zh-TW',
     processor: {
-      enabled: true, provider: 'ollama', url: backend.url, model: 'qwen3.5:9b', apiKey: 'x', think: false, timeoutMs: 5000,
+      enabled: true, provider: 'ollama', url: backend.url, model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL', apiKey: 'x', think: false, timeoutMs: 5000,
     },
   });
 
   assert.deepEqual(result, ['第一段。', '第二段。']);
-  assert.equal(observed.model, 'qwen3.5:9b');
+  assert.equal(observed.model, 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL');
   assert.equal(observed.stream, false);
   assert.equal(observed.reasoning_effort, 'none');
+  assert.equal(observed.chat_template_kwargs, undefined);
+  assert.match(observed.messages[0].content, /^\/nothink\b/);
   assert.equal(observed.tools, undefined);
   assert.equal(observed.messages.length, 2);
   assert.match(observed.messages[1].content, /<<<VCC_LANG_SEGMENT_0>>>/);

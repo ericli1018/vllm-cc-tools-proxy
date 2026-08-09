@@ -150,6 +150,13 @@ export async function applyFinalLanguageGate(response, {
       if (!validSegments(rewritten, segments.length)) {
         throw Object.assign(new Error('Language repair returned invalid segments.'), { code: 'invalid_segments' });
       }
+      const repairedClassification = classifyFinalLanguage(rewritten.join('\n\n'), locale);
+      if (repairedClassification.decision === 'repair') {
+        throw Object.assign(new Error('Language repair output is not compliant with the target language.'), {
+          code: 'language_not_compliant',
+          languageClassification: repairedClassification,
+        });
+      }
       const clone = structuredClone(response);
       entries.forEach(({ index }, segmentIndex) => { clone.content[index].text = rewritten[segmentIndex]; });
       await onEvent('final_language_repair_completed', {
@@ -161,6 +168,10 @@ export async function applyFinalLanguageGate(response, {
         backend,
         target: locale,
         code: errorCode(error),
+        ...(error?.languageClassification ? {
+          detected: error.languageClassification.detected,
+          decision: error.languageClassification.decision,
+        } : {}),
         fallback: backend === 'external' && typeof rewriteBase === 'function' ? 'base' : 'original',
         elapsed_ms: Date.now() - startedAt,
       });
