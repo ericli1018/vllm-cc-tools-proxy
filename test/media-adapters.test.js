@@ -260,3 +260,22 @@ test('V0.2.28.2 failed empty Vision analysis is not written to media cache', asy
   }), (error) => error?.code === 'vision_empty_output');
   assert.equal(cacheWrites, 0);
 });
+
+
+test('V0.2.28.3 failed weak Vision analysis is not written to media cache', async () => {
+  const original = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let cacheWrites = 0;
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'ollama', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaCache: { get: async () => null, set: async () => { cacheWrites += 1; return true; } },
+    analysisRegistry: new MediaAnalysisRegistry(),
+    normalizeImage: async () => ({ buffer: Buffer.from('normalized'), mediaType: 'image/png', width: 600, height: 180 }),
+    analyzeVisualAssets: async () => { throw Object.assign(new Error('weak'), { code: 'vision_output_invalid' }); },
+  });
+  await assert.rejects(() => adapters.adaptImage({
+    type: 'image', source: { type: 'base64', media_type: 'image/png', data: original.toString('base64'), cache_key: 'f'.repeat(64) },
+  }), (error) => error?.code === 'vision_output_invalid');
+  assert.equal(cacheWrites, 0);
+});

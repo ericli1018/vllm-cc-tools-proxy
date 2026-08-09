@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.28.3 - 2026-08-09
+
+- Added a Vision Evidence Quality Gate so non-empty refusal-like, metadata-only, and very short non-observable outputs are not treated as valid evidence.
+- Added safe `vision_output_quality` diagnostics with `quality`, bounded reason codes, and `cacheable` without logging model content.
+- Added one Adaptive Thinking Recovery attempt: weak/empty terminal output retries with `think=true` and a bounded evidence-recovery instruction, while response-side reasoning stripping remains authoritative.
+- Persistent weak output now raises `vision_output_invalid`; persistent empty output continues to raise `vision_empty_output`. Neither failure path can write Media Cache.
+- Preserved concise concrete visual descriptions without forcing an unnecessary retry.
+- Advanced cache generations to `media-v7` / `visual-v9` / `evidence-v5` to invalidate V0.2.28.2 low-quality visual evidence.
+- Added no ENV variables and did not change PDF/Image routing, Read.pages, recursive crop, Final Language Gate, or managed-loop behavior.
+
 ## 0.2.28.2 - 2026-08-09
 
 - Removed V0.2.28.1 manual `/nothink` system-prefix injection from Ollama GLM Vision and external language-repair requests; provider-native thinking controls remain in place.

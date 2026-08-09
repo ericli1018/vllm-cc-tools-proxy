@@ -44,7 +44,7 @@ test('Ollama native vision requests carry think=false and native image messages'
     assert.equal(req.url, '/api/chat');
     const payload = await read(req); requests.push(payload);
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'OLLAMA RESULT', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'A red object is visible.', tool_calls: [] } }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
@@ -53,7 +53,7 @@ test('Ollama native vision requests carry think=false and native image messages'
     baseUrl: url, model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL', provider: 'ollama', think: false, registry,
     cropImage: async () => { throw new Error('not expected'); },
   });
-  assert.equal(result.markdown, 'OLLAMA RESULT');
+  assert.equal(result.markdown, 'A red object is visible.');
   assert.equal(requests[0].think, false);
   assert.doesNotMatch(requests[0].messages[0].content, /^\/nothink\b/);
   assert.equal(requests[0].messages[1].images.length, 1);
@@ -248,7 +248,7 @@ test('V0.2.26 Vision diagnostics expose safe Ollama backend routing and timing w
   const server = http.createServer(async (req, res) => {
     await read(req);
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'ok', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'A blue square is visible.', tool_calls: [] } }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
@@ -364,4 +364,106 @@ test('V0.2.28.2 rejects persistent empty Vision output instead of returning cach
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_empty_output');
   assert.equal(calls, 2);
+});
+
+test('V0.2.28.3 retries weak short Vision evidence with thinking enabled and accepts recovered evidence', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const content = requests.length === 1
+      ? 'Unable to view image.'
+      : 'The image shows two anime-style characters against a dark red and purple background, with bright effects and visible title text near the upper-left area.';
+    return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: requests.length === 2 ? 'private visual reasoning' : '', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1999, height: 1124, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].think, false);
+  assert.equal(requests[1].think, true);
+  assert.match(result.markdown, /two anime-style characters/);
+  assert.equal(result.markdown.includes('private visual reasoning'), false);
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
+    && entry.details.quality === 'weak'
+    && entry.details.reasons.includes('refusal_like')
+    && entry.details.cacheable === false));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_quality_retry'
+    && entry.details.from_think === false
+    && entry.details.to_think === true));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
+    && entry.details.quality === 'good'
+    && entry.details.cacheable === true));
+});
+
+test('V0.2.28.3 rejects persistent weak Vision evidence instead of accepting non-empty low-information text', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'Unable to view image.', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1999, height: 1124, label: 'image' });
+
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_output_invalid');
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].think, false);
+  assert.equal(requests[1].think, true);
+  assert.ok(diagnostics.filter((entry) => entry.event === 'vision_output_quality' && entry.details.quality === 'weak').length >= 2);
+});
+
+test('V0.2.28.3 accepts concise concrete observable Vision evidence without adaptive retry', async (t) => {
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'A red cat sits on a chair.', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(result.markdown, 'A red cat sits on a chair.');
+});
+
+test('V0.2.28.3 accepts concise Traditional Chinese observable evidence without recovery', async (t) => {
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: '紅色人物位於畫面左側。', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(result.markdown, '紅色人物位於畫面左側。');
 });

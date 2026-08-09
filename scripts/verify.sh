@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.2'
+test "$(node -p "require('./package.json').version")" = '0.2.28.3'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.3'
 
 
 test -f src/i18n/response-language.js
@@ -152,8 +152,8 @@ test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v7'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v8'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v4'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v9'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v5'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
@@ -311,5 +311,16 @@ grep -Fq 'finalLanguageRepairFallbackBase' src/i18n/response-language.js
 grep -Fq 'media-v7' README.md
 grep -Fq 'visual-v8' README.md
 grep -Fq 'evidence-v4' README.md
+
+# V0.2.28.3 Vision evidence quality gate + adaptive thinking recovery
+grep -Fq 'V0.2.28.3 Vision Evidence Quality Gate' README.md
+test -f V0.2.28.3-更新說明.md
+grep -Fq 'vision_output_quality' src/visual/vision-client.js
+grep -Fq 'vision_quality_retry' src/visual/vision-client.js
+grep -Fq "code: 'vision_output_invalid'" src/visual/vision-client.js
+grep -Fq "visualPromptVersion: 'visual-v9'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v5'" src/config.js
+grep -Fq 'visual-v9' README.md
+grep -Fq 'evidence-v5' README.md
 
 echo 'Verification complete.'

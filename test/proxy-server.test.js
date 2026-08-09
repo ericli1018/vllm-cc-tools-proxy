@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.3', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -221,12 +221,12 @@ test('streamed media request preprocesses under managed slot then streams base v
     const payload = JSON.parse((await read(req)).toString());
     assert.equal(payload.model, 'vision-model');
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'IMAGE ANALYSIS' } }] }));
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'The image shows readable text.' } }] }));
   });
   const vllm = http.createServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
     assert.equal(payload.stream, true);
-    assert.match(JSON.stringify(payload), /IMAGE ANALYSIS/);
+    assert.match(JSON.stringify(payload), /The image shows readable text\./);
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
     res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');

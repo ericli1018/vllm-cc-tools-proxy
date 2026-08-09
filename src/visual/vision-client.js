@@ -24,6 +24,34 @@ const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Ret
 
 
 
+const VISION_RECOVERY_PROMPT = 'The previous visual response did not contain sufficient observable evidence. Inspect the supplied image directly and return concrete visible objects, text, colors, layout, spatial relationships, diagram elements, and uncertainty. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.';
+
+const REFUSAL_LIKE_PATTERNS = [
+  /\b(?:unable|cannot|can't|could not|couldn't|do not have access|don't have access|cannot access|can't access|unable to access|cannot view|can't view|unable to view|cannot see|can't see|unable to see|no image|image unavailable|image is unavailable|image was not provided|image not provided)\b/i,
+  /(?:無法|不能|看不到|未提供|沒有提供|無法存取|無法查看|無法辨識).{0,18}(?:圖片|圖像|影像|視覺|內容|檔案|畫面)?/u,
+];
+
+const OBSERVABLE_SIGNAL_PATTERN = /\b(?:shows?|contains?|depicts?|features?|visible|appears?|see|left|right|background|foreground|upper|lower|center|red|blue|green|black|white|yellow|purple|orange|person|people|character|woman|man|girl|boy|cat|dog|chair|table|diagram|chart|schematic|text|logo|button|screen|building|car|tree|line|arrow|label)\b/i;
+const OBSERVABLE_CJK_PATTERN = /(?:顯示|可見|畫面|人物|角色|女性|男性|女孩|男孩|左側|右側|上方|下方|中央|背景|前景|紅色|藍色|綠色|黑色|白色|黃色|紫色|橘色|文字|標籤|圖表|示意圖|電路|箭頭|線條|按鈕|螢幕|建築|車輛|樹木)/u;
+const METADATA_SIGNAL_PATTERN = /\b(?:resolution|dimensions?|pixels?|px|file(?:name| size)?|image size|display size|aspect ratio)\b/i;
+
+function classifyVisionOutputQuality(content, { toolCallCount = 0 } = {}) {
+  const text = String(content || '').trim();
+  if (toolCallCount > 0) return { quality: 'tool_call', reasons: [], cacheable: false };
+  if (!text) return { quality: 'empty', reasons: ['empty'], cacheable: false };
+
+  const reasons = [];
+  if (REFUSAL_LIKE_PATTERNS.some((pattern) => pattern.test(text))) reasons.push('refusal_like');
+  const observableSignal = OBSERVABLE_SIGNAL_PATTERN.test(text) || OBSERVABLE_CJK_PATTERN.test(text);
+  if (METADATA_SIGNAL_PATTERN.test(text) && !observableSignal && text.length < 180) reasons.push('metadata_only');
+  if (text.length < 24 && !observableSignal) reasons.push('too_short');
+
+  return reasons.length > 0
+    ? { quality: 'weak', reasons, cacheable: false }
+    : { quality: 'good', reasons: [], cacheable: true };
+}
+
+
 function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.toString('base64')}`; }
 
 function assetDescription(assets, prompt) {
@@ -175,7 +203,8 @@ export async function analyzeVisualAssets(assets, {
   let cropCount = 0;
   let cropRound = 0;
   let toolsEnabled = Boolean(allowCrops);
-  let emptyOutputRetries = 0;
+  let qualityRecoveryRetries = 0;
+  let currentThink = Boolean(think);
   const transmittedAssets = [...assets];
 
   while (true) {
@@ -188,7 +217,7 @@ export async function analyzeVisualAssets(assets, {
         method: 'POST',
         signal,
         headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
-        body: JSON.stringify(requestBody({ provider, model, messages, think, toolsEnabled })),
+        body: JSON.stringify(requestBody({ provider, model, messages, think: currentThink, toolsEnabled })),
       }, { errorCode: 'vision_service_error' });
       await emitEvent(onEvent, 'vision_upstream_response', { ...summary, http_status: 200, elapsed_ms: Date.now() - requestStartedAt });
     } catch (error) {
@@ -217,34 +246,60 @@ export async function analyzeVisualAssets(assets, {
       });
     }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+    const quality = classifyVisionOutputQuality(sanitized.content, { toolCallCount: calls.length });
     await onDiagnostic('vision_output_observed', {
       content_chars: sanitized.content.length,
       thinking_chars: typeof message?.thinking === 'string' ? message.thinking.length : 0,
       tool_call_count: calls.length,
       control_tag_count: controlTags.length,
-      usable_content: sanitized.content.length > 0,
+      usable_content: quality.quality === 'good',
+    });
+    await onDiagnostic('vision_output_quality', {
+      quality: quality.quality,
+      reasons: quality.reasons,
+      cacheable: quality.cacheable,
     });
 
     if (calls.length === 0 || !toolsEnabled) {
-      if (sanitized.content) {
+      if (quality.quality === 'good') {
         return {
           markdown: sanitized.content,
           warnings: [],
           cropCount,
         };
       }
-      if (emptyOutputRetries < 1) {
-        emptyOutputRetries += 1;
-        await onDiagnostic('vision_empty_output_retry', {
-          attempt: emptyOutputRetries,
+      if (qualityRecoveryRetries < 1) {
+        qualityRecoveryRetries += 1;
+        const previousThink = currentThink;
+        currentThink = true;
+        if (quality.quality === 'empty') {
+          await onDiagnostic('vision_empty_output_retry', {
+            attempt: qualityRecoveryRetries,
+            max_retries: 1,
+            tool_call_count: calls.length,
+          });
+        }
+        await onDiagnostic('vision_quality_retry', {
+          attempt: qualityRecoveryRetries,
           max_retries: 1,
-          tool_call_count: calls.length,
+          quality: quality.quality,
+          reasons: quality.reasons,
+          from_think: previousThink,
+          to_think: currentThink,
         });
+        messages.push({ role: 'user', content: VISION_RECOVERY_PROMPT });
         continue;
       }
-      throw new HttpError(502, 'Visual service returned no usable visible content.', {
-        code: 'vision_empty_output',
+      if (quality.quality === 'empty') {
+        throw new HttpError(502, 'Visual service returned no usable visible content.', {
+          code: 'vision_empty_output',
+          retryable: true,
+        });
+      }
+      throw new HttpError(502, 'Visual service returned low-quality visible content.', {
+        code: 'vision_output_invalid',
         retryable: true,
+        details: { quality: quality.quality, reasons: quality.reasons },
       });
     }
 

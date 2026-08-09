@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28.2 metadata', async () => {
+test('package version is V0.2.28.3 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28.2');
-  assert.equal(lock.version, '0.2.28.2');
-  assert.equal(lock.packages[''].version, '0.2.28.2');
+  assert.equal(packageJson.version, '0.2.28.3');
+  assert.equal(lock.version, '0.2.28.3');
+  assert.equal(lock.packages[''].version, '0.2.28.3');
 });
 
 
@@ -432,4 +432,13 @@ test('README documents V0.2.28.2 Vision empty-output contract hotfix', () => {
   assert.match(readme, /visual-v8/);
   assert.match(readme, /evidence-v4/);
   assert.match(readme, /no new ENV/i);
+});
+
+test('README documents V0.2.28.3 Vision evidence quality gate and adaptive thinking recovery', async () => {
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  assert.match(readme, /V0\.2\.28\.3 Vision Evidence Quality Gate/i);
+  assert.match(readme, /vision_output_quality/);
+  assert.match(readme, /vision_quality_retry/);
+  assert.match(readme, /visual-v9/);
+  assert.match(readme, /evidence-v5/);
 });

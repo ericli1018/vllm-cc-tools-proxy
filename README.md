@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.2 fixes the V0.2.28.1 GLM Vision empty-output regression by removing manual `/nothink` system-prefix injection, validating usable Vision output, retrying one empty response, and refusing to cache persistent empty evidence while preserving response-side reasoning stripping and the existing PDF/Image routing, focused reread, media progress, and managed-loop behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.3 adds a Vision Evidence Quality Gate and Adaptive Thinking Recovery so non-empty but refusal-like, metadata-only, or otherwise weak visual output cannot become cached evidence. A weak/empty terminal Vision result receives exactly one recovery attempt with thinking enabled; reasoning remains private and only good visible evidence may reach Laguna or Media Cache. Existing PDF/Image routing, focused reread, media progress, Final Language Gate, and managed-loop behavior remain unchanged.
+
+## V0.2.28.3 Vision Evidence Quality Gate + Adaptive Thinking Recovery
+
+V0.2.28.3 closes the gap left by V0.2.28.2 where any non-empty Vision response was treated as usable. A production capture showed `content_chars=19`, `thinking_chars=0`, `usable_content=true`, followed immediately by `media_cache_write`; later requests repeatedly hit that low-information evidence. The Vision boundary now classifies terminal output as `good`, `weak`, or `empty` (tool-call rounds remain separate). Refusal/access-limitation phrases, metadata-only output, and very short non-observable output are `weak` and cannot be cached. Concise concrete observations remain valid.
+
+On the first `weak` or `empty` terminal result, the Proxy emits `vision_output_quality` and `vision_quality_retry`, switches the recovery attempt to `think=true`, and supplies a bounded recovery instruction asking for concrete observable evidence. Native `message.thinking` and inline `<think>...</think>` remain stripped before evidence production. If the recovery output is still weak, the request fails with `vision_output_invalid`; persistent empty output continues to fail with `vision_empty_output`. Neither failure path reaches Media Cache. No `/nothink` injection is reintroduced and no new ENV variable is added.
+
+Safe diagnostics now make transport success distinct from evidence quality: `vision_output_observed` reports output shape, `vision_output_quality` reports only quality/reason/cacheability, and `vision_quality_retry` reports the bounded transition from the configured thinking state to recovery thinking. Raw Vision content and reasoning are never logged.
+
+Because V0.2.28.2 may already contain cached non-empty weak evidence, cache generations advance to `media-v7`, `visual-v9`, and `evidence-v5`. Media identity is unchanged; visual/evidence cache entries are intentionally invalidated.
 
 ## V0.2.28.2 Vision empty-output contract hotfix
 
