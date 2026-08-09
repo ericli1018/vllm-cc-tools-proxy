@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.26.5 hotfix metadata', async () => {
+test('package version is V0.2.27 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.26+hotfix.5');
-  assert.equal(lock.version, '0.2.26+hotfix.5');
-  assert.equal(lock.packages[''].version, '0.2.26+hotfix.5');
+  assert.equal(packageJson.version, '0.2.27');
+  assert.equal(lock.version, '0.2.27');
+  assert.equal(lock.packages[''].version, '0.2.27');
 });
 
 
@@ -334,6 +334,16 @@ test('README documents V0.2.26 recursive Vision evidence pipeline', () => {
 });
 
 
+
+
+test('README documents V0.2.27 routed schematic PDF pipeline', () => {
+  assert.match(readme, /V0\.2\.27.*schematic/i);
+  assert.match(readme, /TEXT.*DIAGRAM.*SCHEMATIC.*DENSE_PAGE/is);
+  assert.match(readme, /overlapping tiles/i);
+  assert.match(readme, /media-v7/);
+  assert.match(readme, /visual-v6/);
+  assert.match(readme, /evidence-v2/);
+});
 
 
 test('README documents V0.2.26.2 native-language visible-output contract', () => {

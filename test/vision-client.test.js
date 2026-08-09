@@ -269,3 +269,24 @@ test('V0.2.26 Vision diagnostics expose safe Ollama backend routing and timing w
   assert.ok(Number.isFinite(response.fields.elapsed_ms));
   assert.equal(JSON.stringify(events).includes('secret-image-bytes'), false);
 });
+
+test('V0.2.27 classification-only Vision request omits crop tools', async (t) => {
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'ROUTE: TEXT' } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const root = registry.add({ buffer: Buffer.from('png'), mediaType: 'image/png', width: 10, height: 10 });
+  const result = await analyzeVisualAssets([root], {
+    baseUrl: 'http://vision.local', model: 'vision', registry,
+    cropImage: async () => { throw new Error('crop must not run'); },
+    allowCrops: false,
+  });
+  assert.match(result.markdown, /ROUTE: TEXT/);
+  assert.equal('tools' in requests[0], false);
+  assert.equal('tool_choice' in requests[0], false);
+});

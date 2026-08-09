@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.26+hotfix.5'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.26.5'
+test "$(node -p "require('./package.json').version")" = '0.2.27'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27'
 
 
 test -f src/i18n/response-language.js
@@ -151,9 +151,9 @@ test -f src/proxy/protocol-diagnostics.js
 test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
-grep -Fq "pipelineVersion: 'media-v6'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v5'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v1'" src/config.js
+grep -Fq "pipelineVersion: 'media-v7'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v6'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v2'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
@@ -237,4 +237,15 @@ grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
  grep -Fq 'if (!nativeWebSearchFastLane)' src/services/proxy-server.js
  grep -Fq 'variantDominates' src/proxy/final-language-gate.js
  test -f V0.2.26.5-更新說明.md
+# V0.2.27 routed schematic PDF release contract
+grep -Fq 'V0.2.27 routed schematic PDF pipeline' README.md
+grep -Fq 'media-v7' README.md
+grep -Fq 'visual-v6' README.md
+grep -Fq 'evidence-v2' README.md
+test -f src/visual/pdf-page-classifier.js
+test -f src/visual/pdf-tiler.js
+test -f src/visual/pdf-evidence-merger.js
+test -f V0.2.27-更新說明.md
+grep -Fq 'pdf_schematic_tile' src/parsers/pdf.js
+grep -Fq 'registerRegion' src/visual/asset-registry.js
 

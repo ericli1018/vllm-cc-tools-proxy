@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.27 - 2026-08-09
+
+- Added low-resolution PDF page routing with the bounded `TEXT`, `DIAGRAM`, `SCHEMATIC`, and `DENSE_PAGE` classes so text-rich vector-only technical drawings can enter Vision processing.
+- Added a schematic-specific 300–400 DPI overview plus deterministic 15% overlapping tiles rendered from the original PDF, with a default 360 DPI tile render and bounded maximum tile count.
+- Added depth-0 deterministic visual regions so recursive model-requested crops from schematic tiles continue to resolve against the original PDF at the existing bounded 600–720 DPI policy.
+- Added conservative page-level schematic evidence merge with exact overlap deduplication, source retention, and explicit uncertainty preservation.
+- Routed scanned/image-only text through Vision transcription without adding a dedicated OCR dependency or new ENV settings.
+- Added classification, tiling, region-lineage, schematic merge, scanned-page, and tool-suppression regression tests.
+- Advanced cache contracts to `media-v7`, `visual-v6`, and `evidence-v2`.
+- Preserved vLLM/Ollama Vision providers, WebSearch/WebFetch, managed-loop behavior, Final Language Gate, and existing ENV names.
+
 ## 0.2.26.5 - 2026-08-08
 
 - Bypassed Final Language Gate for the exclusive `native_web_search` fast lane so Claude Code internal WebSearch child/results are never presentation-rewritten.

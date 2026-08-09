@@ -75,6 +75,43 @@ export class VisualAssetRegistry {
     return asset;
   }
 
+  registerRegion(parentSourceId, image, { rootBox, label = '', regionKind = 'region', sourceMetadata = {} } = {}) {
+    const parent = this.get(parentSourceId);
+    if (!image || !Buffer.isBuffer(image.buffer) || !Number.isFinite(image.width) || !Number.isFinite(image.height)) {
+      throw new HttpError(422, 'Invalid visual region asset.', { code: 'invalid_visual_asset' });
+    }
+    if (!Array.isArray(rootBox) || rootBox.length !== 4 || rootBox.some((value) => !Number.isFinite(value))) {
+      throw new HttpError(422, 'Invalid visual region coordinates.', { code: 'invalid_visual_region_coordinates' });
+    }
+    const normalizedRootBox = clampBox(rootBox);
+    if (normalizedRootBox[2] <= normalizedRootBox[0] || normalizedRootBox[3] <= normalizedRootBox[1]) {
+      throw new HttpError(422, 'Invalid visual region rectangle.', { code: 'invalid_visual_region_rectangle' });
+    }
+    const root = this.get(parent.rootSourceId);
+    const sourceId = `asset-${this.nextId++}`;
+    const asset = {
+      sourceId,
+      rootSourceId: parent.rootSourceId,
+      parentSourceId,
+      depth: parent.depth,
+      rootBox: normalizedRootBox,
+      buffer: image.buffer,
+      mediaType: image.mediaType || 'image/png',
+      width: image.width,
+      height: image.height,
+      label: image.label || label || `${regionKind} of ${parentSourceId}`,
+      regionKind,
+      sourceKind: root.sourceKind,
+      sourceMetadata: { ...root.sourceMetadata, ...sourceMetadata },
+      rootBuffer: root.rootBuffer,
+      rootMediaType: root.rootMediaType,
+      rootWidth: root.rootWidth,
+      rootHeight: root.rootHeight,
+    };
+    this.assets.set(sourceId, asset);
+    return asset;
+  }
+
   authorizeCrop(sourceId, bbox, round) {
     const asset = this.get(sourceId);
     if (!Number.isInteger(round) || round < 1 || round > this.maxCropRounds) {

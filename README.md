@@ -1,8 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.26.5 tightens the V0.2.26.4 Final Language Gate by excluding the internal `native_web_search` lane and improving short explicit zh-TW / zh-CN variant discrimination.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27 adds routed PDF visual processing with a schematic-specific evidence path while preserving the existing recursive Vision crop workflow.
 
+## V0.2.27 routed schematic PDF pipeline
 
+V0.2.27 changes PDF routing from the V0.2.26 low-text/raster-only heuristic into a bounded page classifier with exactly four routes: `TEXT`, `DIAGRAM`, `SCHEMATIC`, and `DENSE_PAGE`. When Vision is configured, every PDF page receives a low-resolution classification overview so text-rich vector-only schematics are no longer silently treated as native-text-only pages. Classifier failures and unsupported results conservatively fall back to `DENSE_PAGE`.
+
+`TEXT` keeps sufficient native Poppler text unchanged; low-text/scanned text pages use Vision transcription. `DIAGRAM` uses a full-page overview plus the existing recursive ROI crop mechanism. `DENSE_PAGE` is the conservative mixed-content fallback. No OCR engine or new ENV variable is introduced.
+
+`SCHEMATIC` uses a dedicated path: a 300–400 DPI full-page overview, deterministic **overlapping tiles** rendered directly from the original PDF at 360 DPI, Vision extraction of observable components/pins/nets/power/clock/reset relationships, and a page-level evidence merge that removes exact overlap duplicates while retaining source identifiers and uncertainty. Tiles are registered as depth-0 regions, so a model-requested crop from a tile still maps back to the original PDF and uses the existing bounded 600–720 DPI recursive crop policy.
+
+The Proxy remains an evidence-preprocessing layer: it does not perform Device Tree, API, driver, or other engineering conclusions. Laguna receives neutral text evidence and remains responsible for engineering reasoning. Flow charts, timing diagrams, block diagrams, pinouts and similar content remain under the generic `DIAGRAM`/`DENSE_PAGE` paths in this release rather than receiving dedicated subtypes.
+
+Because routing, visual prompts, schematic region evidence and page merge semantics changed, the media cache contract advances to `media-v7`, `visual-v6`, and `evidence-v2`. Existing vLLM/Ollama Vision provider selection and all existing ENV names are preserved.
 
 ## V0.2.26.5 Final Language Gate boundary hotfix
 

@@ -50,3 +50,23 @@ test('V0.2.26 registry composes nested crops back to root coordinates and regist
   assert.equal(second.depth, 2);
   assert.deepEqual(second.rootBox, [300, 300, 700, 700]);
 });
+
+test('V0.2.27 deterministic region preserves root lineage without consuming crop depth', () => {
+  const registry = new VisualAssetRegistry();
+  const root = registry.add({
+    buffer: Buffer.from('root'), mediaType: 'image/png', width: 2000, height: 1000,
+    sourceKind: 'pdf_page', sourceMetadata: { page: 9 },
+  });
+  const tile = registry.registerRegion(root.sourceId, {
+    buffer: Buffer.from('tile'), mediaType: 'image/png', width: 1200, height: 700,
+  }, { rootBox: [100, 200, 700, 800], label: 'tile 1', regionKind: 'schematic_tile' });
+  assert.equal(tile.rootSourceId, root.sourceId);
+  assert.equal(tile.parentSourceId, root.sourceId);
+  assert.equal(tile.depth, 0);
+  assert.deepEqual(tile.rootBox, [100, 200, 700, 800]);
+  assert.equal(tile.regionKind, 'schematic_tile');
+
+  const auth = registry.authorizeCrop(tile.sourceId, [250, 250, 750, 750], 1);
+  assert.equal(auth.depth, 1);
+  assert.deepEqual(auth.rootBox, [250, 350, 550, 650]);
+});

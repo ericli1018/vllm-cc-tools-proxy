@@ -139,6 +139,7 @@ export async function analyzeVisualAssets(assets, {
   onDiagnostic = () => {},
   onEvent = () => {},
   maxCropRounds = 3,
+  allowCrops = true,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
   if (!baseUrl || !model) throw new HttpError(422, 'Visual endpoint is required for this media.', { code: 'vision_endpoint_required' });
@@ -150,7 +151,7 @@ export async function analyzeVisualAssets(assets, {
   ];
   let cropCount = 0;
   let cropRound = 0;
-  let toolsEnabled = true;
+  let toolsEnabled = Boolean(allowCrops);
   const transmittedAssets = [...assets];
 
   while (true) {
