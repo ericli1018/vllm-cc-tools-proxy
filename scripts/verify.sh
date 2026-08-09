@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.4'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.4'
+test "$(node -p "require('./package.json').version")" = '0.2.28.5'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.5'
 
 
 test -f src/i18n/response-language.js
@@ -320,6 +320,24 @@ grep -Fq 'vision_quality_retry' src/visual/vision-client.js
 grep -Fq "code: 'vision_output_invalid'" src/visual/vision-client.js
 grep -Fq 'visual-v9' README.md
 grep -Fq 'evidence-v5' README.md
+
+
+# V0.2.28.5 recovery-only managed continuation state compression
+grep -Fq 'V0.2.28.5 managed continuation state compression' README.md
+test -f V0.2.28.5-更新說明.md
+test -f src/proxy/continuation-state.js
+test -f src/services/continuation-state-compressor.js
+grep -Fq 'prepareContinuationState' src/proxy/managed-loop.js
+grep -Fq 'compressContinuationWindow' src/services/proxy-server.js
+grep -Fq 'WEB_FETCH_PROCESSOR_' README.md
+grep -Fq 'managed_continuation_state_preserved' src/proxy/continuation-state.js
+grep -Fq 'managed_continuation_compression_failed' src/proxy/continuation-state.js
+grep -Fq 'CONTINUATION_WINDOW_CHARS = 24_000' src/proxy/continuation-state.js
+grep -Fq 'CONTINUATION_OVERLAP_CHARS = 4_000' src/proxy/continuation-state.js
+! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
+! grep -Eq 'CONTINUATION_[A-Z0-9_]+:' compose.yaml
+grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v6'" src/config.js
 
 
 # V0.2.28.4 schematic tile isolation + Vision transport diagnostics

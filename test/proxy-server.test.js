@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.4', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.5', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -795,7 +795,7 @@ test('V0.2.27.3 continuation visible progress resets received bytes for the new 
   });
   assert.equal(response.status, 200);
   const stream = await response.text();
-  const continuationIndex = stream.indexOf('主模型未產生有效下一步；正在進行一次受控續接');
+  const continuationIndex = stream.indexOf('主模型尚未形成有效下一步；');
   assert.ok(continuationIndex >= 0, 'missing continuation progress');
   const continuationStream = stream.slice(continuationIndex);
 

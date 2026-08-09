@@ -22,6 +22,11 @@ function hasReceivedBytes(value) {
   return Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
+function formatCharacterCount(value) {
+  const count = Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0;
+  return count.toLocaleString('en-US');
+}
+
 const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
@@ -40,7 +45,12 @@ const PROFILES = Object.freeze({
       modelPlanning: () => '正在請主模型規劃下一步…',
       modelToolResults: () => '主模型正在整理工具結果…',
       finalChannelRecovery: () => '主模型答案通道異常；正在進行一次短格式修正…',
-      continuationRecovery: () => '主模型未產生有效下一步；正在進行一次受控續接…',
+      continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
+        ? `主模型尚未形成有效下一步；本輪產生 ${formatCharacterCount(candidateChars)} 字元工作狀態，正在整理並保留續接重點…`
+        : '主模型尚未形成有效下一步；正在整理並保留本輪工作狀態以進行受控續接…',
+      continuationStatePreserved: ({ candidateChars = 0, handoffChars = 0, compressed = false } = {}) => compressed
+        ? `已將本輪 ${formatCharacterCount(candidateChars)} 字元工作狀態整理為 ${formatCharacterCount(handoffChars)} 字元續接狀態；正在基於剛才的工作內容接續完成下一步…`
+        : `已保留本輪 ${formatCharacterCount(handoffChars)} 字元工作狀態；正在基於剛才的工作內容接續完成下一步…`,
       finalRoundReserved: () => '研究工具預算已停止擴張；保留時間給主模型完成下一步…',
       finalLanguageRepair: () => '主模型已完成回答；正在轉換為繁體中文…',
       finalLanguageRepairFallbackBase: () => '外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
@@ -102,7 +112,12 @@ const PROFILES = Object.freeze({
       modelPlanning: () => '正在请主模型规划下一步…',
       modelToolResults: () => '主模型正在整理工具结果…',
       finalChannelRecovery: () => '主模型答案通道异常；正在进行一次短格式修正…',
-      continuationRecovery: () => '主模型未生成有效下一步；正在进行一次受控续接…',
+      continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
+        ? `主模型尚未形成有效下一步；本轮生成 ${formatCharacterCount(candidateChars)} 字符工作状态，正在整理并保持续接重点…`
+        : '主模型尚未形成有效下一步；正在整理并保留本轮工作状态以进行受控续接…',
+      continuationStatePreserved: ({ candidateChars = 0, handoffChars = 0, compressed = false } = {}) => compressed
+        ? `已将本轮 ${formatCharacterCount(candidateChars)} 字符工作状态整理为 ${formatCharacterCount(handoffChars)} 字符续接状态；正在基于刚才的工作内容继续完成下一步…`
+        : `已保留本轮 ${formatCharacterCount(handoffChars)} 字符工作状态；正在基于刚才的工作内容继续完成下一步…`,
       finalRoundReserved: () => '研究工具预算已停止扩张；保留时间给主模型完成下一步…',
       finalLanguageRepair: () => '主模型已完成回答；正在转换为简体中文…',
       finalLanguageRepairFallbackBase: () => '外部语言处理未达到要求；正在改由主模型完成简体中文转换…',
@@ -164,7 +179,12 @@ const PROFILES = Object.freeze({
       modelPlanning: () => 'The main model is planning the next step…',
       modelToolResults: () => 'The main model is processing tool results…',
       finalChannelRecovery: () => 'The main model response channel is malformed; applying one short format repair…',
-      continuationRecovery: () => 'The main model produced no valid next step; applying one bounded continuation…',
+      continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
+        ? `The main model did not form a valid next step; organizing and preserving ${formatCharacterCount(candidateChars)} characters of this round’s model working state…`
+        : 'The main model did not form a valid next step; preserving this round’s model working state for one controlled continuation…',
+      continuationStatePreserved: ({ candidateChars = 0, handoffChars = 0, compressed = false } = {}) => compressed
+        ? `Compacted ${formatCharacterCount(candidateChars)} characters of this round’s model working state into ${formatCharacterCount(handoffChars)} continuation-state characters; continuing from that work…`
+        : `Preserved ${formatCharacterCount(handoffChars)} characters of this round’s model working state; continuing from that work…`,
       finalRoundReserved: () => 'Research tool expansion stopped; reserving time for the main model to finish the next step…',
       finalLanguageRepair: () => 'The main model finished the answer; converting it to English…',
       finalLanguageRepairFallbackBase: () => 'The external language processor did not meet the output contract; switching to the main model for English conversion…',
@@ -226,7 +246,12 @@ const PROFILES = Object.freeze({
       modelPlanning: () => 'メインモデルが次の手順を計画しています…',
       modelToolResults: () => 'メインモデルがツールの結果を処理しています…',
       finalChannelRecovery: () => 'メインモデルの応答チャネルに異常があります。短い形式修正を1回実行します…',
-      continuationRecovery: () => 'メインモデルが有効な次の手順を生成しませんでした。制限付きの継続処理を1回実行します…',
+      continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
+        ? `メインモデルが有効な次の手順を形成できませんでした。このラウンドの作業状態 ${formatCharacterCount(candidateChars)} 文字を整理・保持しています…`
+        : 'メインモデルが有効な次の手順を形成できませんでした。このラウンドの作業状態を保持して継続処理を準備しています…',
+      continuationStatePreserved: ({ candidateChars = 0, handoffChars = 0, compressed = false } = {}) => compressed
+        ? `このラウンドの作業状態 ${formatCharacterCount(candidateChars)} 文字を ${formatCharacterCount(handoffChars)} 文字の継続状態に整理しました。直前の作業を引き継いで続行します…`
+        : `このラウンドの作業状態 ${formatCharacterCount(handoffChars)} 文字を保持しました。直前の作業を引き継いで続行します…`,
       finalRoundReserved: () => '調査ツールの拡張を停止し、メインモデルが次の手順を完了する時間を確保します…',
       finalLanguageRepair: () => 'メインモデルの回答が完了しました。日本語に変換しています…',
       finalLanguageRepairFallbackBase: () => '外部言語処理が要件を満たさなかったため、メインモデルで日本語変換を続行しています…',
@@ -288,7 +313,12 @@ const PROFILES = Object.freeze({
       modelPlanning: () => '주 모델이 다음 단계를 계획하고 있습니다…',
       modelToolResults: () => '주 모델이 도구 실행 결과를 처리하고 있습니다…',
       finalChannelRecovery: () => '주 모델 응답 채널에 이상이 있습니다. 짧은 형식 수정을 한 번 수행합니다…',
-      continuationRecovery: () => '주 모델이 유효한 다음 단계를 생성하지 못했습니다. 제한된 이어쓰기를 한 번 수행합니다…',
+      continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
+        ? `주 모델이 유효한 다음 단계를 만들지 못했습니다. 이번 라운드의 모델 작업 상태 ${formatCharacterCount(candidateChars)}자를 정리하고 보존하고 있습니다…`
+        : '주 모델이 유효한 다음 단계를 만들지 못했습니다. 이번 라운드의 모델 작업 상태를 보존해 제한된 이어쓰기를 준비합니다…',
+      continuationStatePreserved: ({ candidateChars = 0, handoffChars = 0, compressed = false } = {}) => compressed
+        ? `이번 라운드의 모델 작업 상태 ${formatCharacterCount(candidateChars)}자를 ${formatCharacterCount(handoffChars)}자의 이어쓰기 상태로 정리했습니다. 방금 작업을 이어서 계속합니다…`
+        : `이번 라운드의 모델 작업 상태 ${formatCharacterCount(handoffChars)}자를 보존했습니다. 방금 작업을 이어서 계속합니다…`,
       finalRoundReserved: () => '조사 도구 확장을 중단하고 주 모델이 다음 단계를 완료할 시간을 확보합니다…',
       finalLanguageRepair: () => '주 모델 답변이 완료되었습니다. 한국어로 변환하고 있습니다…',
       finalLanguageRepairFallbackBase: () => '외부 언어 처리 결과가 요구 사항을 충족하지 않아 주 모델로 한국어 변환을 계속합니다…',

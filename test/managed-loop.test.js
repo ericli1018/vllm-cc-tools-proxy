@@ -507,7 +507,7 @@ test('runManagedLoop preserves tools for unfinished thinking and executes a reco
       if (requests.length === 2) {
         assert.equal(request.tools.length, 2);
         assert.deepEqual(request.tool_choice, { type: 'auto' });
-        assert.match(JSON.stringify(request.messages.at(-1)), /Previous incomplete model state/);
+        assert.match(JSON.stringify(request.messages.at(-1)), /Prior model working state/);
         assert.match(JSON.stringify(request.messages.at(-1)), /I still need to compare/);
         assert.match(JSON.stringify(request.messages.at(-1)), /Complete exactly one valid next action/);
         assert.equal(request.chat_template_kwargs.enable_thinking, false);
@@ -734,7 +734,7 @@ test('V0.2.19 validates tool-use responses and recovers leaked protocol markup b
         assert.equal(request.chat_template_kwargs.enable_thinking, false);
         assert.equal(request.chat_template_kwargs.preserve_thinking, false);
         assert.ok(Array.isArray(request.tools));
-        assert.match(JSON.stringify(request.messages.at(-1)), /Previous incomplete model state/);
+        assert.match(JSON.stringify(request.messages.at(-1)), /Prior model working state/);
         assert.doesNotMatch(JSON.stringify(request.messages.at(-1)), /<tool_call>|<arg_key>|<arg_value>/);
         return response([{ type: 'tool_use', id: 'safe-recovered', name: 'WebSearch', input: { query: 'good' } }], 'tool_use');
       }
@@ -765,9 +765,9 @@ test('V0.2.19 continuation recovery carries bounded sanitized prior state with t
       const rendered = JSON.stringify(request.messages.at(-1));
       assert.equal(request.chat_template_kwargs.enable_thinking, false);
       assert.equal(request.chat_template_kwargs.preserve_thinking, false);
-      assert.match(rendered, /Previous incomplete model state/);
+      assert.match(rendered, /Prior model working state/);
       assert.doesNotMatch(rendered, /<tool_call>/);
-      assert.ok(rendered.length < 12000);
+      assert.ok(rendered.length < 30000);
       return response([{ type: 'text', text: 'recovered final' }]);
     },
     executeTool: async () => ({}),
@@ -1040,4 +1040,81 @@ test('V0.2.25 model stall deadline aborts after response bytes start and then st
     assert.equal(error.code, 'managed_model_stall_timeout');
     return true;
   });
+});
+
+test('V0.2.28.5 LARGE controlled continuation compresses only prior model state and excludes original tool evidence', async () => {
+  const compressorWindows = [];
+  const diagnostics = [];
+  const requests = [];
+  const hugeThinking = `PLAN-START ${'reasoning '.repeat(13000)} PLAN-END`;
+  const originalSecret = 'TOOL-RESULT-MUST-NOT-ENTER-COMPRESSOR';
+
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'Read', input_schema: { type: 'object' } }],
+    messages: [
+      { role: 'user', content: 'continue coding' },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 'old-read', name: 'Read', input: { file_path: '/workspace/a.c' } }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'old-read', content: originalSecret }] },
+    ],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) return response([{ type: 'thinking', thinking: hugeThinking }]);
+      const rendered = JSON.stringify(request.messages.at(-1));
+      assert.match(rendered, /Prior model working state/);
+      assert.match(rendered, /Compressed historical model working state/);
+      assert.match(rendered, /Recent raw model working state/);
+      assert.ok(rendered.length < 40000);
+      return response([{ type: 'text', text: 'continued final' }]);
+    },
+    executeTool: async () => ({}),
+    compressContinuationWindow: async (window) => {
+      compressorWindows.push(structuredClone(window));
+      assert.doesNotMatch(window.text, new RegExp(originalSecret));
+      assert.doesNotMatch(window.text, /old-read|\/workspace\/a\.c/);
+      return {
+        working_assumptions: ['The model is implementing the requested coding task.'],
+        decisions_considered: ['Continue from the existing plan.'],
+        rejected_options: [],
+        unresolved_items: ['Implementation is not finished.'],
+        intended_next_actions: ['Create the planned source files.'],
+      };
+    },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(result.content[0].text, 'continued final');
+  assert.ok(compressorWindows.length >= 5);
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'
+    && entry.details.mode === 'large'
+    && entry.details.compressed === true));
+});
+
+test('V0.2.28.5 continuation compression failure falls back to deterministic state and still recovers', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  const hugeThinking = `HEAD-MARKER ${'analysis '.repeat(14000)} TAIL-MARKER`;
+  const result = await runManagedLoop({ model: 'm', tools: [{ name: 'Read', input_schema: { type: 'object' } }], messages: [{ role: 'user', content: 'go' }] }, {
+    upstream: async (request) => {
+      calls += 1;
+      if (calls === 1) return response([{ type: 'thinking', thinking: hugeThinking }]);
+      const rendered = JSON.stringify(request.messages.at(-1));
+      assert.match(rendered, /HEAD-MARKER/);
+      assert.match(rendered, /TAIL-MARKER/);
+      assert.match(rendered, /earlier model working state omitted/);
+      return response([{ type: 'text', text: 'fallback recovery succeeded' }]);
+    },
+    executeTool: async () => ({}),
+    compressContinuationWindow: async () => {
+      throw Object.assign(new Error('processor unavailable'), { code: 'processor_down' });
+    },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(result.content[0].text, 'fallback recovery succeeded');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_continuation_compression_failed'
+    && entry.details.code === 'processor_down'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'
+    && entry.details.compressed === false));
 });

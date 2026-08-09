@@ -156,3 +156,18 @@ test('V0.2.28.2 exposes distinct external-to-Base language repair fallback progr
     '外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
   );
 });
+
+test('V0.2.28.5 controlled continuation progress reports produced and preserved model-state sizes', () => {
+  assert.equal(
+    language.statusText('zh-TW', 'continuationRecovery', { candidateChars: 184221 }),
+    '主模型尚未形成有效下一步；本輪產生 184,221 字元工作狀態，正在整理並保留續接重點…',
+  );
+  assert.equal(
+    language.statusText('zh-TW', 'continuationStatePreserved', { candidateChars: 184221, handoffChars: 28411, compressed: true }),
+    '已將本輪 184,221 字元工作狀態整理為 28,411 字元續接狀態；正在基於剛才的工作內容接續完成下一步…',
+  );
+  assert.equal(
+    language.statusText('en-US', 'continuationStatePreserved', { candidateChars: 5000, handoffChars: 5000, compressed: false }),
+    'Preserved 5,000 characters of this round’s model working state; continuing from that work…',
+  );
+});

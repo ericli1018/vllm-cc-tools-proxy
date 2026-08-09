@@ -1,6 +1,20 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.4 adds PDF schematic tile isolation and Vision transport diagnostics so a multi-tile schematic cannot stall one oversized multimodal request for minutes, and one failed tile cannot abort the entire PDF. Vision quality gating from V0.2.28.3 remains unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.5 adds recovery-only managed continuation state compression so a long thinking/text round can preserve useful working state instead of retaining only a tiny tail before the existing controlled-continuation retry. PDF/Vision behavior from V0.2.28.4 remains unchanged.
+
+## V0.2.28.5 managed continuation state compression
+
+V0.2.28.5 participates **only after the existing Managed Loop gate has already selected continuation recovery** because a model round did not produce a valid next tool action or deliverable final answer. Normal managed rounds, normal tool execution, and normal final responses never invoke the continuation compressor.
+
+The eligible state is deliberately narrow: only the immediately preceding model-generated `thinking` blocks and unfinished visible `text` blocks are collected. `tool_use`, `tool_result`, user/system messages, PDF/Vision evidence, network results, and all other authoritative conversation evidence are **not compressed and are not sent to the external processor**. The untouched original conversation remains the authority for tool/evidence facts; the compacted payload is explicitly labeled non-authoritative prior model working state.
+
+Continuation preparation is size-aware. State up to 24,000 characters is preserved in full. State from 24,001 through 96,000 characters uses deterministic HEAD+TAIL retention. State above 96,000 characters uses overlapping segmented compression: approximately **24K-character windows with 4K overlap**, processed sequentially so cross-boundary intent is retained without exposing unrelated protocol state. A recent sanitized raw model-state tail is always retained alongside compressed historical working state.
+
+Large-state compression reuses the existing `WEB_FETCH_PROCESSOR_*` auxiliary processor configuration, admission lane, credentials, provider controls, and timeout; V0.2.28.5 adds no continuation-specific ENV. The compressor is tool-less and schema-constrained: it may extract working assumptions, considered decisions, rejected options, unresolved items, and intended next actions, but it may not verify evidence, invent facts, choose tools, or continue the task itself. If the external processor is unavailable, times out, returns malformed output, or tries to emit a tool call, controlled continuation falls back to deterministic HEAD+TAIL state and continues instead of failing the request.
+
+Progress now makes preservation visible rather than implying that a long round was discarded. Diagnostics include `managed_continuation_state_preparation_started`, per-chunk compression events, `managed_continuation_compression_failed`, and `managed_continuation_state_preserved`, including candidate/preserved sizes and whether compression/truncation occurred without logging the actual working-state content.
+
+This release does not change media evidence semantics, so cache generations remain `media-v7`, `visual-v10`, and `evidence-v6`.
 
 ## V0.2.28.4 PDF schematic tile isolation + Vision transport diagnostics
 

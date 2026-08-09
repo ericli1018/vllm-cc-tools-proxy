@@ -5,6 +5,7 @@ import fs from 'node:fs/promises';
 const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), 'utf8');
 const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
 const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+const proxyServerSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -89,12 +90,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28.4 metadata', async () => {
+test('package version is V0.2.28.5 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28.4');
-  assert.equal(lock.version, '0.2.28.4');
-  assert.equal(lock.packages[''].version, '0.2.28.4');
+  assert.equal(packageJson.version, '0.2.28.5');
+  assert.equal(lock.version, '0.2.28.5');
+  assert.equal(lock.packages[''].version, '0.2.28.5');
 });
 
 
@@ -436,6 +437,7 @@ test('README documents V0.2.28.2 Vision empty-output contract hotfix', () => {
 
 test('README documents V0.2.28.3 Vision evidence quality gate and adaptive thinking recovery', async () => {
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+const proxyServerSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
   assert.match(readme, /V0\.2\.28\.3 Vision Evidence Quality Gate/i);
   assert.match(readme, /vision_output_quality/);
   assert.match(readme, /vision_quality_retry/);
@@ -446,6 +448,7 @@ test('README documents V0.2.28.3 Vision evidence quality gate and adaptive think
 
 test('README documents V0.2.28.4 schematic tile isolation and transport diagnostics', async () => {
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+const proxyServerSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
   assert.match(readme, /V0\.2\.28\.4.*schematic tile isolation/i);
   assert.match(readme, /one tile.*one Vision request/is);
   assert.match(readme, /pdf_schematic_tile_failed/);
@@ -454,4 +457,29 @@ test('README documents V0.2.28.4 schematic tile isolation and transport diagnost
   assert.match(readme, /visual-v10/);
   assert.match(readme, /evidence-v6/);
   assert.match(readme, /no new ENV/i);
+});
+
+
+test('V0.2.28.5 continuation compressor reuses the existing auxiliary processor without new ENV', () => {
+  assert.match(proxyServerSource, /compressContinuationWindow/);
+  assert.match(proxyServerSource, /config\.webFetchProcessor/);
+  assert.match(proxyServerSource, /acquireWebFetchProcessor/);
+  assert.doesNotMatch(envExample, /^CONTINUATION_/m);
+  assert.doesNotMatch(compose, /CONTINUATION_[A-Z0-9_]+:/);
+});
+
+
+test('README documents V0.2.28.5 recovery-only continuation state compression', () => {
+  assert.match(readme, /V0\.2\.28\.5 managed continuation state compression/i);
+  assert.match(readme, /only after.*continuation recovery/i);
+  assert.match(readme, /thinking.*visible.*text/i);
+  assert.match(readme, /24,?000/);
+  assert.match(readme, /96,?000/);
+  assert.match(readme, /24K.*4K.*overlap/i);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_/);
+  assert.match(readme, /tool_use.*tool_result.*not.*compress/i);
+  assert.match(readme, /managed_continuation_state_preserved/);
+  assert.match(readme, /media-v7/);
+  assert.match(readme, /visual-v10/);
+  assert.match(readme, /evidence-v6/);
 });

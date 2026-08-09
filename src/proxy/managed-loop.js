@@ -18,6 +18,7 @@ import {
 } from './native-web-tools.js';
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
+import { prepareContinuationState } from './continuation-state.js';
 
 
 const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 0;
@@ -288,7 +289,7 @@ async function emitDetailedFinalDiagnostics(request, response, inspection, {
 
 async function recoverInvalidResponse(request, response, {
   upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
-  writeProtocolDiagnostics, locale = 'zh-TW',
+  writeProtocolDiagnostics, locale = 'zh-TW', compressContinuationWindow,
 }) {
   const inspection = await inspectFinal(response, { onDiagnostic, round, repair: false });
   if (inspection.valid) return { response, recovered: false, recovery: null };
@@ -328,7 +329,7 @@ async function recoverInvalidResponse(request, response, {
   await onProgress(
     recovery.route === 'final_channel'
       ? statusText(locale, 'finalChannelRecovery')
-      : statusText(locale, 'continuationRecovery'),
+      : statusText(locale, 'continuationRecovery', { candidateChars: recovery.signals.candidate_chars }),
     {
       phase: recovery.route === 'final_channel'
         ? 'managed_final_channel_recovery_start'
@@ -339,9 +340,32 @@ async function recoverInvalidResponse(request, response, {
     },
   );
 
+  let preparedState = null;
+  if (recovery.route === 'continuation') {
+    preparedState = await prepareContinuationState(response, {
+      compressWindow: compressContinuationWindow,
+      signal,
+      onEvent: onDiagnostic,
+    });
+    await onProgress(statusText(locale, 'continuationStatePreserved', {
+      candidateChars: preparedState.candidateChars,
+      handoffChars: preparedState.handoffChars,
+      compressed: preparedState.compressed,
+    }), {
+      phase: 'managed_continuation_state_preserved',
+      round,
+      recovery_route: recovery.route,
+      continuation_mode: preparedState.mode,
+      candidate_chars: preparedState.candidateChars,
+      handoff_chars: preparedState.handoffChars,
+      compressed: preparedState.compressed,
+      force: true,
+    });
+  }
+
   const recoveryRequest = recovery.route === 'final_channel'
     ? buildManagedFinalChannelRecoveryRequest(request, response)
-    : buildManagedContinuationRecoveryRequest(request, response);
+    : buildManagedContinuationRecoveryRequest(request, response, preparedState);
   const recoveredResponse = await upstream(recoveryRequest, signal);
   const recoveredInspection = await inspectFinal(recoveredResponse, {
     onDiagnostic, round, repair: true,
@@ -472,6 +496,7 @@ export async function runManagedLoop(initialRequest, {
   modelStallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
   getUpstreamActivity = null,
   onModelRoundState = () => {},
+  compressContinuationWindow = null,
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
@@ -631,7 +656,7 @@ export async function runManagedLoop(initialRequest, {
     let recovery = null;
     const recovered = await recoverInvalidResponse(request, response, {
       upstream: containedUpstream, signal, onDiagnostic, onProgress, round: round + 1, logProtocolSnippets,
-      writeProtocolDiagnostics, locale,
+      writeProtocolDiagnostics, locale, compressContinuationWindow,
     });
     response = recovered.response;
     recovery = recovered.recovery;

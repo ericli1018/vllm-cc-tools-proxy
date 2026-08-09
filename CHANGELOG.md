@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.5 - 2026-08-10
+
+- Added recovery-only continuation state preparation after the existing Managed Loop continuation gate; normal rounds do not invoke compression.
+- Restricted compressor input to the immediately preceding model-generated `thinking` and unfinished visible `text`; tool calls/results and authoritative evidence never enter the compressor.
+- Added size-aware preservation: full state through 24K chars, deterministic HEAD+TAIL through 96K, and 24K windows with 4K overlap for larger state.
+- Added strict tool-less external state compression using the existing `WEB_FETCH_PROCESSOR_*` auxiliary processor, with deterministic fallback on any processor failure or malformed/tool-call output.
+- Preserved a recent raw model-state tail and added transparent progress/diagnostics for produced, compressed, and retained state sizes.
+- Kept media cache generations unchanged at `media-v7`, `visual-v10`, and `evidence-v6`; no new ENV was added.
+
 ## 0.2.28.4 - 2026-08-09
 
 - Isolated SCHEMATIC overlapping tiles so each tile is sent in one sequential Vision request instead of grouping up to four large tile images in one request.

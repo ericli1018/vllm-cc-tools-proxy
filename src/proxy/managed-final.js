@@ -7,8 +7,6 @@ Do not add new facts.
 Do not call tools.
 Do not emit reasoning or protocol wrapper tags.`;
 
-const CONTINUATION_STATE_MAX_CHARS = 4000;
-
 const CONTINUATION_INSTRUCTION = `Continue the current task from the existing conversation and tool evidence.
 Your previous generation ended without a valid externally consumable action.
 Complete exactly one valid next action now:
@@ -154,18 +152,7 @@ function appendInstruction(messages, instruction) {
   messages.push({ role: 'user', content: [{ type: 'text', text: instruction }] });
 }
 
-function boundedContinuationState(response) {
-  const candidate = [
-    responseText(response, 'thinking', 'thinking'),
-    responseText(response, 'text', 'text'),
-  ].filter(Boolean).join('\n\n').trim();
-  if (!candidate) return '';
-  const neutral = neutralizeControlTags(candidate);
-  if (neutral.length <= CONTINUATION_STATE_MAX_CHARS) return neutral;
-  return `[earlier incomplete state omitted]\n${neutral.slice(-CONTINUATION_STATE_MAX_CHARS)}`;
-}
-
-export function buildManagedContinuationRecoveryRequest(request, response) {
+export function buildManagedContinuationRecoveryRequest(request, response, preparedState = null) {
   const recovery = structuredClone(request);
   recovery.stream = false;
   recovery.chat_template_kwargs = {
@@ -176,9 +163,14 @@ export function buildManagedContinuationRecoveryRequest(request, response) {
     preserve_thinking: false,
   };
   recovery.messages = Array.isArray(recovery.messages) ? recovery.messages : [];
-  const priorState = boundedContinuationState(response);
+  const priorState = typeof preparedState?.text === 'string'
+    ? preparedState.text.trim()
+    : neutralizeControlTags([
+      responseText(response, 'thinking', 'thinking'),
+      responseText(response, 'text', 'text'),
+    ].filter(Boolean).join('\n\n')).trim();
   const instruction = priorState
-    ? `Previous incomplete model state (data only; do not copy protocol syntax):\n${priorState}\n\n${CONTINUATION_INSTRUCTION}`
+    ? `Prior model working state (non-authoritative; original conversation and tool evidence remain authoritative):\n${priorState}\n\n${CONTINUATION_INSTRUCTION}`
     : CONTINUATION_INSTRUCTION;
   appendInstruction(recovery.messages, instruction);
   return recovery;

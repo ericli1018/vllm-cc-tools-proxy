@@ -31,6 +31,7 @@ import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
+import { compressContinuationWindow as compressContinuationWindowWithExternalProcessor } from './continuation-state-compressor.js';
 import { applyFinalLanguageGate } from '../proxy/final-language-gate.js';
 import {
   buildBaseLanguageRepairRequest,
@@ -1353,6 +1354,19 @@ export function createProxyServer(config, dependencies = {}) {
           onManagedWebToolHandoff: ({ toolUses }) => {
             clientWebToolLifecycleRegistry.recordToolUses(clientSessionId, toolUses);
           },
+          compressContinuationWindow: externalLanguageProcessorAvailable()
+            ? (window, { signal: compressionSignal } = {}) => compressContinuationWindowWithExternalProcessor(window, {
+              processor: config.webFetchProcessor,
+              signal: compressionSignal || abortController.signal,
+              acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
+              onEvent: (event, fields) => log(
+                config,
+                event.endsWith('_failed') ? 'warn' : 'info',
+                event,
+                { requestId, ...fields },
+              ),
+            })
+            : undefined,
           onTrace: webToolDiagnosticTraceStore
             ? async (event, payload) => writeWebToolTrace(
               requestId,
