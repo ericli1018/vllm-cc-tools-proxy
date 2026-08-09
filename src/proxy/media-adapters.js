@@ -151,6 +151,17 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         const mediaType = block.source.media_type;
         await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal: analysisSignal });
+        const receivedWidth = normalized.originalWidth || normalized.width;
+        const receivedHeight = normalized.originalHeight || normalized.height;
+        onDiagnostic('image_payload_normalized', {
+          media_type: mediaType,
+          decoded_bytes: sourceBuffer.length,
+          received_width: receivedWidth,
+          received_height: receivedHeight,
+          normalized_width: normalized.width,
+          normalized_height: normalized.height,
+          wire_dimensions: block.source.wire_dimensions || {},
+        });
         const registry = new VisualAssetRegistry();
         const asset = registry.add({
           ...normalized,
@@ -190,8 +201,17 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         return {
           block: normalizedBlock,
           metadata: {
-            mediaType: normalized.mediaType, width: normalized.width, height: normalized.height,
-            visualModel: config.vllmVisionModel, cropCount: result.cropCount, warnings, truncated: bounded.truncated,
+            mediaType: normalized.mediaType,
+            width: normalized.width,
+            height: normalized.height,
+            receivedWidth,
+            receivedHeight,
+            normalizedWidth: normalized.width,
+            normalizedHeight: normalized.height,
+            visualModel: config.vllmVisionModel,
+            cropCount: result.cropCount,
+            warnings,
+            truncated: bounded.truncated,
           },
         };
       });

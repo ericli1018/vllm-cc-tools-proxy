@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.28 - 2026-08-09
+
+- Added source-aware IMAGE wire-contract diagnostics for Claude Code `Read(image)`, direct images, and generic tool-result images.
+- Added `image_payload_observed` structural logging without raw Base64, raw image bytes, or full paths.
+- Added safe preservation of image dimension metadata through request-scoped media preflight.
+- Added decoded-byte accounting to media entries/occurrences.
+- Added `image_payload_normalized` diagnostics and cache metadata for received versus normalized image dimensions.
+- Kept the existing Image Vision/recursive-crop path and `media-v7` / `visual-v6` / `evidence-v2` cache generations unchanged.
+- Added regression coverage for nested Read images, direct images, generic tool-result images, metadata redaction, and dimension observability.
+
 ## 0.2.27.3 - 2026-08-09
 
 - Reset Claude Code visible `modelWaiting` / `modelFirstByte` byte counts at each managed model-round boundary by using `round_received_bytes` instead of request-wide cumulative bytes.

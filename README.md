@@ -1,7 +1,17 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.3 fixes per-round continuation byte accounting in visible managed progress while preserving V0.2.27.2 native `Read.pages` focused PDF refinement, V0.2.27.1 live media progress, and V0.2.27 schematic evidence behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28 adds source-aware IMAGE wire-contract observability for Claude Code `Read(image)`, direct images, and generic tool-result images while preserving the existing Vision pipeline, media cache semantics, focused PDF refinement, live progress, and managed-loop behavior.
 
+
+## V0.2.28 IMAGE wire-contract observability
+
+V0.2.28 formalizes the IMAGE payload contract already supported by the recursive media adapter. Standard Claude Code `Read(image)` results arrive as nested `tool_result.content[]` image blocks; direct user images and generic tool-result images share the same media adapter but now retain distinct provenance in diagnostics.
+
+The Proxy emits a safe `image_payload_observed` event before image analysis. It records origin (`read`, `direct`, or `tool_result`), parent/source type, media type, decoded byte count, structural block/source key inventories, safe dimension metadata, Read basename/hash, and sanitized source-reference basename/hash when present. It never logs raw Base64, image bytes, or full local paths.
+
+On a cache miss, `image_payload_normalized` additionally records the actual decoded image dimensions seen by the Proxy and the normalized Vision dimensions. This makes it possible to determine whether Claude Code resized/recompressed an image before the Proxy received it. Media cache metadata stores received and normalized dimensions for troubleshooting.
+
+The existing IMAGE analysis path is unchanged: request-scoped media handle → image normalization → `VisualAssetRegistry` → Vision → bounded recursive crop → normalized text evidence → Media Cache → Base model. No new ENV is introduced. `media-v7`, `visual-v6`, and `evidence-v2` remain unchanged because the analysis/evidence semantics did not change.
 
 ## V0.2.27.3 per-round continuation byte accounting hotfix
 

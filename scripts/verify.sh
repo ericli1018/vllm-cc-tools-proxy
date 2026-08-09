@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.27.3'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.27.3'
+test "$(node -p "require('./package.json').version")" = '0.2.28'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28'
 
 
 test -f src/i18n/response-language.js
@@ -279,5 +279,18 @@ grep -Fq 'round_received_bytes' README.md
 test -f V0.2.27.3-更新說明.md
 grep -Fq 'getCurrentRoundResponseBytes' src/services/proxy-server.js
 grep -Fq 'round_received_bytes: receivedThisRound' src/services/proxy-server.js
+
+
+# V0.2.28 IMAGE wire-contract observability release contract
+grep -Fq 'V0.2.28 IMAGE wire-contract observability' README.md
+test -f src/proxy/image-payload-observer.js
+test -f V0.2.28-更新說明.md
+grep -Fq 'image_payload_observed' src/services/proxy-server.js
+grep -Fq 'image_payload_normalized' src/proxy/media-adapters.js
+grep -Fq 'wire_dimensions' src/proxy/media-preflight.js
+grep -Fq 'decodedBytes' src/proxy/media-preflight.js
+grep -Fq 'media-v7' README.md
+grep -Fq 'visual-v6' README.md
+grep -Fq 'evidence-v2' README.md
 
 echo 'Verification complete.'

@@ -14,6 +14,17 @@ function isExternalBase64Media(block) {
     && (block.type !== 'image' || block.source.media_type.startsWith('image/'));
 }
 
+
+function safeWireDimensions(source) {
+  const output = {};
+  for (const [key, value] of Object.entries(source || {})) {
+    if (!/^(?:(?:original|resized|received)[_-]?)?(?:width|height)$/i.test(key)) continue;
+    if (!Number.isFinite(value) || value < 1) continue;
+    output[key] = value;
+  }
+  return Object.fromEntries(Object.entries(output).sort(([a], [b]) => a.localeCompare(b)));
+}
+
 function extensionFor(mediaType) {
   return {
     'application/pdf': '.pdf',
@@ -72,6 +83,7 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
           mediaSha256: fingerprint.mediaSha256,
           mediaType,
           path: filePath,
+          decodedBytes: buffer.length,
         });
       }
       mediaOccurrences.push({
@@ -79,7 +91,9 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
         mediaSha256: fingerprint.mediaSha256,
         mediaType,
         path: [...currentPath],
+        decodedBytes: buffer.length,
       });
+      const wireDimensions = value.type === 'image' ? safeWireDimensions(value.source) : {};
       value.source = {
         type: 'proxy_file',
         media_type: mediaType,
@@ -87,6 +101,7 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
         cache_key: fingerprint.key,
         media_sha256: fingerprint.mediaSha256,
         ...(value.source.filename ? { filename: value.source.filename } : {}),
+        ...(Object.keys(wireDimensions).length ? { wire_dimensions: wireDimensions } : {}),
       };
       return;
     }

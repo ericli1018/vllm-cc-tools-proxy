@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.27.3', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2777,4 +2777,41 @@ test('V0.2.27.2 focused Read.pages keeps live progress when whole-document cache
     releaseFocused();
     if (!response) await responsePromise.catch(() => {});
   }
+});
+
+test('V0.2.28 logs structural Read image payload diagnostics without raw image or full path', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  const upstream = await startJsonServer(async (_req, res) => {
+    await read(_req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'m',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'done'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, logLevel: 'info', logSink: (entry) => logs.push(entry) }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180, warnings: [] }),
+      analyzeVisualAssets: async () => ({ markdown: 'IMAGE OBSERVED', warnings: [], cropCount: 0 }),
+    },
+  });
+  const proxyUrl = await listen(proxy); t.after(() => upstream.server.close()); t.after(() => proxy.close());
+  const base64 = png.toString('base64');
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-img', name: 'Read', input: { file_path: '/home/master/private/board.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-img', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64, original_width: 600, original_height: 180 } }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({model:'m',stream:false,messages}) });
+  assert.equal(response.status, 200);
+  const event = logs.find((entry) => entry.event === 'image_payload_observed');
+  assert.ok(event);
+  assert.equal(event.origin, 'read');
+  assert.equal(event.parent_type, 'tool_result');
+  assert.equal(event.tool_name, 'Read');
+  assert.equal(event.filename, 'board.png');
+  assert.equal(event.media_type, 'image/png');
+  assert.equal(event.source_type, 'base64');
+  assert.equal(event.decoded_bytes, png.length);
+  assert.deepEqual(event.dimension_metadata, { original_height: 180, original_width: 600 });
+  const serialized = JSON.stringify(event);
+  assert.equal(serialized.includes('/home/master/private'), false);
+  assert.equal(serialized.includes(base64.slice(0, 24)), false);
 });

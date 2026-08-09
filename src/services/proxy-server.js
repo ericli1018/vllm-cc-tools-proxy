@@ -24,6 +24,7 @@ import { MediaCache } from '../cache/media-cache.js';
 import { scopeMediaCacheKey } from '../cache/cache-key.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
+import { observeImagePayloads } from '../proxy/image-payload-observer.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { VERSION } from '../version.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
@@ -956,6 +957,8 @@ export function createProxyServer(config, dependencies = {}) {
       let allMediaCached = false;
 
       if (hasMedia) {
+        const imagePayloadObservations = observeImagePayloads(request.messages);
+        const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
         await cacheReady;
         preparedMedia = await prepareMediaHandles(request.messages, config.limits, {
           signal: abortController.signal,
@@ -973,6 +976,27 @@ export function createProxyServer(config, dependencies = {}) {
         request.messages = preparedMedia.messages;
         mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
+        for (const occurrence of mediaOccurrences) {
+          if (!String(occurrence.mediaType || '').startsWith('image/')) continue;
+          const observed = imageObservationByPath.get(JSON.stringify(occurrence.path));
+          if (!observed) continue;
+          log(config, 'info', 'image_payload_observed', {
+            requestId,
+            origin: observed.origin,
+            parent_type: observed.parentType,
+            tool_name: observed.toolName,
+            filename: observed.filename,
+            read_source_ref: observed.readSourceRef,
+            source_type: observed.sourceType,
+            media_type: observed.mediaType,
+            decoded_bytes: occurrence.decodedBytes ?? null,
+            block_keys: observed.blockKeys,
+            source_keys: observed.sourceKeys,
+            dimension_metadata: observed.dimensionMetadata,
+            source_reference_basename: observed.sourceReferenceBasename,
+            source_reference_ref: observed.sourceReferenceRef,
+          });
+        }
         let cachedOccurrences = 0;
         for (const occurrence of mediaOccurrences) {
           const tracked = mediaProgress.contextForPath(occurrence.path);

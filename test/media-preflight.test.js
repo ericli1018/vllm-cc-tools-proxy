@@ -122,3 +122,28 @@ test('media preflight records every media occurrence path while deduplicating fi
     await prepared.cleanup();
   }
 });
+
+test('V0.2.28 image preflight preserves only safe dimension metadata and decoded byte count', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const messages = [{ role: 'user', content: [{
+    type: 'image',
+    resized_width: 600,
+    source: {
+      type: 'base64', media_type: 'image/png', data: png.toString('base64'),
+      original_width: 1200, original_height: 360,
+      source_path: '/secret/private/image.png', dangerous_note: 'do-not-preserve',
+    },
+  }] }];
+  const prepared = await prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 });
+  try {
+    const source = prepared.messages[0].content[0].source;
+    assert.deepEqual(source.wire_dimensions, { original_height: 360, original_width: 1200 });
+    assert.equal('source_path' in source, false);
+    assert.equal('dangerous_note' in source, false);
+    assert.equal(source.filename, undefined);
+    assert.equal(prepared.mediaEntries[0].decodedBytes, png.length);
+    assert.equal(prepared.mediaOccurrences[0].decodedBytes, png.length);
+  } finally {
+    await prepared.cleanup();
+  }
+});

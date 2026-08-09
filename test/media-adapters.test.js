@@ -210,3 +210,34 @@ test('V0.2.27.2 document adapter exposes focused page scope in normalized eviden
   assert.match(output.text, /requested_pages: \[42\]/);
   assert.match(output.text, /page_scope_mode: "full_source"/);
 });
+
+test('V0.2.28 image adapter records received versus normalized dimensions in diagnostics and cache metadata', async () => {
+  const original = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let stored = null;
+  const diagnostics = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaCache: { get: async () => null, set: async (_key, value) => { stored = value; return true; } },
+    analysisRegistry: new MediaAnalysisRegistry(),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    normalizeImage: async () => ({ buffer: Buffer.from('normalized'), mediaType: 'image/png', width: 2048, height: 1024, originalWidth: 4096, originalHeight: 2048, warnings: [] }),
+    analyzeVisualAssets: async () => ({ markdown: 'ok', warnings: [], cropCount: 0 }),
+  });
+  await adapters.adaptImage({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: original.toString('base64'), cache_key: 'd'.repeat(64), wire_dimensions: { resized_width: 4096, resized_height: 2048 } },
+  });
+  const event = diagnostics.find((entry) => entry.event === 'image_payload_normalized');
+  assert.deepEqual(event.details, {
+    media_type: 'image/png', decoded_bytes: original.length,
+    received_width: 4096, received_height: 2048,
+    normalized_width: 2048, normalized_height: 1024,
+    wire_dimensions: { resized_width: 4096, resized_height: 2048 },
+  });
+  assert.equal(stored.metadata.receivedWidth, 4096);
+  assert.equal(stored.metadata.receivedHeight, 2048);
+  assert.equal(stored.metadata.normalizedWidth, 2048);
+  assert.equal(stored.metadata.normalizedHeight, 1024);
+});
