@@ -140,6 +140,39 @@ function pageDimensions(info, normalized, dpi) {
   };
 }
 
+function resolvePdfPagePlan(sourcePageCount, pageScope, maxPdfPages) {
+  if (!pageScope) {
+    if (sourcePageCount > maxPdfPages) throw new HttpError(413, 'PDF exceeds the configured page limit.', { code: 'pdf_page_limit' });
+    return {
+      focused: false,
+      mode: 'whole_document',
+      requestedPages: null,
+      pages: Array.from({ length: sourcePageCount }, (_, index) => ({ physicalPage: index + 1, logicalPage: index + 1 })),
+    };
+  }
+  const requestedPages = Array.isArray(pageScope.pages) ? [...pageScope.pages] : [];
+  if (requestedPages.length < 1) throw new HttpError(422, 'PDF page scope is empty.', { code: 'invalid_pdf_page_scope' });
+  if (requestedPages.length > maxPdfPages) throw new HttpError(413, 'PDF page scope exceeds the configured page limit.', { code: 'pdf_page_scope_limit' });
+  const maximum = Math.max(...requestedPages);
+  if (maximum <= sourcePageCount) {
+    return {
+      focused: true,
+      mode: 'full_source',
+      requestedPages,
+      pages: requestedPages.map((page) => ({ physicalPage: page, logicalPage: page })),
+    };
+  }
+  if (sourcePageCount === requestedPages.length) {
+    return {
+      focused: true,
+      mode: 'subset_source',
+      requestedPages,
+      pages: requestedPages.map((logicalPage, index) => ({ physicalPage: index + 1, logicalPage })),
+    };
+  }
+  throw new HttpError(422, 'Received PDF cannot represent the requested Read.pages scope.', { code: 'pdf_page_scope_unavailable' });
+}
+
 function visionCallOptions({
   vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
   registry, signal, onProgress, cropImage, limits, runner,
@@ -165,7 +198,7 @@ export async function parsePdf(buffer, options) {
     vllmVisionUrl = '', vllmVisionModel = '', vllmVisionApiKey = '',
     vllmVisionProvider = 'vllm', vllmVisionThink = false,
     analyzeVisualAssets = defaultAnalyzeVisualAssets, cropImage = defaultCropImage,
-    classifyPage = defaultClassifyPdfPage,
+    classifyPage = defaultClassifyPdfPage, pageScope = null,
   } = options;
   if (!Buffer.isBuffer(buffer) || detectMediaType(buffer) !== 'application/pdf') throw new HttpError(422, 'Input is not a valid PDF.', { code: 'invalid_pdf' });
   if (buffer.length > limits.maxDecodedBytes) throw new HttpError(413, 'PDF exceeds the configured byte limit.', { code: 'media_too_large' });
@@ -178,26 +211,29 @@ export async function parsePdf(buffer, options) {
     const info = parsePdfInfo(infoResult.stdout.toString('utf8'));
     if (info.encrypted) throw new HttpError(422, 'PDF is encrypted or requires a password.', { code: 'encrypted_pdf' });
     if (!Number.isInteger(info.pages) || info.pages < 1) throw new HttpError(422, 'PDF contains no readable pages.', { code: 'empty_pdf' });
-    if (info.pages > limits.maxPdfPages) throw new HttpError(413, 'PDF exceeds the configured page limit.', { code: 'pdf_page_limit' });
-    await onProgress(`已確認 ${info.pages} 頁；正在抽取原生文字…`, {
-      phase: 'pdf_metadata', total: info.pages, received_pdf_pages: info.pages, processed_pdf_pages: 0,
+    const pagePlan = resolvePdfPagePlan(info.pages, pageScope, limits.maxPdfPages);
+    const selectedTotal = pagePlan.pages.length;
+    const scopeLabel = pagePlan.focused ? `；指定頁面 ${pageScope.canonical}` : '';
+    await onProgress(`已確認來源 PDF ${info.pages} 頁${scopeLabel}；正在抽取原生文字…`, {
+      phase: 'pdf_metadata', total: selectedTotal, received_pdf_pages: info.pages, processed_pdf_pages: 0,
+      ...(pagePlan.focused ? { requested_pages: pagePlan.requestedPages, page_scope: pageScope.canonical } : {}),
     });
 
     const pages = [];
     let insufficientCount = 0;
-    for (let page = 1; page <= info.pages; page += 1) {
-      const textResult = await runner('pdftotext', ['-f', String(page), '-l', String(page), '-layout', '-nopgbrk', inputPath, '-'], {
+    for (const { physicalPage, logicalPage } of pagePlan.pages) {
+      const textResult = await runner('pdftotext', ['-f', String(physicalPage), '-l', String(physicalPage), '-layout', '-nopgbrk', inputPath, '-'], {
         timeoutMs: limits.processTimeoutMs, signal, maxOutputBytes: Math.min(limits.maxOutputChars * 4, 16 * 1024 * 1024),
       });
       const nativeText = textResult.stdout.toString('utf8').replace(/\f/g, '').trim();
       const insufficient = nativeText.length < limits.nativeTextMinCharsPerPage;
       if (insufficient) insufficientCount += 1;
-      pages.push({ page, nativeText, insufficient, route: 'TEXT', confidence: 1, reason: 'native text path' });
+      pages.push({ page: logicalPage, physicalPage, nativeText, insufficient, route: 'TEXT', confidence: 1, reason: 'native text path' });
     }
 
     const visionEnabled = Boolean(vllmVisionUrl && vllmVisionModel);
     const warnings = [];
-    if (insufficientCount === info.pages && !visionEnabled) {
+    if (insufficientCount === pages.length && !visionEnabled) {
       throw new HttpError(422, 'Visual vLLM endpoint is required for scanned or low-text PDF pages.', { code: 'vision_endpoint_required' });
     }
     if (insufficientCount > 0 && !visionEnabled) warnings.push(`low_text_pages_without_visual_analysis:${insufficientCount}`);
@@ -217,9 +253,9 @@ export async function parsePdf(buffer, options) {
     let classificationCount = 0;
     if (visionEnabled) {
       const dpi = classificationDpi(info.pageSize);
-      await onProgress(`正在分類 ${info.pages} 頁 PDF 內容…`, { phase: 'pdf_classify', total: info.pages });
+      await onProgress(`正在分類 ${pages.length} 頁 PDF 內容…`, { phase: 'pdf_classify', total: pages.length });
       for (const page of pages) {
-        const normalized = await renderPage(inputPath, directory, page.page, limits, signal, runner, dpi, 'classify');
+        const normalized = await renderPage(inputPath, directory, page.physicalPage, limits, signal, runner, dpi, 'classify');
         const size = pageDimensions(info, normalized, dpi);
         const registry = new VisualAssetRegistry();
         const asset = registry.add({
@@ -227,7 +263,7 @@ export async function parsePdf(buffer, options) {
           label: `PDF page ${page.page} classification overview`,
           sourceKind: 'pdf_page',
           sourceMetadata: {
-            pdfPath: inputPath, directory, page: page.page,
+            pdfPath: inputPath, directory, page: page.physicalPage, logicalPage: page.page,
             pageWidthPoints: size.width, pageHeightPoints: size.height, overviewDpi: dpi,
           },
         });
@@ -247,11 +283,11 @@ export async function parsePdf(buffer, options) {
         page.route = allowed.has(classification?.route) ? classification.route : 'DENSE_PAGE';
         page.confidence = Number.isFinite(Number(classification?.confidence)) ? Number(classification.confidence) : 0;
         page.reason = String(classification?.reason || '');
-        page.rasterImage = rasterImagePages.has(page.page);
+        page.rasterImage = rasterImagePages.has(page.physicalPage);
         if (page.route === 'TEXT' && page.rasterImage && page.confidence < 0.5) page.route = 'DENSE_PAGE';
         classificationCount += 1;
-        await onProgress(`PDF 頁面分類 ${classificationCount}/${info.pages}…`, {
-          phase: 'pdf_classify', completed: classificationCount, total: info.pages, page: page.page, route: page.route,
+        await onProgress(`PDF 頁面分類 ${classificationCount}/${pages.length}…`, {
+          phase: 'pdf_classify', completed: classificationCount, total: pages.length, page: page.page, route: page.route,
         });
       }
     }
@@ -265,14 +301,14 @@ export async function parsePdf(buffer, options) {
     const standardDpi = overviewDpi(info.pageSize);
     for (const page of pages) {
       if (!visionEnabled || page.route === 'SCHEMATIC' || (page.route === 'TEXT' && !page.insufficient)) continue;
-      const normalized = await renderPage(inputPath, directory, page.page, limits, signal, runner, standardDpi, 'overview');
+      const normalized = await renderPage(inputPath, directory, page.physicalPage, limits, signal, runner, standardDpi, 'overview');
       const size = pageDimensions(info, normalized, standardDpi);
       const asset = analysisRegistry.add({
         ...normalized,
         label: `PDF page ${page.page} ${page.route}`,
         sourceKind: 'pdf_page',
         sourceMetadata: {
-          pdfPath: inputPath, directory, page: page.page,
+          pdfPath: inputPath, directory, page: page.physicalPage, logicalPage: page.page,
           pageWidthPoints: size.width, pageHeightPoints: size.height, overviewDpi: standardDpi,
         },
       });
@@ -307,14 +343,14 @@ export async function parsePdf(buffer, options) {
     for (const page of pages.filter((entry) => visionEnabled && entry.route === 'SCHEMATIC')) {
       const dpi = schematicOverviewDpi(info.pageSize);
       await onProgress(`正在準備第 ${page.page} 頁 schematic overview…`, { phase: 'pdf_schematic_overview', page: page.page });
-      const normalized = await renderPage(inputPath, directory, page.page, limits, signal, runner, dpi, 'schematic-overview');
+      const normalized = await renderPage(inputPath, directory, page.physicalPage, limits, signal, runner, dpi, 'schematic-overview');
       const size = pageDimensions(info, normalized, dpi);
       const root = analysisRegistry.add({
         ...normalized,
         label: `PDF page ${page.page} schematic overview`,
         sourceKind: 'pdf_page',
         sourceMetadata: {
-          pdfPath: inputPath, directory, page: page.page,
+          pdfPath: inputPath, directory, page: page.physicalPage, logicalPage: page.page,
           pageWidthPoints: size.width, pageHeightPoints: size.height, overviewDpi: dpi,
         },
       });
@@ -398,12 +434,14 @@ export async function parsePdf(buffer, options) {
     }
     const bounded = boundedText(parts.join('\n\n'), limits.maxOutputChars);
     if (bounded.truncated) warnings.push('output_char_limit');
-    await onProgress('PDF 內容已完成合併。', { phase: 'pdf_complete', completed: info.pages, total: info.pages });
+    await onProgress('PDF 內容已完成合併。', { phase: 'pdf_complete', completed: pages.length, total: pages.length, ...(pagePlan.focused ? { requested_pages: pagePlan.requestedPages, page_scope: pageScope.canonical } : {}) });
     return {
       parser: visualUsed ? 'poppler+visual-vllm' : 'poppler',
       visual_used: visualUsed,
       page_count: info.pages,
-      processed_pages: info.pages,
+      processed_pages: pages.length,
+      requested_pages: pagePlan.requestedPages,
+      page_scope_mode: pagePlan.mode,
       visual_batch_count: visualBatchCount,
       classification_count: classificationCount,
       markdown: bounded.text,

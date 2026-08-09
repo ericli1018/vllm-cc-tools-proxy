@@ -75,3 +75,18 @@ test('V0.2.23 media progress localizes labels and heartbeat while preserving fil
   now = 31_000;
   assert.match(tracker.renderHeartbeat(), /The main model is still processing this request\. Running for 30s…/);
 });
+
+test('V0.2.27.2 correlates Read.pages with the returned PDF tool_result', () => {
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-focused', name: 'Read', input: { file_path: '/work/board.pdf', pages: '42' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-focused', content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'pdf' } },
+    ] }] },
+  ];
+  const tracker = createMediaProgressTracker(messages);
+  const context = tracker.contextForPath(['messages', 1, 'content', 0, 'content', 0]);
+  assert.equal(context.filename, 'board.pdf');
+  assert.deepEqual(context.pageScope, { pages: [42], canonical: '42' });
+  assert.equal(context.readSourceRef?.length, 64);
+  assert.doesNotMatch(JSON.stringify(context), /\/work\/board\.pdf/);
+});

@@ -162,3 +162,22 @@ test('V0.2.19 protocol history sanitizer neutralizes string tool_result payloads
   assert.deepEqual(scanControlTags(result.messages[0].content[0].content), []);
   assert.match(result.messages[0].content[0].content, /&lt;function_results&gt;/);
 });
+
+test('V0.2.27.2 focused document evidence preserves requested logical pages', () => {
+  const text = formatDocumentEvidence({
+    filename: 'board.pdf', sourceSha256: 'abc', parser: 'poppler', pages: 100, processedPages: 1,
+    requestedPages: [42], pageScopeMode: 'full_source', visualBatchCount: 0, visualUsed: false,
+    truncated: false, content: 'page 42 evidence', warnings: [],
+  });
+  assert.match(text, /requested_pages: \[42\]/);
+  assert.match(text, /page_scope_mode: "full_source"/);
+});
+
+test('V0.2.27.2 whole-document evidence does not invent a requested page scope', () => {
+  const text = formatDocumentEvidence({
+    filename: 'board.pdf', sourceSha256: 'abc', parser: 'poppler', pages: 2, processedPages: 2,
+    visualBatchCount: 0, visualUsed: false, truncated: false, content: 'all pages', warnings: [],
+  });
+  assert.doesNotMatch(text, /requested_pages:/);
+  assert.doesNotMatch(text, /page_scope_mode:/);
+});

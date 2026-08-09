@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import { HttpError } from '../lib/http.js';
+import { scopeMediaCacheKey } from '../cache/cache-key.js';
 import { boundedText, decodeBase64Media, detectMediaType } from '../lib/media.js';
 import { parsePdf as defaultParsePdf } from '../parsers/pdf.js';
 import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage } from '../parsers/image.js';
@@ -93,14 +94,18 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
 
   return {
     async adaptDocument(block, context = {}) {
-      const key = block.source.cache_key || '';
       const tracked = mediaProgress?.contextForPath(context.path);
+      if (tracked?.pageScopeError) {
+        throw new HttpError(422, tracked.pageScopeError.message || 'Invalid PDF page scope.', { code: tracked.pageScopeError.code || 'invalid_pdf_page_scope' });
+      }
+      const pageScope = tracked?.pageScope || null;
+      const key = scopeMediaCacheKey(block.source.cache_key || '', pageScope);
       const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'document.pdf';
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       return cachedAnalysis(key, () => readSource(block.source, 'application/pdf'), async (analysisSignal, buffer) => {
         await reportProgress('正在解析 PDF…', { phase: 'pdf_start' });
         const result = await parsePdf(buffer, {
-          limits: config.limits, signal: analysisSignal, onProgress: reportProgress,
+          limits: config.limits, signal: analysisSignal, onProgress: reportProgress, pageScope,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
           vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
@@ -116,6 +121,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             parser: result.parser || 'unknown',
             pages: result.page_count ?? null,
             processedPages: result.processed_pages ?? result.page_count ?? null,
+            requestedPages: result.requested_pages || null,
+            pageScopeMode: result.page_scope_mode || '',
             visualBatchCount: result.visual_batch_count ?? 0,
             visualUsed: Boolean(result.visual_used),
             truncated: Boolean(result.truncated || bounded.truncated),
@@ -127,6 +134,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           block: normalizedBlock,
           metadata: {
             mediaType: 'application/pdf', pages: result.page_count ?? null, processedPages: result.processed_pages ?? result.page_count ?? null,
+            requestedPages: result.requested_pages || null, pageScopeMode: result.page_scope_mode || '',
             visualBatchCount: result.visual_batch_count ?? 0, parser: result.parser || 'unknown',
             visualUsed: Boolean(result.visual_used), warnings, truncated: Boolean(result.truncated || bounded.truncated),
           },

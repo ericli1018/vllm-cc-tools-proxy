@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import path from 'node:path';
+import { parsePdfPageScope } from './pdf-page-scope.js';
 import { languageProfile, mediaText, statusText } from '../i18n/response-language.js';
 
 function safeBasename(value, fallback = '') {
@@ -19,7 +21,7 @@ function pathKey(value) {
   return JSON.stringify(value || []);
 }
 
-function readToolFilenameMap(messages) {
+function readToolContextMap(messages) {
   const result = new Map();
   const walk = (value) => {
     if (Array.isArray(value)) {
@@ -28,8 +30,18 @@ function readToolFilenameMap(messages) {
     }
     if (!value || typeof value !== 'object') return;
     if (value.type === 'tool_use' && typeof value.id === 'string' && String(value.name || '').toLowerCase() === 'read') {
-      const filename = safeBasename(value.input?.file_path || value.input?.path || value.input?.filename || '');
-      if (filename) result.set(value.id, filename);
+      const rawPath = value.input?.file_path || value.input?.path || value.input?.filename || '';
+      const filename = safeBasename(rawPath);
+      let pageScope = null;
+      let pageScopeError = null;
+      try { pageScope = parsePdfPageScope(value.input?.pages); }
+      catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
+      result.set(value.id, {
+        filename,
+        pageScope,
+        pageScopeError,
+        readSourceRef: rawPath ? crypto.createHash('sha256').update(String(rawPath)).digest('hex') : '',
+      });
     }
     if (Array.isArray(value.content)) walk(value.content);
   };
@@ -38,15 +50,16 @@ function readToolFilenameMap(messages) {
 }
 
 function collectDescriptors(messages, locale = 'zh-TW') {
-  const toolFilenames = readToolFilenameMap(messages);
+  const toolContexts = readToolContextMap(messages);
   const descriptors = [];
   let documentFallback = 0;
   let imageFallback = 0;
 
-  const walkBlock = (block, currentPath, inheritedFilename = '') => {
+  const walkBlock = (block, currentPath, inheritedFilename = '', inheritedToolContext = null) => {
     if (!block || typeof block !== 'object') return;
     let filename = inheritedFilename;
-    if (block.type === 'tool_result') filename = toolFilenames.get(block.tool_use_id) || filename;
+    const toolContext = block.type === 'tool_result' ? (toolContexts.get(block.tool_use_id) || inheritedToolContext) : inheritedToolContext;
+    if (toolContext?.filename) filename = toolContext.filename;
 
     if (isMediaBlock(block)) {
       const kind = block.type === 'document' ? 'document' : 'image';
@@ -63,12 +76,15 @@ function collectDescriptors(messages, locale = 'zh-TW') {
         kind,
         filename: resolved,
         groupKey: resolved.toLocaleLowerCase(),
+        ...(kind === 'document' && toolContext?.pageScope ? { pageScope: toolContext.pageScope } : {}),
+        ...(kind === 'document' && toolContext?.pageScopeError ? { pageScopeError: toolContext.pageScopeError } : {}),
+        ...(kind === 'document' && toolContext?.readSourceRef ? { readSourceRef: toolContext.readSourceRef } : {}),
       });
     }
 
     if (Array.isArray(block.content)) {
       for (let index = 0; index < block.content.length; index += 1) {
-        walkBlock(block.content[index], [...currentPath, 'content', index], filename);
+        walkBlock(block.content[index], [...currentPath, 'content', index], filename, toolContext);
       }
     }
   };

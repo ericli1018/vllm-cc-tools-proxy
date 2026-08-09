@@ -28,6 +28,7 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-cc-media-'));
   const allowedPaths = new Set();
   const mediaEntries = [];
+  const mediaOccurrences = [];
   const pathByKey = new Map();
   let counter = 0;
   let cleaned = false;
@@ -38,10 +39,10 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
     await fs.rm(root, { recursive: true, force: true });
   };
 
-  const walk = async (value) => {
+  const walk = async (value, currentPath = []) => {
     if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
     if (Array.isArray(value)) {
-      for (const item of value) await walk(item);
+      for (let index = 0; index < value.length; index += 1) await walk(value[index], [...currentPath, index]);
       return;
     }
     if (!value || typeof value !== 'object') return;
@@ -73,6 +74,12 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
           path: filePath,
         });
       }
+      mediaOccurrences.push({
+        key: fingerprint.key,
+        mediaSha256: fingerprint.mediaSha256,
+        mediaType,
+        path: [...currentPath],
+      });
       value.source = {
         type: 'proxy_file',
         media_type: mediaType,
@@ -83,12 +90,12 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
       };
       return;
     }
-    if (Array.isArray(value.content)) await walk(value.content);
+    if (Array.isArray(value.content)) await walk(value.content, [...currentPath, 'content']);
   };
 
   try {
-    await walk(messages);
-    return { messages, root, allowedPaths, mediaEntries, cleanup };
+    await walk(messages, ['messages']);
+    return { messages, root, allowedPaths, mediaEntries, mediaOccurrences, cleanup };
   } catch (error) {
     await cleanup();
     throw error;

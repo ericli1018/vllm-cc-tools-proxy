@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.27.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.27.2', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2547,4 +2547,172 @@ test('V0.2.27.1 streamed media exposes live progress before Vision preprocessing
   assert.doesNotMatch(bootstrap, /proxy_file/);
   assert.match(exact, /VISION EVIDENCE/);
   assert.doesNotMatch(exact, /proxy_file/);
+});
+
+test('V0.2.27.2 Read.pages uses page-scoped cache instead of whole-document evidence', async (t) => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-proxy-focused-cache-'));
+  t.after(() => fs.rm(cacheRoot, { recursive: true, force: true }));
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const base64 = pdf.toString('base64');
+  let parses = 0;
+  const upstreamPayloads = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamPayloads.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'m',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    cache: { rootDir: cacheRoot, maxBytes: 0, retentionMs: 60_000, pipelineVersion: 'media-v7', visualPromptVersion: 'visual-v6', evidenceContractVersion: 'evidence-v2' },
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async (_buffer, options) => {
+        parses += 1;
+        if (options.pageScope?.canonical === '42') {
+          return { parser:'test',page_count:100,processed_pages:1,requested_pages:[42],page_scope_mode:'full_source',visual_used:false,visual_batch_count:0,markdown:'FOCUSED PAGE 42',warnings:[],truncated:false };
+        }
+        return { parser:'test',page_count:100,processed_pages:100,requested_pages:null,page_scope_mode:'whole_document',visual_used:false,visual_batch_count:0,markdown:'WHOLE DOCUMENT',warnings:[],truncated:false };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const wholeMessages = [
+    { role:'user', content:'read the board' },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-whole', name:'Read', input:{ file_path:'/work/board.pdf' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-whole', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }] }] },
+  ];
+  const focusedMessages = (id) => [
+    { role:'user', content:'inspect page 42' },
+    { role:'assistant', content:[{ type:'tool_use', id, name:'Read', input:{ file_path:'/work/board.pdf', pages:'42' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:id, content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }] }] },
+  ];
+
+  for (const messages of [wholeMessages, focusedMessages('read-focus-1'), focusedMessages('read-focus-2')]) {
+    const response = await fetch(`${proxyUrl}/v1/messages`, {
+      method:'POST', headers:{'content-type':'application/json'},
+      body:JSON.stringify({ model:'m', stream:false, messages }),
+    });
+    assert.equal(response.status, 200);
+    await response.json();
+  }
+
+  assert.equal(parses, 2, 'whole document and first focused page should parse once each; repeated focused read should hit focused cache');
+  assert.match(JSON.stringify(upstreamPayloads[0]), /WHOLE DOCUMENT/);
+  assert.match(JSON.stringify(upstreamPayloads[1]), /FOCUSED PAGE 42/);
+  assert.match(JSON.stringify(upstreamPayloads[1]), /requested_pages: \[42\]/);
+  assert.match(JSON.stringify(upstreamPayloads[2]), /FOCUSED PAGE 42/);
+  const cacheFiles = (await fs.readdir(cacheRoot)).filter((name) => name.endsWith('.json'));
+  assert.equal(cacheFiles.length, 2);
+});
+
+test('V0.2.27.2 focused Read.pages keeps live progress when whole-document cache already exists', async (t) => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-proxy-focused-live-'));
+  t.after(() => fs.rm(cacheRoot, { recursive: true, force: true }));
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const base64 = pdf.toString('base64');
+  let countCalls = 0;
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      countCalls += 1;
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: countCalls === 1 ? 100 : 120 }));
+      return;
+    }
+    if (payload.stream === true) {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":120,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'m',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+
+  let focusedStartedResolve;
+  const focusedStarted = new Promise((resolve) => { focusedStartedResolve = resolve; });
+  let releaseFocused;
+  const focusedGate = new Promise((resolve) => { releaseFocused = resolve; });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    usagePreflightEnabled: true,
+    progressVisibleAfterMs: 0,
+    progressHeartbeatMs: 60000,
+    cache: { rootDir: cacheRoot, maxBytes: 0, retentionMs: 60_000, pipelineVersion: 'media-v7', visualPromptVersion: 'visual-v6', evidenceContractVersion: 'evidence-v2' },
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async (_buffer, options) => {
+        if (options.pageScope?.canonical === '42') {
+          await options.onProgress?.('正在重新檢查指定 PDF 頁面…', { phase: 'pdf_focused_test', completed: 0, total: 1 });
+          focusedStartedResolve();
+          await focusedGate;
+          return { parser:'test',page_count:100,processed_pages:1,requested_pages:[42],page_scope_mode:'full_source',visual_used:false,visual_batch_count:0,markdown:'FOCUSED PAGE 42',warnings:[],truncated:false };
+        }
+        return { parser:'test',page_count:100,processed_pages:100,requested_pages:null,page_scope_mode:'whole_document',visual_used:false,visual_batch_count:0,markdown:'WHOLE DOCUMENT',warnings:[],truncated:false };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const wholeMessages = [
+    { role:'user', content:'read the board' },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-whole-live', name:'Read', input:{ file_path:'/work/board.pdf' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-whole-live', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }] }] },
+  ];
+  const wholeResponse = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ model:'m', stream:false, messages:wholeMessages }),
+  });
+  assert.equal(wholeResponse.status, 200);
+  await wholeResponse.json();
+
+  const focusedMessages = [
+    { role:'user', content:'inspect page 42 again' },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-focus-live', name:'Read', input:{ file_path:'/work/board.pdf', pages:'42' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-focus-live', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:base64 } }] }] },
+  ];
+
+  const responsePromise = fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body:JSON.stringify({ model:'m', stream:true, messages:focusedMessages }),
+  });
+  await focusedStarted;
+
+  let response = null;
+  try {
+    response = await Promise.race([
+      responsePromise,
+      new Promise((resolve) => setTimeout(() => resolve(null), 150)),
+    ]);
+    assert.ok(response, 'focused Read.pages must open SSE before focused PDF parsing completes even if whole-document cache exists');
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let earlyWire = '';
+    const deadline = Date.now() + 300;
+    while (!earlyWire.includes('正在重新檢查指定 PDF 頁面') && Date.now() < deadline) {
+      const item = await Promise.race([
+        reader.read(),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 40)),
+      ]);
+      if (item?.timeout) continue;
+      if (item.done) break;
+      earlyWire += decoder.decode(item.value, { stream: true });
+    }
+    assert.match(earlyWire, /正在重新檢查指定 PDF 頁面/);
+
+    releaseFocused();
+    while (true) {
+      const item = await reader.read();
+      if (item.done) break;
+    }
+  } finally {
+    releaseFocused();
+    if (!response) await responsePromise.catch(() => {});
+  }
 });

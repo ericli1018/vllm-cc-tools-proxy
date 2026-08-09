@@ -21,6 +21,7 @@ import { localizeProgressMessage, statusText } from '../i18n/response-language.j
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
+import { scopeMediaCacheKey } from '../cache/cache-key.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { requestBaseUpstream } from './base-upstream.js';
@@ -965,16 +966,33 @@ export function createProxyServer(config, dependencies = {}) {
         });
         request.messages = preparedMedia.messages;
         mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
-        for (const entry of preparedMedia.mediaEntries) {
-          const cached = await mediaCache.get(entry.key);
+        const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
+        let cachedOccurrences = 0;
+        for (const occurrence of mediaOccurrences) {
+          const tracked = mediaProgress.contextForPath(occurrence.path);
+          const pageScope = occurrence.mediaType === 'application/pdf' ? tracked?.pageScope : null;
+          const effectiveKey = scopeMediaCacheKey(occurrence.key, pageScope);
+          const invalidScope = occurrence.mediaType === 'application/pdf' && Boolean(tracked?.pageScopeError);
+          const cached = invalidScope ? null : await mediaCache.get(effectiveKey);
           if (cached?.block) {
-            preloadedCache.set(entry.key, cached);
-            log(config, 'info', 'media_cache_hit', { requestId, cache_key_prefix: entry.key.slice(0, 12), media_type: entry.mediaType });
+            cachedOccurrences += 1;
+            preloadedCache.set(effectiveKey, cached);
+            log(config, 'info', 'media_cache_hit', {
+              requestId,
+              cache_key_prefix: effectiveKey.slice(0, 12),
+              media_type: occurrence.mediaType,
+              ...(pageScope?.canonical ? { pdf_pages: pageScope.canonical } : {}),
+            });
           } else {
-            log(config, 'info', 'media_cache_miss', { requestId, cache_key_prefix: entry.key.slice(0, 12), media_type: entry.mediaType });
+            log(config, 'info', 'media_cache_miss', {
+              requestId,
+              cache_key_prefix: effectiveKey.slice(0, 12),
+              media_type: occurrence.mediaType,
+              ...(pageScope?.canonical ? { pdf_pages: pageScope.canonical } : {}),
+            });
           }
         }
-        allMediaCached = preparedMedia.mediaEntries.length > 0 && preloadedCache.size === preparedMedia.mediaEntries.length;
+        allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
       }
 
       const needsManagedWork = hasManagedTools || (hasMedia && !allMediaCached);

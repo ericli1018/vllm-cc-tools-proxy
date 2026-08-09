@@ -32,3 +32,8 @@ export function buildMediaCacheKey({
   });
   return { key: sha256(contract), mediaSha256 };
 }
+
+export function scopeMediaCacheKey(baseKey, pageScope) {
+  if (!pageScope?.canonical) return baseKey || '';
+  return sha256(JSON.stringify({ baseKey: String(baseKey || ''), kind: 'pdf-pages', pages: pageScope.canonical }));
+}

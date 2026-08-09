@@ -31,3 +31,17 @@ test('media cache key changes when the evidence contract changes', () => {
     buildMediaCacheKey({ ...base, evidenceContractVersion: 'evidence-v2' }).key,
   );
 });
+
+import { scopeMediaCacheKey } from '../src/cache/cache-key.js';
+
+test('V0.2.27.2 page-scoped cache key is isolated and canonical', () => {
+  const baseKey = 'a'.repeat(64);
+  const page42 = scopeMediaCacheKey(baseKey, { pages: [42], canonical: '42' });
+  const equivalent = scopeMediaCacheKey(baseKey, { pages: [42], canonical: '42' });
+  const page43 = scopeMediaCacheKey(baseKey, { pages: [43], canonical: '43' });
+  assert.match(page42, /^[a-f0-9]{64}$/);
+  assert.equal(page42, equivalent);
+  assert.notEqual(page42, baseKey);
+  assert.notEqual(page42, page43);
+  assert.equal(scopeMediaCacheKey(baseKey, null), baseKey);
+});

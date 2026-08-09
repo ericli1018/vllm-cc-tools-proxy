@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.27.2 - 2026-08-09
+
+- Added native Claude Code `Read.pages` correlation from `Read` tool-use history to returned PDF media without introducing a custom tool.
+- Added canonical PDF page-scope parsing and page-scoped media cache identities so whole-document evidence cannot satisfy focused rereads.
+- Added focused PDF parsing for both full-source PDF payloads and Claude Code subset-PDF payloads, preserving original logical page numbers in evidence.
+- Allowed focused reads of a bounded page set from PDFs whose total page count exceeds the ordinary whole-document page limit.
+- Made media cache preflight occurrence- and page-scope-aware so a cached whole PDF cannot suppress V0.2.27.1 live progress for a focused cache miss.
+- Preserved V0.2.27 routing, schematic tiling, recursive crop, vLLM/Ollama Vision providers, existing ENV names, and cache/evidence generations `media-v7`, `visual-v6`, `evidence-v2`.
+- Deliberately did not persist raw PDFs across turns; each focused reread uses the current Claude Code `Read.pages` result as its source of truth.
+
 ## 0.2.27.1 - 2026-08-09
 
 - Opened managed SSE progress before PDF/Vision preprocessing completes by using a sanitized text-only usage bootstrap request for streamed media cache misses.

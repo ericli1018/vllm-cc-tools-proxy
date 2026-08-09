@@ -89,12 +89,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.27.1 metadata', async () => {
+test('package version is V0.2.27.2 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.27.1');
-  assert.equal(lock.version, '0.2.27.1');
-  assert.equal(lock.packages[''].version, '0.2.27.1');
+  assert.equal(packageJson.version, '0.2.27.2');
+  assert.equal(lock.version, '0.2.27.2');
+  assert.equal(lock.packages[''].version, '0.2.27.2');
 });
 
 
@@ -345,6 +345,18 @@ test('README documents V0.2.27 routed schematic PDF pipeline', () => {
   assert.match(readme, /evidence-v2/);
 });
 
+
+
+test('README documents V0.2.27.2 native Read.pages focused PDF refinement', () => {
+  assert.match(readme, /V0\.2\.27\.2.*Read\.pages.*focused PDF/i);
+  assert.match(readme, /page-scoped cache/i);
+  assert.match(readme, /whole-document cache/i);
+  assert.match(readme, /recursive.*crop/i);
+  assert.match(readme, /no custom Claude Code tool/i);
+  assert.match(readme, /media-v7/);
+  assert.match(readme, /visual-v6/);
+  assert.match(readme, /evidence-v2/);
+});
 
 test('README documents V0.2.27.1 live PDF/media progress hotfix', () => {
   assert.match(readme, /V0\.2\.27\.1 live PDF\/media progress hotfix/i);

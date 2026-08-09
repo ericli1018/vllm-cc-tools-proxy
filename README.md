@@ -1,6 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.1 adds live PDF/media preprocessing progress to Claude Code while preserving V0.2.27 routed schematic evidence behavior and exact post-normalization usage accounting.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.27.2 adds native Claude Code `Read.pages` focused PDF refinement with page-scoped caching while preserving V0.2.27.1 live media progress and V0.2.27 schematic evidence behavior.
+
+## V0.2.27.2 native Read.pages focused PDF refinement
+
+V0.2.27.2 lets the main model reuse Claude Code's native PDF `Read.pages` request as a focused reread path. The Proxy correlates the assistant `Read` tool use with the returned PDF `tool_result`, normalizes the requested page scope, and keeps that scope attached to the media occurrence without exposing the original local file path to evidence or cache metadata. No custom Claude Code tool is introduced.
+
+A focused read such as `Read(file_path="board.pdf", pages="42")` now receives a **page-scoped cache** identity derived from the existing media fingerprint plus the canonical page scope. A cached whole-document result therefore cannot satisfy a focused reread, while a repeated reread of the same page range can reuse the focused evidence. The global cache generations remain `media-v7`, `visual-v6`, and `evidence-v2`, so existing whole-document cache entries remain valid.
+
+The PDF parser processes only the requested logical pages when the received payload is the full source PDF. If Claude Code supplies a subset PDF containing only the requested pages, the Proxy maps its physical pages back to the original logical page numbers in evidence. Focused reads are bounded by the number of requested pages rather than the total source page count, allowing a small reread from a larger document while retaining the existing per-request limits.
+
+Focused PDF processing keeps the existing `TEXT` / `DIAGRAM` / `SCHEMATIC` / `DENSE_PAGE` routing. A focused schematic page still uses overview, overlapping tiles, page merge, and the existing Vision recursive crop against the PDF received by that `Read.pages` call. Whole-document cache hits no longer suppress live progress for a focused cache miss: cache preflight is page-scope-aware before choosing the managed or cached fast path.
+
+This release deliberately does not persist raw PDFs across turns, add a region/bbox Claude Code tool, add ENV variables, or change OCR/Vision providers. Claude Code selects the page with native `Read.pages`; the existing Vision worker selects finer regions through recursive crop when needed.
 
 ## V0.2.27.1 live PDF/media progress hotfix
 

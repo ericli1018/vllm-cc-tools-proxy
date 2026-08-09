@@ -101,3 +101,24 @@ test('media cache fingerprints change across visual provider and thinking modes'
     await Promise.all([vllm.cleanup(), ollama.cleanup(), ollamaThink.cleanup()]);
   }
 });
+
+test('media preflight records every media occurrence path while deduplicating files', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const block = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } };
+  const messages = [{ role: 'user', content: [
+    { type: 'tool_result', tool_use_id: 't1', content: [structuredClone(block)] },
+    structuredClone(block),
+  ] }];
+  const prepared = await prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 });
+  try {
+    assert.equal(prepared.mediaEntries.length, 1);
+    assert.deepEqual(prepared.mediaOccurrences.map((entry) => entry.path), [
+      ['messages', 0, 'content', 0, 'content', 0],
+      ['messages', 0, 'content', 1],
+    ]);
+    assert.equal(prepared.mediaOccurrences[0].key, prepared.mediaEntries[0].key);
+    assert.equal(prepared.mediaOccurrences[1].key, prepared.mediaEntries[0].key);
+  } finally {
+    await prepared.cleanup();
+  }
+});

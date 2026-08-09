@@ -160,3 +160,53 @@ test('V0.2.26 image adapter preserves original image bytes and dimensions as the
   assert.equal(observedAsset.rootWidth, 600);
   assert.equal(observedAsset.rootHeight, 180);
 });
+
+test('V0.2.27.2 focused Read.pages never reuses whole-document cache evidence', async () => {
+  const pdf = Buffer.from('%PDF-1.7\nbody');
+  const baseKey = 'a'.repeat(64);
+  const values = new Map([[baseKey, { block: { type: 'text', text: 'WHOLE DOCUMENT CACHE' } }]]);
+  let parses = 0;
+  let observedPageScope = null;
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 1024, maxOutputChars: 1000 },
+    vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+  }, undefined, undefined, {
+    mediaProgress: { contextForPath: () => ({ filename: 'board.pdf', pageScope: { pages: [42], canonical: '42' } }) },
+    mediaCache: {
+      get: async (key) => values.get(key) || null,
+      set: async (key, value) => { values.set(key, value); return true; },
+    },
+    parsePdf: async (_buffer, options) => {
+      parses += 1;
+      observedPageScope = options.pageScope;
+      return { parser: 'poppler', page_count: 100, processed_pages: 1, requested_pages: [42], visual_used: false, markdown: 'FOCUSED PAGE 42', warnings: [], truncated: false };
+    },
+  });
+  const output = await adapters.adaptDocument({
+    type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64'), cache_key: baseKey },
+  }, { path: ['messages', 0, 'content', 0] });
+  assert.equal(parses, 1);
+  assert.deepEqual(observedPageScope, { pages: [42], canonical: '42' });
+  assert.match(output.text, /FOCUSED PAGE 42/);
+  assert.doesNotMatch(output.text, /WHOLE DOCUMENT CACHE/);
+  assert.equal(values.size, 2);
+});
+
+test('V0.2.27.2 document adapter exposes focused page scope in normalized evidence', async () => {
+  const pdf = Buffer.from('%PDF-1.7\nbody');
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 1024, maxOutputChars: 2000 },
+    vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+  }, undefined, undefined, {
+    mediaProgress: { contextForPath: () => ({ filename: 'board.pdf', pageScope: { pages: [42], canonical: '42' } }) },
+    parsePdf: async () => ({
+      parser: 'poppler', page_count: 100, processed_pages: 1, requested_pages: [42], page_scope_mode: 'full_source',
+      visual_batch_count: 0, visual_used: false, markdown: 'FOCUSED 42', warnings: [], truncated: false,
+    }),
+  });
+  const output = await adapters.adaptDocument({
+    type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') },
+  }, { path: ['messages', 0, 'content', 0] });
+  assert.match(output.text, /requested_pages: \[42\]/);
+  assert.match(output.text, /page_scope_mode: "full_source"/);
+});

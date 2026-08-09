@@ -281,3 +281,59 @@ test('V0.2.27 diagram route uses overview Vision without deterministic schematic
   assert.equal(renders.some((args) => args.includes('-x')), false);
   assert.match(result.markdown, /START -> INIT -> READY/);
 });
+
+test('V0.2.27.2 focused scope processes only requested page from a full PDF and permits a larger source document', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const extracted = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 100\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') {
+      extracted.push(Number(args[1]));
+      return { stdout: Buffer.from('Focused native text '.repeat(10)), stderr: Buffer.alloc(0) };
+    }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await parsePdf(buffer, {
+    limits, runner, pageScope: { pages: [42], canonical: '42' },
+    vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+  });
+  assert.deepEqual(extracted, [42]);
+  assert.equal(result.page_count, 100);
+  assert.equal(result.processed_pages, 1);
+  assert.deepEqual(result.requested_pages, [42]);
+  assert.match(result.markdown, /VCC_PDF_PAGE_BEGIN index=42/);
+});
+
+test('V0.2.27.2 maps a Claude Code subset PDF back to the requested logical page number', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const extracted = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') {
+      extracted.push(Number(args[1]));
+      return { stdout: Buffer.from('Subset page native text '.repeat(10)), stderr: Buffer.alloc(0) };
+    }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await parsePdf(buffer, {
+    limits, runner, pageScope: { pages: [42], canonical: '42' },
+    vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+  });
+  assert.deepEqual(extracted, [1]);
+  assert.equal(result.page_count, 1);
+  assert.equal(result.processed_pages, 1);
+  assert.deepEqual(result.requested_pages, [42]);
+  assert.match(result.markdown, /VCC_PDF_PAGE_BEGIN index=42/);
+});
+
+test('V0.2.27.2 rejects a focused scope that the received PDF cannot represent', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const runner = async (command) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 10\nEncrypted: no\n'), stderr: Buffer.alloc(0) };
+    throw new Error(`unexpected command ${command}`);
+  };
+  await assert.rejects(
+    () => parsePdf(buffer, { limits, runner, pageScope: { pages: [42, 43], canonical: '42-43' }, vllmVisionUrl: '', vllmVisionModel: '' }),
+    (error) => error?.code === 'pdf_page_scope_unavailable',
+  );
+});
