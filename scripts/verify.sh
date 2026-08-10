@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.8'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.8'
+test "$(node -p "require('./package.json').version")" = '0.2.28.9'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.9'
 
 
 test -f src/i18n/response-language.js
@@ -387,3 +387,13 @@ grep -Fq 'visual-v10' README.md
 grep -Fq 'evidence-v6' README.md
 
 echo 'Verification complete.'
+
+
+# V0.2.28.9 Claude Code Context Compact routing guard
+test -f src/proxy/context-compact-detector.js
+test -f test/context-compact-detector.test.js
+grep -Fq 'context_compact_request_detected' src/services/proxy-server.js
+grep -Fq 'context_compact_bypass' src/services/proxy-server.js
+grep -Fq 'prepareClaudeCodeCompactRequest' src/services/proxy-server.js
+grep -Fq 'V0.2.28.9 Context Compact routing guard' README.md
+test -f V0.2.28.9-更新說明.md

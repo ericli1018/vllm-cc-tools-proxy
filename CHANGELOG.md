@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.9 - 2026-08-10
+
+- Added a dedicated Claude Code Context Compact request detector before managed-tool classification.
+- Compact summarizer requests now bypass the Managed Loop even when Claude Code includes WebSearch/WebFetch or other tool definitions.
+- Removed `tools` and `tool_choice` only from the outbound compact summarization request so the Base model cannot turn compaction into an agent/tool round.
+- Compact responses are transparently returned without Managed Final contract inspection, `control_tag_leak` repair, continuation recovery, Final Language repair, or managed progress injection.
+- Added regression coverage proving a compact summary containing literal `<analysis>...</analysis>` is returned in one upstream round and does not trigger managed recovery.
+- Preserved the V0.2.28.8 cache-aware context-token accounting fix unchanged; no new ENV variables or external Context Compact model routing are included.
+
 ## 0.2.28.8 - 2026-08-10
 
 - Fixed managed Anthropic context-token accounting when `/v1/messages/count_tokens` preflight totals are followed by vLLM cache-split usage.

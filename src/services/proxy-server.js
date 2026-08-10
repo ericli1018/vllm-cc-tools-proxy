@@ -13,6 +13,7 @@ import { createWebToolDiagnosticController } from '../proxy/web-tool-diagnostic.
 import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
 import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
+import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
@@ -856,6 +857,34 @@ export function createProxyServer(config, dependencies = {}) {
           tag_count: protocolTools.tags.length,
           tags: [...new Set(protocolTools.tags.map((tag) => tag.replace(/[<>/]/g, '').split(/[=\s]/)[0].toLowerCase()))],
         });
+      }
+
+      const compactClassification = messagesPath === '/v1/messages'
+        ? classifyClaudeCodeCompactRequest(original)
+        : { compact: false, family: null, anchor: null };
+      if (compactClassification.compact) {
+        const compactRequest = prepareClaudeCodeCompactRequest(original);
+        const removedToolCount = Array.isArray(original.tools) ? original.tools.length : 0;
+        log(config, 'info', 'context_compact_request_detected', {
+          requestId,
+          family: compactClassification.family,
+          anchor: compactClassification.anchor,
+          model: original.model || '',
+          stream: original.stream === true,
+          removed_tool_count: removedToolCount,
+        });
+        log(config, 'info', 'route_decision', {
+          requestId, method: req.method, path: url.pathname,
+          decision: 'context_compact_bypass',
+          reason: 'claude_code_context_compact',
+        });
+        releaseIngress(); releaseIngress = null;
+        await forwardTransparent(req, res, config, {
+          rawBody: Buffer.from(JSON.stringify(compactRequest)),
+          signal: abortController.signal,
+        });
+        completed = true;
+        return;
       }
 
       const classification = classifyMessagesRequest(original);

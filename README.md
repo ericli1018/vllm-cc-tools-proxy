@@ -1,6 +1,12 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.8 fixes managed Anthropic context-token accounting when `/count_tokens` preflight totals are followed by vLLM prefix-cache split usage, preventing cached input from being counted twice while preserving V0.2.28.7 model-phase progress and all earlier workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.9 adds a Context Compact routing guard so Claude Code compaction bypasses the Managed Agent loop even when the compact request carries WebSearch/WebFetch definitions, while preserving the V0.2.28.8 cache-aware context-token accounting fix and all earlier workflows.
+
+## V0.2.28.9 Context Compact routing guard
+
+V0.2.28.9 detects Claude Code Context Compact summarizer requests before managed-tool classification. Matching compact requests are sent directly to the configured Base vLLM with `tools` and `tool_choice` removed, preserving the original model, messages, stream mode and remaining Anthropic request fields. Their responses are returned transparently and are not subjected to Managed Final contract inspection, `control_tag_leak` repair, continuation recovery, Final Language repair, or managed progress injection.
+
+This prevents compact summaries that legitimately contain literal protocol text such as `<analysis>...</analysis>` from being mistaken for a current Laguna runtime leak. Ordinary Agent requests with WebSearch/WebFetch continue to use the existing Managed workflow. No new ENV variables are introduced in this release.
 
 
 ## V0.2.28.8 cache-aware context token accounting

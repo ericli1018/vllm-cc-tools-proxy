@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.8', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.9', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2917,4 +2917,83 @@ test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phas
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'tool']);
+});
+
+test('V0.2.28.9 Claude Code compact bypasses managed loop and transparently returns summary containing analysis tags', async (t) => {
+  const logs = [];
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    observed.push({ path: req.url, payload: JSON.parse((await read(req)).toString()) });
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'x-compact-upstream': 'yes' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"compact-1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":120000,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"<analysis>historical compact analysis</analysis>\\n<summary>COMPACT_OK</summary>"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":40}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '',
+      '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far, paying close attention to the user's explicit requests and your previous actions.\nThis summary should be thorough in capturing technical details, code patterns, and architectural decisions that would be essential for continuing development work without losing context.\nBefore providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts and ensure you've covered all necessary points.\nPlease provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      stream: true,
+      tools: [
+        { name: 'WebSearch', description: 'search', input_schema: { type: 'object' } },
+        { name: 'WebFetch', description: 'fetch', input_schema: { type: 'object' } },
+      ],
+      tool_choice: { type: 'auto' },
+      messages: [{ role: 'user', content: compactPrompt }],
+    }),
+  });
+  const wire = await response.text();
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-compact-upstream'), 'yes');
+  assert.match(wire, /<analysis>historical compact analysis<\/analysis>/);
+  assert.match(wire, /COMPACT_OK/);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].path, '/v1/messages');
+  assert.equal(observed[0].payload.model, 'claude-sonnet-4-6');
+  assert.equal(observed[0].payload.stream, true);
+  assert.equal('tools' in observed[0].payload, false);
+  assert.equal('tool_choice' in observed[0].payload, false);
+
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_request_detected'));
+  assert.ok(logs.some((entry) => entry.event === 'route_decision' && entry.decision === 'context_compact_bypass'));
+  for (const forbidden of [
+    'managed_model_round_started',
+    'managed_model_round_completed',
+    'managed_final_response_inspected',
+    'laguna_runtime_contract_violation',
+    'managed_final_response_repair_start',
+    'managed_continuation_recovery_start',
+  ]) {
+    assert.equal(logs.some((entry) => entry.event === forbidden), false, `unexpected ${forbidden}`);
+  }
 });
