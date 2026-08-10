@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.10 - 2026-08-10
+
+- Added optional `CONTEXT_COMPACT_PROVIDER`, `CONTEXT_COMPACT_URL`, `CONTEXT_COMPACT_MODEL`, `CONTEXT_COMPACT_API_KEY`, and `CONTEXT_COMPACT_THINK` settings for Claude Code native Context Compact summarization.
+- Added provider-specific compact clients: Ollama native `/api/chat` uses `think=true|false`; vLLM `/v1/chat/completions` uses `chat_template_kwargs.enable_thinking` with `preserve_thinking=false`.
+- Routed detected compact requests to the external worker only after the V0.2.28.9 tool-removal guard; external workers never receive Claude Code tools or enter the Managed Loop.
+- Preserved the original Claude model identity in Anthropic JSON/SSE responses and kept Qwen backend token usage diagnostic-only so it cannot contaminate Claude/Laguna context accounting.
+- Discarded backend thinking/reasoning while preserving literal `<analysis>...</analysis>` summary text requested by Claude Code.
+- Added deterministic fallback to the V0.2.28.9 Base Compact route on backend connection, timeout, HTTP, JSON, empty-output, or tool-call failure.
+
 ## 0.2.28.9 - 2026-08-10
 
 - Added a dedicated Claude Code Context Compact request detector before managed-tool classification.

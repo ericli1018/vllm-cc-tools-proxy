@@ -341,3 +341,32 @@ test('V0.2.28.4 bumps visual and evidence cache generations after schematic isol
   assert.equal(config.cache.visualPromptVersion, 'visual-v10');
   assert.equal(config.cache.evidenceContractVersion, 'evidence-v6');
 });
+
+test('V0.2.28.10 Context Compact Model ENV supports independent vLLM and Ollama providers', () => {
+  const disabled = loadConfig({ VLLM_BASE_URL: 'http://base:8000' });
+  assert.deepEqual(disabled.contextCompact, {
+    enabled: false, provider: 'vllm', url: '', model: '', apiKey: '', think: false,
+  });
+
+  const ollama = loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    CONTEXT_COMPACT_PROVIDER: 'ollama',
+    CONTEXT_COMPACT_URL: 'http://ollama:11434',
+    CONTEXT_COMPACT_MODEL: 'qwen3.6:27b-q4_K_M-cc',
+    CONTEXT_COMPACT_API_KEY: 'compact-secret',
+    CONTEXT_COMPACT_THINK: 'true',
+  });
+  assert.deepEqual(ollama.contextCompact, {
+    enabled: true,
+    provider: 'ollama',
+    url: 'http://ollama:11434',
+    model: 'qwen3.6:27b-q4_K_M-cc',
+    apiKey: 'compact-secret',
+    think: true,
+  });
+
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_URL: 'http://x:1' }), /CONTEXT_COMPACT_MODEL/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_MODEL: 'm' }), /CONTEXT_COMPACT_URL/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_PROVIDER: 'bad' }), /CONTEXT_COMPACT_PROVIDER/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_THINK: 'yes' }), /CONTEXT_COMPACT_THINK/);
+});

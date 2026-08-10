@@ -1,6 +1,20 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.9 adds a Context Compact routing guard so Claude Code compaction bypasses the Managed Agent loop even when the compact request carries WebSearch/WebFetch definitions, while preserving the V0.2.28.8 cache-aware context-token accounting fix and all earlier workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.10 adds an optional independent Qwen Context Compact worker on top of the V0.2.28.9 Compact routing guard, while preserving the V0.2.28.8 cache-aware context-token accounting fix and all earlier workflows.
+
+## V0.2.28.10 external Context Compact model
+
+V0.2.28.10 can route Claude Code `/compact` and auto-compact summarizer requests to a dedicated local model such as `qwen3.6:27b-q4_K_M-cc`. Configure `CONTEXT_COMPACT_URL` and `CONTEXT_COMPACT_MODEL` together to enable it; leave both blank to keep the V0.2.28.9 Base Compact path.
+
+```env
+CONTEXT_COMPACT_PROVIDER=ollama
+CONTEXT_COMPACT_URL=http://host.docker.internal:11434
+CONTEXT_COMPACT_MODEL=qwen3.6:27b-q4_K_M-cc
+CONTEXT_COMPACT_API_KEY=
+CONTEXT_COMPACT_THINK=false
+```
+
+Provider thinking control is intentionally different: Ollama uses native `/api/chat` with `think=true|false`, while vLLM uses `/v1/chat/completions` with `chat_template_kwargs.enable_thinking=true|false` and `preserve_thinking=false`. Backend reasoning is discarded; literal `<analysis>...</analysis>` required by the Claude Code compact prompt is preserved. Qwen backend token usage is diagnostic only and is never reused as Claude/Laguna context accounting. External compact failure falls back to the V0.2.28.9 Base Compact route.
 
 ## V0.2.28.9 Context Compact routing guard
 

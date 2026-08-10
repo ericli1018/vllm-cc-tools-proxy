@@ -2,7 +2,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
-import { hasProgressHistory, stripProgressHistory, ProgressStream } from '../proxy/progress.js';
+import { hasProgressHistory, stripProgressHistory, ProgressStream, formatSseEvent } from '../proxy/progress.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { renderManagedToolResult } from '../proxy/web-result-contract.js';
@@ -32,6 +32,7 @@ import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
+import { runContextCompact } from './context-compact-client.js';
 import { compressContinuationWindow as compressContinuationWindowWithExternalProcessor } from './continuation-state-compressor.js';
 import { applyFinalLanguageGate } from '../proxy/final-language-gate.js';
 import {
@@ -345,6 +346,40 @@ function syntheticTextResponse(model, text) {
     stop_reason: 'end_turn', stop_sequence: null,
     usage: { input_tokens: 0, output_tokens: 0 },
   };
+}
+
+async function sendContextCompactResult(res, request, summary, { drainTimeoutMs = 0 } = {}) {
+  const response = syntheticTextResponse(request?.model, summary);
+  if (request?.stream !== true) {
+    sendJson(res, 200, response);
+    return;
+  }
+  res.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache, no-store',
+    connection: 'keep-alive',
+    'x-accel-buffering': 'no',
+  });
+  const events = [
+    formatSseEvent('message_start', {
+      type: 'message_start',
+      message: { ...response, content: [], stop_reason: null },
+    }),
+    formatSseEvent('content_block_start', {
+      type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' },
+    }),
+    formatSseEvent('content_block_delta', {
+      type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: String(summary || '') },
+    }),
+    formatSseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    formatSseEvent('message_delta', {
+      type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: response.usage,
+    }),
+    formatSseEvent('message_stop', { type: 'message_stop' }),
+  ];
+  for (const event of events) await writeChunk(res, event, { drainTimeoutMs });
+  res.end();
 }
 
 function log(config, level, event, fields = {}) {
@@ -865,6 +900,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (compactClassification.compact) {
         const compactRequest = prepareClaudeCodeCompactRequest(original);
         const removedToolCount = Array.isArray(original.tools) ? original.tools.length : 0;
+        const externalCompactEnabled = Boolean(config.contextCompact?.enabled);
         log(config, 'info', 'context_compact_request_detected', {
           requestId,
           family: compactClassification.family,
@@ -872,13 +908,52 @@ export function createProxyServer(config, dependencies = {}) {
           model: original.model || '',
           stream: original.stream === true,
           removed_tool_count: removedToolCount,
+          external_backend_enabled: externalCompactEnabled,
+          ...(externalCompactEnabled ? {
+            compact_provider: config.contextCompact.provider,
+            compact_model: config.contextCompact.model,
+            compact_think: Boolean(config.contextCompact.think),
+          } : {}),
         });
+        releaseIngress(); releaseIngress = null;
+
+        if (externalCompactEnabled) {
+          log(config, 'info', 'route_decision', {
+            requestId, method: req.method, path: url.pathname,
+            decision: 'context_compact_external',
+            reason: 'claude_code_context_compact',
+            provider: config.contextCompact.provider,
+          });
+          let compactResult = null;
+          try {
+            compactResult = await runContextCompact(compactRequest, {
+              config: config.contextCompact,
+              signal: abortController.signal,
+              onEvent: async (event, fields) => log(config, 'info', event, { requestId, ...fields }),
+            });
+          } catch (error) {
+            if (abortController.signal.aborted) throw error;
+            log(config, 'warn', 'context_compact_backend_fallback', {
+              requestId,
+              provider: config.contextCompact.provider,
+              model: config.contextCompact.model,
+              reason: error?.compactReason || String(error?.code || 'compact_backend_error'),
+            });
+          }
+          if (compactResult) {
+            await sendContextCompactResult(res, original, compactResult.summary, {
+              drainTimeoutMs: config.sseDrainTimeoutMs || 0,
+            });
+            completed = true;
+            return;
+          }
+        }
+
         log(config, 'info', 'route_decision', {
           requestId, method: req.method, path: url.pathname,
           decision: 'context_compact_bypass',
-          reason: 'claude_code_context_compact',
+          reason: externalCompactEnabled ? 'context_compact_backend_fallback' : 'claude_code_context_compact',
         });
-        releaseIngress(); releaseIngress = null;
         await forwardTransparent(req, res, config, {
           rawBody: Buffer.from(JSON.stringify(compactRequest)),
           signal: abortController.signal,

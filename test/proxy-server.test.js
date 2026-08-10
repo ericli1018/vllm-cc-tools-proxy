@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.9', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.10', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2919,7 +2919,7 @@ test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phas
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'tool']);
 });
 
-test('V0.2.28.9 Claude Code compact bypasses managed loop and transparently returns summary containing analysis tags', async (t) => {
+test('V0.2.28.10 Claude Code compact bypasses managed loop and transparently returns summary containing analysis tags', async (t) => {
   const logs = [];
   const observed = [];
   const upstream = http.createServer(async (req, res) => {
@@ -2996,4 +2996,98 @@ test('V0.2.28.9 Claude Code compact bypasses managed loop and transparently retu
   ]) {
     assert.equal(logs.some((entry) => entry.event === forbidden), false, `unexpected ${forbidden}`);
   }
+});
+
+test('V0.2.28.10 Ollama external compact uses native think=false and returns Anthropic SSE with original model identity', async (t) => {
+  let baseCalls = 0;
+  const base = await startJsonServer((_req, res) => { baseCalls += 1; res.writeHead(500); res.end(); });
+  let compactObserved;
+  const compact = await startJsonServer(async (req, res) => {
+    compactObserved = { path: req.url, payload: JSON.parse((await read(req)).toString()) };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: { role: 'assistant', thinking: 'private', content: '<analysis>kept</analysis>\nQWEN_COMPACT_OK' }, prompt_eval_count: 1234, eval_count: 321 }));
+  });
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    contextCompact: { enabled: true, provider: 'ollama', url: compact.url, model: 'qwen3.6:27b-q4_K_M-cc', apiKey: '', think: false },
+    logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => compact.server.close()); t.after(() => proxy.close());
+
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far. This summary should preserve technical details essential for continuing development work without losing context. Please provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', stream: true, tools: [{ name: 'WebSearch' }], messages: [{ role: 'user', content: compactPrompt }] }),
+  });
+  const wire = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(baseCalls, 0);
+  assert.equal(compactObserved.path, '/api/chat');
+  assert.equal(compactObserved.payload.model, 'qwen3.6:27b-q4_K_M-cc');
+  assert.equal(compactObserved.payload.think, false);
+  assert.equal('tools' in compactObserved.payload, false);
+  assert.match(wire, /QWEN_COMPACT_OK/);
+  assert.match(wire, /<analysis>kept<\/analysis>/);
+  assert.match(wire, /"model":"claude-sonnet-4-6"/);
+  assert.doesNotMatch(wire, /qwen3\.6:27b-q4_K_M-cc/);
+  assert.match(wire, /"input_tokens":0/);
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_backend_response' && entry.backend_prompt_tokens === 1234));
+});
+
+test('V0.2.28.10 vLLM external compact uses chat_template_kwargs and non-stream Anthropic response', async (t) => {
+  let compactObserved;
+  const compact = await startJsonServer(async (req, res) => {
+    compactObserved = { path: req.url, auth: req.headers.authorization, payload: JSON.parse((await read(req)).toString()) };
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: '<think>private</think>VLLM_COMPACT_OK' } }], usage: { prompt_tokens: 99, completion_tokens: 10 } }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: 'http://127.0.0.1:9',
+    contextCompact: { enabled: true, provider: 'vllm', url: compact.url, model: 'qwen3.6-27b-cc', apiKey: 'compact-key', think: false },
+  }));
+  const proxyUrl = await listen(proxy); t.after(() => compact.server.close()); t.after(() => proxy.close());
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far. This summary should preserve technical details essential for continuing development work without losing context. Please provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-opus-5', stream: false, messages: [{ role: 'user', content: compactPrompt }] }),
+  });
+  const payload = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(compactObserved.path, '/v1/chat/completions');
+  assert.equal(compactObserved.auth, 'Bearer compact-key');
+  assert.equal(compactObserved.payload.chat_template_kwargs.enable_thinking, false);
+  assert.equal(compactObserved.payload.chat_template_kwargs.preserve_thinking, false);
+  assert.equal('reasoning_effort' in compactObserved.payload, false);
+  assert.equal(payload.model, 'claude-opus-5');
+  assert.equal(payload.content[0].text, 'VLLM_COMPACT_OK');
+  assert.deepEqual(payload.usage, { input_tokens: 0, output_tokens: 0 });
+});
+
+test('V0.2.28.10 external compact failure falls back to original Base compact route', async (t) => {
+  const compact = await startJsonServer((_req, res) => { res.writeHead(503, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: 'down' })); });
+  let baseObserved;
+  const base = await startJsonServer(async (req, res) => {
+    baseObserved = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'base-compact', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6', content: [{ type: 'text', text: 'BASE_COMPACT_OK' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 10 } }));
+  });
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    contextCompact: { enabled: true, provider: 'ollama', url: compact.url, model: 'qwen3.6:27b-q4_K_M-cc', apiKey: '', think: false },
+    logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy); t.after(() => compact.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far. This summary should preserve technical details essential for continuing development work without losing context. Please provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', stream: false, tools: [{ name: 'WebFetch' }], tool_choice: { type: 'auto' }, messages: [{ role: 'user', content: compactPrompt }] }),
+  });
+  const payload = await response.json();
+  assert.equal(payload.content[0].text, 'BASE_COMPACT_OK');
+  assert.equal('tools' in baseObserved, false);
+  assert.equal('tool_choice' in baseObserved, false);
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_backend_fallback' && entry.reason === 'http_503'));
 });

@@ -122,6 +122,19 @@ export function loadConfig(env = process.env) {
     timeoutMs: intValue(env.WEB_FETCH_PROCESSOR_TIMEOUT_MS, 300000, 'WEB_FETCH_PROCESSOR_TIMEOUT_MS', { min: 1000, max: 3600000 }),
   });
 
+  const contextCompactUrl = normalizedUrl(env.CONTEXT_COMPACT_URL, '', 'CONTEXT_COMPACT_URL');
+  const contextCompactModel = env.CONTEXT_COMPACT_MODEL || '';
+  const contextCompact = Object.freeze({
+    enabled: Boolean(contextCompactUrl && contextCompactModel),
+    provider: enumValue(env.CONTEXT_COMPACT_PROVIDER, 'vllm', 'CONTEXT_COMPACT_PROVIDER', ['vllm', 'ollama']),
+    url: contextCompactUrl,
+    model: contextCompactModel,
+    apiKey: env.CONTEXT_COMPACT_API_KEY || '',
+    think: booleanValue(env.CONTEXT_COMPACT_THINK, false, 'CONTEXT_COMPACT_THINK'),
+  });
+  if (contextCompactUrl && !contextCompactModel) throw new Error('CONTEXT_COMPACT_MODEL is required when CONTEXT_COMPACT_URL is set');
+  if (contextCompactModel && !contextCompactUrl) throw new Error('CONTEXT_COMPACT_URL is required when CONTEXT_COMPACT_MODEL is set');
+
   const vllmVisionUrl = normalizedUrl(env.VLLM_VISION_URL, '', 'VLLM_VISION_URL');
   const vllmVisionModel = env.VLLM_VISION_MODEL || '';
   const vllmVisionProvider = enumValue(env.VLLM_VISION_PROVIDER, 'vllm', 'VLLM_VISION_PROVIDER', ['vllm', 'ollama']);
@@ -192,6 +205,7 @@ export function loadConfig(env = process.env) {
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),
     webFetchApiKey: env.WEB_FETCH_API_KEY || '',
     webFetchProcessor,
+    contextCompact,
     webToolDiagnostic,
     logLevel: env.LOG_LEVEL || 'info',
     logProtocolSnippets: booleanValue(env.LOG_PROTOCOL_SNIPPETS, false, 'LOG_PROTOCOL_SNIPPETS'),

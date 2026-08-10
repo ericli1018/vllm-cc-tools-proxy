@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.9'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.9'
+test "$(node -p "require('./package.json').version")" = '0.2.28.10'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.10'
 
 
 test -f src/i18n/response-language.js
@@ -330,7 +330,6 @@ grep -Fq 'hasInputUsage' src/proxy/progress.js
 ! grep -Fq 'Math.max(current.input_tokens' src/proxy/progress.js
 grep -Fq 'replaces preflight total with cache-split input usage atomically' test/progress.test.js
 grep -Fq 'does not double-count vLLM cache-split usage after preflight total' test/progress.test.js
-! grep -Eq '^CONTEXT_COMPACT_[A-Z0-9_]+=' .env.example
 
 # V0.2.28.7 compact main-model phase progress
 grep -Fq 'V0.2.28.7 compact main-model phase progress' README.md
@@ -386,9 +385,6 @@ grep -Fq "evidenceContractVersion: 'evidence-v6'" src/config.js
 grep -Fq 'visual-v10' README.md
 grep -Fq 'evidence-v6' README.md
 
-echo 'Verification complete.'
-
-
 # V0.2.28.9 Claude Code Context Compact routing guard
 test -f src/proxy/context-compact-detector.js
 test -f test/context-compact-detector.test.js
@@ -397,3 +393,27 @@ grep -Fq 'context_compact_bypass' src/services/proxy-server.js
 grep -Fq 'prepareClaudeCodeCompactRequest' src/services/proxy-server.js
 grep -Fq 'V0.2.28.9 Context Compact routing guard' README.md
 test -f V0.2.28.9-更新說明.md
+
+# V0.2.28.10 external Context Compact model
+ test -f src/services/context-compact-client.js
+ test -f test/context-compact-client.test.js
+ test -f V0.2.28.10-更新說明.md
+ grep -Fq 'V0.2.28.10 external Context Compact model' README.md
+ grep -q '^CONTEXT_COMPACT_PROVIDER=ollama$' .env.example
+ grep -q '^CONTEXT_COMPACT_URL=http://host.docker.internal:11434$' .env.example
+ grep -q '^CONTEXT_COMPACT_MODEL=qwen3.6:27b-q4_K_M-cc$' .env.example
+ grep -q '^CONTEXT_COMPACT_API_KEY=$' .env.example
+ grep -q '^CONTEXT_COMPACT_THINK=false$' .env.example
+ grep -Fq 'CONTEXT_COMPACT_PROVIDER: ${CONTEXT_COMPACT_PROVIDER:-vllm}' compose.yaml
+ grep -Fq 'CONTEXT_COMPACT_URL: ${CONTEXT_COMPACT_URL:-}' compose.yaml
+ grep -Fq 'CONTEXT_COMPACT_MODEL: ${CONTEXT_COMPACT_MODEL:-}' compose.yaml
+ grep -Fq 'CONTEXT_COMPACT_API_KEY: ${CONTEXT_COMPACT_API_KEY:-}' compose.yaml
+ grep -Fq 'CONTEXT_COMPACT_THINK: ${CONTEXT_COMPACT_THINK:-false}' compose.yaml
+ grep -Fq "provider === 'ollama'" src/services/context-compact-client.js
+ grep -Fq 'think: Boolean(think)' src/services/context-compact-client.js
+ grep -Fq 'enable_thinking: Boolean(think)' src/services/context-compact-client.js
+ grep -Fq 'context_compact_backend_fallback' src/services/proxy-server.js
+ grep -Fq 'context_compact_external' src/services/proxy-server.js
+ grep -Fq 'backend_prompt_tokens' src/services/context-compact-client.js
+
+echo 'Verification complete.'

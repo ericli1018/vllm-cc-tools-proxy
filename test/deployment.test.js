@@ -29,7 +29,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -51,6 +51,11 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(compose, /MANAGED_MODEL_ROUND_TIMEOUT_MS:\s*\$\{MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
   assert.match(compose, /MEDIA_CACHE_MAX_MB:\s*\$\{MEDIA_CACHE_MAX_MB:-0\}/);
+  assert.match(compose, /CONTEXT_COMPACT_PROVIDER:\s*\$\{CONTEXT_COMPACT_PROVIDER:-vllm\}/);
+  assert.match(compose, /CONTEXT_COMPACT_URL:\s*\$\{CONTEXT_COMPACT_URL:-\}/);
+  assert.match(compose, /CONTEXT_COMPACT_MODEL:\s*\$\{CONTEXT_COMPACT_MODEL:-\}/);
+  assert.match(compose, /CONTEXT_COMPACT_API_KEY:\s*\$\{CONTEXT_COMPACT_API_KEY:-\}/);
+  assert.match(compose, /CONTEXT_COMPACT_THINK:\s*\$\{CONTEXT_COMPACT_THINK:-false\}/);
   assert.match(compose, /VLLM_VISION_PROVIDER:\s*\$\{VLLM_VISION_PROVIDER:-vllm\}/);
   assert.match(compose, /VLLM_VISION_THINK:\s*\$\{VLLM_VISION_THINK:-false\}/);
   assert.match(compose, /PROGRESS_HEARTBEAT_MS:\s*\$\{PROGRESS_HEARTBEAT_MS:-30000\}/);
@@ -78,6 +83,9 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.match(envExample, /^SSE_DRAIN_TIMEOUT_MS=10000$/m);
   assert.doesNotMatch(envExample, /^MANAGED_TASK_TIMEOUT_MS=/m);
   assert.match(envExample, /^MANAGED_MODEL_ROUND_TIMEOUT_MS=360000$/m);
+  assert.match(envExample, /^CONTEXT_COMPACT_PROVIDER=ollama$/m);
+  assert.match(envExample, /^CONTEXT_COMPACT_MODEL=qwen3\.6:27b-q4_K_M-cc$/m);
+  assert.match(envExample, /^CONTEXT_COMPACT_THINK=false$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_PROVIDER=vllm$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_CONCURRENCY=3$/m);
   assert.match(envExample, /^WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000$/m);
@@ -90,12 +98,12 @@ test('Compose exposes the simple concurrency profile without adding queue servic
   assert.doesNotMatch(compose, /redis:|rabbitmq:|queue-service:/);
 });
 
-test('package version is V0.2.28.9 metadata', async () => {
+test('package version is V0.2.28.10 metadata', async () => {
   const packageJson = JSON.parse(await fs.readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const lock = JSON.parse(await fs.readFile(new URL('../package-lock.json', import.meta.url), 'utf8'));
-  assert.equal(packageJson.version, '0.2.28.9');
-  assert.equal(lock.version, '0.2.28.9');
-  assert.equal(lock.packages[''].version, '0.2.28.9');
+  assert.equal(packageJson.version, '0.2.28.10');
+  assert.equal(lock.version, '0.2.28.10');
+  assert.equal(lock.packages[''].version, '0.2.28.10');
 });
 
 
@@ -482,4 +490,15 @@ test('README documents V0.2.28.5 recovery-only continuation state compression', 
   assert.match(readme, /media-v7/);
   assert.match(readme, /visual-v10/);
   assert.match(readme, /evidence-v6/);
+});
+
+test('V0.2.28.10 deployment documents and exposes external Context Compact model settings', () => {
+  for (const name of ['CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK']) {
+    assert.match(envExample, new RegExp(`^${name}=`, 'm'));
+    assert.match(compose, new RegExp(`${name}:\\s*\\$\\{${name}`));
+    assert.match(readme, new RegExp(name));
+  }
+  assert.match(readme, /qwen3\.6:27b-q4_K_M-cc/);
+  assert.match(readme, /\/api\/chat/);
+  assert.match(readme, /chat_template_kwargs\.enable_thinking/);
 });
