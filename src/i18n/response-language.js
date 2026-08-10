@@ -22,6 +22,20 @@ function hasReceivedBytes(value) {
   return Number.isFinite(Number(value)) && Number(value) >= 0;
 }
 
+
+const MODEL_PHASE_LABELS = Object.freeze({
+  'zh-TW': Object.freeze({ waiting: '等待', thinking: '思考', response: '回應', tool: '工具' }),
+  'zh-CN': Object.freeze({ waiting: '等待', thinking: '思考', response: '响应', tool: '工具' }),
+  'en-US': Object.freeze({ waiting: 'waiting', thinking: 'thinking', response: 'response', tool: 'tool' }),
+  'ja-JP': Object.freeze({ waiting: '待機', thinking: '思考', response: '応答', tool: 'ツール' }),
+  'ko-KP': Object.freeze({ waiting: '대기', thinking: '사고', response: '응답', tool: '도구' }),
+});
+
+function modelPhaseLabel(locale, phase) {
+  const labels = MODEL_PHASE_LABELS[locale] || MODEL_PHASE_LABELS[DEFAULT_RESPONSE_LANGUAGE];
+  return labels[phase] || labels.waiting;
+}
+
 function formatCharacterCount(value) {
   const count = Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0;
   return count.toLocaleString('en-US');
@@ -35,6 +49,8 @@ const PROFILES = Object.freeze({
       genericProcessing: () => '正在處理…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `主模型仍在處理本輪請求，已執行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       modelFirstByte: ({ seconds = 0, receivedBytes } = {}) => `主模型已開始回傳資料，已執行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
+      modelHeartbeat: ({ seconds = 0, receivedBytes, modelPhase = 'waiting' } = {}) => `主模型處理中 ${seconds} 秒（${modelPhaseLabel('zh-TW', modelPhase)}，${formatReceivedBytes(receivedBytes)}）…`,
+      modelPhaseChanged: ({ modelPhase = 'waiting', receivedBytes } = {}) => ({ thinking: `主模型開始思考（${formatReceivedBytes(receivedBytes)}）…`, response: `主模型開始回應（${formatReceivedBytes(receivedBytes)}）…`, tool: `主模型建立工具動作（${formatReceivedBytes(receivedBytes)}）…` }[modelPhase] || `主模型等待輸出（${formatReceivedBytes(receivedBytes)}）…`),
       searchStart: ({ query = '' }) => `正在搜尋：${query}…`,
       searchDone: ({ query = '' }) => `搜尋完成：${query}。`,
       fetchStart: ({ host = '網頁' }) => `正在讀取並整理 ${host}…`,
@@ -102,6 +118,8 @@ const PROFILES = Object.freeze({
       genericProcessing: () => '正在处理…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `主模型仍在处理本轮请求，已执行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       modelFirstByte: ({ seconds = 0, receivedBytes } = {}) => `主模型已开始返回数据，已执行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
+      modelHeartbeat: ({ seconds = 0, receivedBytes, modelPhase = 'waiting' } = {}) => `主模型处理中 ${seconds} 秒（${modelPhaseLabel('zh-CN', modelPhase)}，${formatReceivedBytes(receivedBytes)}）…`,
+      modelPhaseChanged: ({ modelPhase = 'waiting', receivedBytes } = {}) => ({ thinking: `主模型开始思考（${formatReceivedBytes(receivedBytes)}）…`, response: `主模型开始响应（${formatReceivedBytes(receivedBytes)}）…`, tool: `主模型建立工具动作（${formatReceivedBytes(receivedBytes)}）…` }[modelPhase] || `主模型等待输出（${formatReceivedBytes(receivedBytes)}）…`),
       searchStart: ({ query = '' }) => `正在搜索：${query}…`,
       searchDone: ({ query = '' }) => `搜索完成：${query}。`,
       fetchStart: ({ host = '网页' }) => `正在读取并整理 ${host}…`,
@@ -169,6 +187,8 @@ const PROFILES = Object.freeze({
       genericProcessing: () => 'Processing…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `The main model is still processing this request. Running for ${seconds}s${hasReceivedBytes(receivedBytes) ? ` (received ${formatReceivedBytes(receivedBytes)})` : ''}…`,
       modelFirstByte: ({ seconds = 0, receivedBytes } = {}) => `The main model has started returning data. Running for ${seconds}s${hasReceivedBytes(receivedBytes) ? ` (received ${formatReceivedBytes(receivedBytes)})` : ''}…`,
+      modelHeartbeat: ({ seconds = 0, receivedBytes, modelPhase = 'waiting' } = {}) => `Main model ${seconds}s (${modelPhaseLabel('en-US', modelPhase)}, ${formatReceivedBytes(receivedBytes)})…`,
+      modelPhaseChanged: ({ modelPhase = 'waiting', receivedBytes } = {}) => ({ thinking: `Main model started thinking (${formatReceivedBytes(receivedBytes)})…`, response: `Main model started responding (${formatReceivedBytes(receivedBytes)})…`, tool: `Main model is building a tool action (${formatReceivedBytes(receivedBytes)})…` }[modelPhase] || `Main model is waiting to output (${formatReceivedBytes(receivedBytes)})…`),
       searchStart: ({ query = '' }) => `Searching: ${query}…`,
       searchDone: ({ query = '' }) => `Search completed: ${query}.`,
       fetchStart: ({ host = 'web page' }) => `Fetching and processing ${host}…`,
@@ -236,6 +256,8 @@ const PROFILES = Object.freeze({
       genericProcessing: () => '処理中…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `メインモデルがこのリクエストを処理中です。実行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（受信 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
       modelFirstByte: ({ seconds = 0, receivedBytes } = {}) => `メインモデルがデータを返し始めました。実行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（受信 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
+      modelHeartbeat: ({ seconds = 0, receivedBytes, modelPhase = 'waiting' } = {}) => `メインモデル処理中 ${seconds} 秒（${modelPhaseLabel('ja-JP', modelPhase)}、${formatReceivedBytes(receivedBytes)}）…`,
+      modelPhaseChanged: ({ modelPhase = 'waiting', receivedBytes } = {}) => ({ thinking: `メインモデルが思考を開始（${formatReceivedBytes(receivedBytes)}）…`, response: `メインモデルが応答を開始（${formatReceivedBytes(receivedBytes)}）…`, tool: `メインモデルがツール操作を生成中（${formatReceivedBytes(receivedBytes)}）…` }[modelPhase] || `メインモデルは出力待機中（${formatReceivedBytes(receivedBytes)}）…`),
       searchStart: ({ query = '' }) => `検索中：${query}…`,
       searchDone: ({ query = '' }) => `検索完了：${query}。`,
       fetchStart: ({ host = 'Webページ' }) => `${host} を取得して処理しています…`,
@@ -303,6 +325,8 @@ const PROFILES = Object.freeze({
       genericProcessing: () => '처리 중…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `주 모델이 이 요청을 처리하고 있습니다. ${seconds}초 실행${hasReceivedBytes(receivedBytes) ? ` (수신 ${formatReceivedBytes(receivedBytes)})` : ''}…`,
       modelFirstByte: ({ seconds = 0, receivedBytes } = {}) => `주 모델이 데이터를 반환하기 시작했습니다. ${seconds}초 실행${hasReceivedBytes(receivedBytes) ? ` (수신 ${formatReceivedBytes(receivedBytes)})` : ''}…`,
+      modelHeartbeat: ({ seconds = 0, receivedBytes, modelPhase = 'waiting' } = {}) => `주 모델 처리 중 ${seconds}초 (${modelPhaseLabel('ko-KP', modelPhase)}, ${formatReceivedBytes(receivedBytes)})…`,
+      modelPhaseChanged: ({ modelPhase = 'waiting', receivedBytes } = {}) => ({ thinking: `주 모델 사고 시작 (${formatReceivedBytes(receivedBytes)})…`, response: `주 모델 응답 시작 (${formatReceivedBytes(receivedBytes)})…`, tool: `주 모델 도구 동작 생성 중 (${formatReceivedBytes(receivedBytes)})…` }[modelPhase] || `주 모델 출력 대기 중 (${formatReceivedBytes(receivedBytes)})…`),
       searchStart: ({ query = '' }) => `검색 중: ${query}…`,
       searchDone: ({ query = '' }) => `검색 완료: ${query}.`,
       fetchStart: ({ host = '웹 페이지' }) => `${host}의 내용을 가져와 처리하고 있습니다…`,

@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.6 replaces Final Language Repair marker protocols with Proxy-owned direct-segment translation so translation backends only transform plain text while Proxy deterministically preserves block ordering. Managed continuation behavior from V0.2.28.5 and PDF/Vision behavior from V0.2.28.4 remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.7 adds low-noise main-model generation phase observability (`等待 / 思考 / 回應 / 工具`) to managed Anthropic SSE progress while preserving V0.2.28.6 Final Language Repair, V0.2.28.5 continuation recovery, and V0.2.28.4 PDF/Vision behavior.
+
+
+## V0.2.28.7 compact main-model phase progress
+
+V0.2.28.7 makes long model rounds easier to diagnose without exposing model reasoning content. The Anthropic SSE collector now observes meaningful generation phase transitions from protocol structure only: `thinking` / `thinking_delta` maps to **思考**, `text` / `text_delta` maps to **回應**, and `tool_use` / `server_tool_use` / `input_json_delta` maps to **工具**. Before the first content phase is known, the round is **等待**. Signature deltas, message deltas, block stops, pings, and other protocol-only events do not create user-visible phases.
+
+Managed heartbeat lines are deliberately compact and always remain one physical line, for example:
+
+```text
+主模型處理中 60 秒（思考，29.82 KB）…
+主模型處理中 90 秒（回應，43.59 KB）…
+主模型處理中 120 秒（工具，57.63 KB）…
+```
+
+Phase transitions are emitted immediately when the progress block is visible, using short status lines such as `主模型開始思考（494 B）…`, `主模型開始回應（43.59 KB）…`, and `主模型建立工具動作（57.63 KB）…`. The byte value remains the existing **per-model-round upstream byte count**; it is not the payload size of the named phase. Transport first-byte activity remains available through `managed_model_first_byte_received` diagnostics but no longer adds a redundant user-visible first-byte line.
+
+Each managed model round resets to `waiting`, including controlled-continuation rounds, so the displayed byte count and phase do not inherit the previous round. Safe `managed_model_stream_phase_changed` diagnostics record only phase metadata, elapsed time, and per-round bytes; no thinking/text/tool content is logged.
+
+No new ENV variables are added. Model sampling, reasoning/token budgets, continuation compression, Final Language Repair, PDF/Vision routing, and media cache semantics are unchanged. Cache generations remain `media-v7` / `visual-v10` / `evidence-v6`.
 
 ## V0.2.28.6 Final Language direct-segment repair
 

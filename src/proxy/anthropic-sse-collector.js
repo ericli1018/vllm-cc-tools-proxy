@@ -75,7 +75,7 @@ function finalizeToolInput(block, partialJson, index) {
 }
 
 export async function collectAnthropicMessageFromSse(upstream, {
-  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {},
+  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {},
 } = {}) {
   if (!upstream?.body) throw invalidStream('vLLM Anthropic SSE response did not contain a body.');
 
@@ -86,6 +86,21 @@ export async function collectAnthropicMessageFromSse(upstream, {
   const toolJson = new Map();
   let sawMessageStop = false;
   let firstModelEventObserved = false;
+  let currentStreamPhase = 'waiting';
+
+  const notifyStreamPhase = async ({ event = '', blockType = '', deltaType = '' } = {}) => {
+    const phase = (blockType === 'thinking' || deltaType === 'thinking_delta') ? 'thinking'
+      : (blockType === 'tool_use' || blockType === 'server_tool_use' || deltaType === 'input_json_delta') ? 'tool'
+        : (blockType === 'text' || deltaType === 'text_delta') ? 'response' : null;
+    if (!phase || phase === currentStreamPhase) return;
+    const previousPhase = currentStreamPhase;
+    currentStreamPhase = phase;
+    try {
+      await onStreamPhase({
+        phase, previous_phase: previousPhase, event, block_type: blockType, delta_type: deltaType,
+      });
+    } catch {}
+  };
 
   const processBlock = async (rawBlock) => {
     if (!String(rawBlock || '').trim()) return;
@@ -123,6 +138,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
         firstModelEventObserved = true;
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
+      await notifyStreamPhase({ event: parsed.name, blockType: block.type || '' });
       if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
       return;
     }
@@ -134,6 +150,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
         firstModelEventObserved = true;
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
+      await notifyStreamPhase({
+        event: parsed.name, blockType: block.type || '', deltaType: payload?.delta?.type || '',
+      });
       const holder = { value: toolJson.get(index) || '' };
       applyDelta(block, payload?.delta, holder);
       if (toolJson.has(index)) toolJson.set(index, holder.value);

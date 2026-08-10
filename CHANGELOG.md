@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.7 - 2026-08-10
+
+- Added protocol-derived main-model generation phases for managed Anthropic SSE: `waiting`, `thinking`, `response`, and `tool`.
+- Added compact one-line heartbeat text such as `主模型處理中 60 秒（思考，29.82 KB）…` using existing per-round upstream byte accounting.
+- Added immediate compact phase-transition progress and safe `managed_model_stream_phase_changed` diagnostics without logging model content.
+- Removed redundant user-visible transport first-byte progress while retaining `managed_model_first_byte_received` diagnostics.
+- Reset phase state to `waiting` at every managed model round, including controlled continuation.
+- Added no ENV variables and kept model behavior and cache generations unchanged at `media-v7` / `visual-v10` / `evidence-v6`.
+
 ## 0.2.28.6 - 2026-08-10
 
 - Removed the `<<<VCC_LANG_SEGMENT_*>>>` model-visible protocol from Final Language Repair; Proxy now owns segment/block mapping.

@@ -94,7 +94,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk });
   if (!response.ok) {
     const text = await response.text();
@@ -105,7 +105,9 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
     });
   }
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
-  if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response);
+  if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
+    ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
+  });
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
   // Raw body chunks are still counted by requestBaseUpstream, but live token activity requires SSE.
@@ -245,6 +247,10 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
         block_type,
         first_event_wait_ms: Date.now() - requestStartedAt,
         first_event_after_headers_ms: Date.now() - headersReceivedAt,
+      }),
+      onStreamPhase: async (entry) => onLifecycle('base_upstream_stream_phase', {
+        ...entry,
+        phase_elapsed_ms: Date.now() - requestStartedAt,
       }),
       onComplete: async ({ firstModelEventObserved } = {}) => onLifecycle('base_upstream_stream_completed', {
         total_stream_ms: Date.now() - requestStartedAt,
@@ -478,6 +484,47 @@ export function createProxyServer(config, dependencies = {}) {
       startedAt: 0,
       startBytes: 0,
       firstByteNotified: false,
+      phase: 'waiting',
+    };
+    const onManagedModelStreamPhase = async ({ phase, previous_phase = 'waiting', event = '', block_type = '', delta_type = '' } = {}) => {
+      if (!['thinking', 'response', 'tool'].includes(phase)) return;
+      if (modelRoundProgress.phase === phase) return;
+      const previousPhase = modelRoundProgress.phase || previous_phase || 'waiting';
+      modelRoundProgress.phase = phase;
+      const elapsedMs = modelRoundProgress.startedAt > 0
+        ? Math.max(0, Date.now() - modelRoundProgress.startedAt)
+        : 0;
+      const receivedThisRound = modelRoundProgress.active
+        ? Math.max(0, baseResponseBytes - modelRoundProgress.startBytes)
+        : baseResponseBytes;
+      log(config, 'info', 'managed_model_stream_phase_changed', {
+        requestId,
+        lane: modelRoundProgress.lane,
+        round: modelRoundProgress.round || 1,
+        previous_phase: previousPhase,
+        phase,
+        upstream_event: event,
+        block_type,
+        delta_type,
+        elapsed_ms: elapsedMs,
+        round_received_bytes: receivedThisRound,
+      });
+      if (progress) {
+        await progress.update(statusText(config.responseLanguage, 'modelPhaseChanged', {
+          modelPhase: phase,
+          receivedBytes: receivedThisRound,
+        }), {
+          force: Boolean(progress.visible),
+          details: {
+            phase: 'model_stream_phase',
+            model_phase: phase,
+            previous_model_phase: previousPhase,
+            lane: modelRoundProgress.lane,
+            round: modelRoundProgress.round || 1,
+            round_received_bytes: receivedThisRound,
+          },
+        });
+      }
     };
     const onBaseResponseChunk = (bytes) => {
       const value = Number(bytes);
@@ -498,21 +545,6 @@ export function createProxyServer(config, dependencies = {}) {
         received_bytes: baseResponseBytes,
         round_received_bytes: receivedThisRound,
       });
-      if (progress?.visible) {
-        progress.update(statusText(config.responseLanguage, 'modelFirstByte', {
-          seconds: Math.floor(elapsedMs / 1000),
-          receivedBytes: receivedThisRound,
-        }), {
-          force: true,
-          details: {
-            phase: 'model_first_byte',
-            lane: modelRoundProgress.lane,
-            round: modelRoundProgress.round,
-            received_bytes: baseResponseBytes,
-            round_received_bytes: receivedThisRound,
-          },
-        }).catch(() => {});
-      }
     };
     const getBaseResponseBytes = () => baseResponseBytes;
     const getCurrentRoundResponseBytes = () => (
@@ -884,16 +916,28 @@ export function createProxyServer(config, dependencies = {}) {
           });
           await progress.open();
           const directStartedAt = Date.now();
+          modelRoundProgress.active = true;
+          modelRoundProgress.round = 1;
+          modelRoundProgress.lane = 'direct';
+          modelRoundProgress.startedAt = directStartedAt;
+          modelRoundProgress.startBytes = baseResponseBytes;
+          modelRoundProgress.firstByteNotified = false;
+          modelRoundProgress.phase = 'waiting';
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
             details: { phase: 'managed_model_round_start', round: 1 },
           });
-          progress.startSemanticHeartbeat(() => statusText(config.responseLanguage, 'modelWaiting', {
+          progress.startSemanticHeartbeat(() => statusText(config.responseLanguage, 'modelHeartbeat', {
             seconds: Math.floor((Date.now() - directStartedAt) / 1000),
-            receivedBytes: getBaseResponseBytes(),
+            receivedBytes: getCurrentRoundResponseBytes(),
+            modelPhase: modelRoundProgress.phase || 'waiting',
           }));
           let response = await callUpstreamManagedStream(
-            original, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk },
+            original, config, req.headers, abortController.signal, '/v1/messages', {
+              onResponseChunk: onBaseResponseChunk,
+              onStreamPhase: onManagedModelStreamPhase,
+            },
           );
+          modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, original);
           progress.stopSemanticHeartbeat();
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
@@ -1171,9 +1215,10 @@ export function createProxyServer(config, dependencies = {}) {
             });
           }
           if (progressTiming.mode === 'model') {
-            return statusText(config.responseLanguage, 'modelWaiting', {
+            return statusText(config.responseLanguage, 'modelHeartbeat', {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
               receivedBytes: getCurrentRoundResponseBytes(),
+              modelPhase: modelRoundProgress.phase || 'waiting',
             });
           }
           return mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() })
@@ -1298,7 +1343,10 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk });
+      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
+        onResponseChunk: onBaseResponseChunk,
+        onStreamPhase: onManagedModelStreamPhase,
+      });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
@@ -1332,6 +1380,7 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.startedAt = startedAt;
               modelRoundProgress.startBytes = startBytes;
               modelRoundProgress.firstByteNotified = false;
+              modelRoundProgress.phase = 'waiting';
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
               modelRoundProgress.active = false;
@@ -1414,6 +1463,13 @@ export function createProxyServer(config, dependencies = {}) {
         if (request.stream === true) {
           progressTiming.mode = 'model';
           progressTiming.startedAt = Date.now();
+          modelRoundProgress.active = true;
+          modelRoundProgress.round = 1;
+          modelRoundProgress.lane = lane;
+          modelRoundProgress.startedAt = progressTiming.startedAt;
+          modelRoundProgress.startBytes = baseResponseBytes;
+          modelRoundProgress.firstByteNotified = false;
+          modelRoundProgress.phase = 'waiting';
           await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
           let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
@@ -1448,18 +1504,13 @@ export function createProxyServer(config, dependencies = {}) {
                   header_wait_ms: fields.header_wait_ms,
                 });
               } else if (event === 'base_upstream_first_event') {
-                const key = fields.block_type === 'thinking' ? 'streamingThinking'
-                  : (fields.block_type === 'tool_use' || fields.block_type === 'server_tool_use') ? 'streamingTool'
-                    : fields.block_type === 'text' ? 'streamingVisible' : 'streamingOutput';
-                await onProgress(statusText(config.responseLanguage, key), {
-                  phase: 'base_first_event',
-                  upstream_event: fields.upstream_event,
-                  block_type: fields.block_type,
-                  first_event_wait_ms: fields.first_event_wait_ms,
-                });
+                // Phase-specific progress is emitted by base_upstream_stream_phase.
+              } else if (event === 'base_upstream_stream_phase') {
+                await onManagedModelStreamPhase(fields);
               }
             },
           });
+          modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, request);
           releaseManaged(); releaseManaged = null;
           releaseLargeContext?.(); releaseLargeContext = null;

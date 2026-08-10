@@ -171,3 +171,33 @@ test('V0.2.28.5 controlled continuation progress reports produced and preserved 
     'Preserved 5,000 characters of this round’s model working state; continuing from that work…',
   );
 });
+
+test('V0.2.28.7 renders compact single-line managed model phase progress', () => {
+  assert.equal(
+    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 60, receivedBytes: 30536, modelPhase: 'thinking' }),
+    '主模型處理中 60 秒（思考，29.82 KB）…',
+  );
+  assert.equal(
+    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 90, receivedBytes: 44636, modelPhase: 'response' }),
+    '主模型處理中 90 秒（回應，43.59 KB）…',
+  );
+  assert.equal(
+    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 120, receivedBytes: 59013, modelPhase: 'tool' }),
+    '主模型處理中 120 秒（工具，57.63 KB）…',
+  );
+  assert.equal(
+    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 29, receivedBytes: 0, modelPhase: 'waiting' }),
+    '主模型處理中 29 秒（等待，0 B）…',
+  );
+  for (const phase of ['waiting', 'thinking', 'response', 'tool']) {
+    assert.doesNotMatch(language.statusText('zh-TW', 'modelHeartbeat', {
+      seconds: 30, receivedBytes: 1024, modelPhase: phase,
+    }), /\r|\n/);
+  }
+});
+
+test('V0.2.28.7 renders compact single-line model phase transition notices', () => {
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'thinking', receivedBytes: 494 }), '主模型開始思考（494 B）…');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '主模型開始回應（2 KB）…');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'tool', receivedBytes: 4096 }), '主模型建立工具動作（4 KB）…');
+});

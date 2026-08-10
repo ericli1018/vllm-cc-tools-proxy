@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.6', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.7', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -636,7 +636,7 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   const stream = await response.text();
   assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
   assert.match(stream, /圖片 1\/1/);
-  assert.match(stream, /主模型仍在處理本輪請求/);
+  assert.match(stream, /主模型處理中/);
   assert.match(stream, /FINAL/);
   assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
   for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
@@ -735,7 +735,7 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
   const stream = await response.text();
   const requestStart = stream.indexOf('正在將內容送往主模型');
   const headersReceived = stream.indexOf('主模型已接受請求');
-  const firstEvent = stream.indexOf('主模型已開始回傳本輪回答');
+  const firstEvent = stream.indexOf('主模型開始回應');
   assert.ok(requestStart >= 0);
   assert.ok(headersReceived > requestStart);
   assert.ok(firstEvent > headersReceived);
@@ -799,10 +799,8 @@ test('V0.2.27.3 continuation visible progress resets received bytes for the new 
   assert.ok(continuationIndex >= 0, 'missing continuation progress');
   const continuationStream = stream.slice(continuationIndex);
 
-  assert.match(continuationStream, /主模型仍在處理本輪請求，已執行 \d+ 秒（已收到 0 B）…/);
-  assert.doesNotMatch(continuationStream, /主模型仍在處理本輪請求[^\n]*已收到 [0-9.]+ KB/);
-  assert.match(continuationStream, /主模型已開始回傳資料，已執行 \d+ 秒（已收到 \d+ B）…/);
-  assert.doesNotMatch(continuationStream, /主模型已開始回傳資料[^\n]*已收到 [0-9.]+ KB/);
+  assert.match(continuationStream, /主模型處理中 \d+ 秒（等待，0 B）…/);
+  assert.doesNotMatch(continuationStream, /主模型處理中[^\n]*（等待，[0-9.]+ KB）/);
   assert.match(stream, /RECOVERED/);
 
   const roundFirstByte = logs.filter((entry) => entry.event === 'managed_model_first_byte_received').at(-1);
@@ -2021,8 +2019,8 @@ test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON ro
   });
   const stream = await response.text();
   assert.match(stream, /目前處理進度（已收到 512 B）：/);
-  assert.match(stream, /已執行 \d+ 秒（已收到 512 B）/);
-  assert.match(stream, /已執行 \d+ 秒（已收到 1\.22 KB）/);
+  assert.match(stream, /主模型處理中 \d+ 秒（等待，512 B）/);
+  assert.match(stream, /主模型處理中 \d+ 秒（等待，1\.22 KB）/);
   assert.match(stream, /FINAL/);
   assert.equal(round, 2);
 });
@@ -2165,8 +2163,8 @@ test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arr
     }),
   });
   const wire = await response.text();
-  assert.match(wire, /已執行 0 秒（已收到 0 B）/);
-  assert.match(wire, /主模型已開始回傳資料，已執行 \d+ 秒（已收到 (?!0 B)[^)]+）/);
+  assert.match(wire, /主模型處理中 0 秒（等待，0 B）/);
+  assert.match(wire, /主模型開始回應（(?!0 B)[^)]+）…/);
   assert.match(wire, /DONE/);
 
   const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
@@ -2819,4 +2817,104 @@ test('V0.2.28 logs structural Read image payload diagnostics without raw image o
   const serialized = JSON.stringify(event);
   assert.equal(serialized.includes('/home/master/private'), false);
   assert.equal(serialized.includes(base64.slice(0, 24)), false);
+});
+
+test('V0.2.28.7 managed model progress exposes compact thinking and response phases', async (t) => {
+  const logs = [];
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"phase-msg","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"分析中"}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"完成"}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n');
+    res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":8}}\n\n');
+    res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressVisibleAfterMs: 0,
+    progressHeartbeatMs: 20,
+    progressPingIntervalMs: 60_000,
+    responseLanguage: 'zh-TW',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      messages: [{ role: 'user', content: '請回答完成' }],
+    }),
+  });
+  const stream = await response.text();
+
+  assert.match(stream, /主模型開始思考（[^）]+）…/);
+  assert.match(stream, /主模型處理中 \d+ 秒（思考，[^）]+）…/);
+  assert.match(stream, /主模型開始回應（[^）]+）…/);
+  assert.match(stream, /主模型處理中 \d+ 秒（回應，[^）]+）…/);
+  assert.match(stream, /完成/);
+  assert.doesNotMatch(stream, /主模型處理中[^\n]*\n[^\n]*秒/);
+
+  const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
+  assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'response']);
+  assert.equal(phases[0].previous_phase, 'waiting');
+});
+
+test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phase', async (t) => {
+  const logs = [];
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"tool-phase","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"需要搜尋"}}\n\n');
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"search-1","name":"WebSearch","input":{}}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"query\\":\\"Laguna\\"}"}}\n\n');
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n');
+    res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":12}}\n\n');
+    res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    progressVisibleAfterMs: 0,
+    progressHeartbeatMs: 20,
+    progressPingIntervalMs: 60_000,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'phase-tool-session' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'research Laguna' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /主模型開始思考（[^）]+）…/);
+  assert.match(stream, /主模型建立工具動作（[^）]+）…/);
+  assert.match(stream, /主模型已產生下一步 WebSearch/);
+
+  const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
+  assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'tool']);
 });
