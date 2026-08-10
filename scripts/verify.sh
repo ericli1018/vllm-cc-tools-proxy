@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.5'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.5'
+test "$(node -p "require('./package.json').version")" = '0.2.28.6'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.6'
 
 
 test -f src/i18n/response-language.js
@@ -320,6 +320,20 @@ grep -Fq 'vision_quality_retry' src/visual/vision-client.js
 grep -Fq "code: 'vision_output_invalid'" src/visual/vision-client.js
 grep -Fq 'visual-v9' README.md
 grep -Fq 'evidence-v5' README.md
+
+
+# V0.2.28.6 Final Language direct-segment repair
+grep -Fq 'V0.2.28.6 Final Language direct-segment repair' README.md
+test -f V0.2.28.6-更新說明.md
+grep -Fq 'extractLanguageRepairSegmentFromAnthropic' src/services/final-language-repair.js
+grep -Fq 'segment_index' src/services/final-language-repair.js
+grep -Fq 'segment_count' src/services/final-language-repair.js
+! grep -Fq '<<<VCC_LANG_SEGMENT_' src/services/final-language-repair.js
+! grep -Fq 'parseLanguageRepairSegments' src/services/final-language-repair.js
+! grep -Fq 'encodeLanguageRepairSegments' src/services/final-language-repair.js
+! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
+grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v6'" src/config.js
 
 
 # V0.2.28.5 recovery-only managed continuation state compression

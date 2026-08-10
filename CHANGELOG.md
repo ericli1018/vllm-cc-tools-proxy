@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.6 - 2026-08-10
+
+- Removed the `<<<VCC_LANG_SEGMENT_*>>>` model-visible protocol from Final Language Repair; Proxy now owns segment/block mapping.
+- Changed external language repair to one tool-less, non-thinking plain-text translation request per final text block, preserving source order deterministically.
+- Changed Base fallback to isolated one-segment requests with direct visible-text extraction instead of marker parsing.
+- Added safe per-segment processor diagnostics (`segment_index`, `segment_count`, input/output character counts) without logging source or translated text.
+- Preserved target-language post-validation and the external → Base → original-response failure chain.
+- Added no ENV variables and kept media cache generations unchanged at `media-v7`, `visual-v10`, and `evidence-v6`.
+
 ## 0.2.28.5 - 2026-08-10
 
 - Added recovery-only continuation state preparation after the existing Managed Loop continuation gate; normal rounds do not invoke compression.

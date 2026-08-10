@@ -35,7 +35,7 @@ import { compressContinuationWindow as compressContinuationWindowWithExternalPro
 import { applyFinalLanguageGate } from '../proxy/final-language-gate.js';
 import {
   buildBaseLanguageRepairRequest,
-  extractLanguageRepairSegmentsFromAnthropic,
+  extractLanguageRepairSegmentFromAnthropic,
   rewriteFinalSegmentsWithExternalProcessor,
 } from './final-language-repair.js';
 
@@ -560,22 +560,26 @@ export function createProxyServer(config, dependencies = {}) {
         : undefined;
 
       const rewriteBase = async (segments, locale) => {
-        const repairRequest = buildBaseLanguageRepairRequest(segments, {
-          locale,
-          model: sourceRequest?.model || response?.model || '',
-          maxTokens: Number.isInteger(sourceRequest?.max_tokens) && sourceRequest.max_tokens > 0
-            ? sourceRequest.max_tokens
-            : 16384,
-        });
-        const repaired = await callUpstreamJson(
-          repairRequest,
-          config,
-          req.headers,
-          abortController.signal,
-          '/v1/messages',
-          { onResponseChunk: onBaseResponseChunk },
-        );
-        return extractLanguageRepairSegmentsFromAnthropic(repaired, segments.length);
+        const rewritten = [];
+        for (const segment of segments) {
+          const repairRequest = buildBaseLanguageRepairRequest(segment, {
+            locale,
+            model: sourceRequest?.model || response?.model || '',
+            maxTokens: Number.isInteger(sourceRequest?.max_tokens) && sourceRequest.max_tokens > 0
+              ? sourceRequest.max_tokens
+              : 16384,
+          });
+          const repaired = await callUpstreamJson(
+            repairRequest,
+            config,
+            req.headers,
+            abortController.signal,
+            '/v1/messages',
+            { onResponseChunk: onBaseResponseChunk },
+          );
+          rewritten.push(extractLanguageRepairSegmentFromAnthropic(repaired));
+        }
+        return rewritten;
       };
 
       const gated = await applyFinalLanguageGate(response, {

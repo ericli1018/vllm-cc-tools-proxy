@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.5 adds recovery-only managed continuation state compression so a long thinking/text round can preserve useful working state instead of retaining only a tiny tail before the existing controlled-continuation retry. PDF/Vision behavior from V0.2.28.4 remains unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.6 replaces Final Language Repair marker protocols with Proxy-owned direct-segment translation so translation backends only transform plain text while Proxy deterministically preserves block ordering. Managed continuation behavior from V0.2.28.5 and PDF/Vision behavior from V0.2.28.4 remain unchanged.
+
+## V0.2.28.6 Final Language direct-segment repair
+
+V0.2.28.6 removes the model-visible `<<<VCC_LANG_SEGMENT_*>>>` protocol from Final Language Repair. When the Final Language Gate detects a final answer in the wrong language, Proxy itself owns the original text-block indices and invokes the configured repair backend once for each text block. Each backend request contains one translation-only instruction plus one plain-text source segment; the model is never asked to preserve synthetic segment markers or reconstruct block mapping.
+
+External repair continues to reuse the existing `WEB_FETCH_PROCESSOR_*` configuration and remains tool-less/non-thinking. For multiple text blocks, requests are performed in source order under the same processor admission lease, and Proxy deterministically reassembles returned text into the original Anthropic content-block positions. Base fallback uses the same direct single-segment contract in an isolated request with no original Claude Code conversation, no tools, and thinking disabled.
+
+Every returned segment still passes the existing Final Language Gate post-validation. Empty output, tool calls, invalid transport payloads, or output that remains in the wrong language cause the current backend to fail and preserve the established external → Base → original-response fallback chain. Safe processor diagnostics now include `segment_index`, `segment_count`, input/output character counts, and elapsed time without logging translated content.
+
+No new ENV variables are added. Media/Vision cache generations remain `media-v7` / `visual-v10` / `evidence-v6`.
 
 ## V0.2.28.5 managed continuation state compression
 

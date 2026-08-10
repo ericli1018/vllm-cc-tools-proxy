@@ -29,7 +29,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.5', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.6', revision: 'test',
     managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
     native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
     large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
@@ -2329,7 +2329,7 @@ test('V0.2.26.4 managed usage preflight and first model round receive no retired
   assert.equal(JSON.stringify(modelBody.messages).includes(retiredTail), false);
 });
 
-test('V0.2.26.4 final language gate uses external processor for a managed final answer and removes model language prompting', async (t) => {
+test('V0.2.28.6 final language gate uses direct external translation for a managed final answer', async (t) => {
   const baseBodies = [];
   const processorBodies = [];
   const base = await startJsonServer(async (req, res) => {
@@ -2342,7 +2342,7 @@ test('V0.2.26.4 final language gate uses external processor for a managed final 
     const payload = JSON.parse((await read(req)).toString());
     processorBodies.push(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'<<<VCC_LANG_SEGMENT_0>>>\n最終回答已準備完成。\n<<<VCC_LANG_SEGMENT_END_0>>>'}}] }));
+    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'最終回答已準備完成。'}}] }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
@@ -2361,10 +2361,12 @@ test('V0.2.26.4 final language gate uses external processor for a managed final 
   assert.equal(body.content[0].text, '最終回答已準備完成。');
   assert.equal(processorBodies.length, 1);
   assert.equal(baseBodies.length, 1);
+  assert.doesNotMatch(processorBodies[0].messages[1].content, /VCC_LANG_SEGMENT/);
+  assert.match(processorBodies[0].messages[1].content, /The final answer is ready for the user\./);
   assert.doesNotMatch(JSON.stringify(baseBodies[0]), /若使用者未明確要求其他語言|在 think 思考區塊之外/);
 });
 
-test('V0.2.26.4 missing external processor falls back to isolated Base language repair', async (t) => {
+test('V0.2.28.6 missing external processor falls back to isolated direct Base language repair', async (t) => {
   const bodies = [];
   const base = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -2374,7 +2376,7 @@ test('V0.2.26.4 missing external processor falls back to isolated Base language 
       res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'The answer is complete and ready.'}],stop_reason:'end_turn',usage:{input_tokens:20,output_tokens:7} }));
       return;
     }
-    res.end(JSON.stringify({ id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'<<<VCC_LANG_SEGMENT_0>>>\n答案已完成並準備就緒。\n<<<VCC_LANG_SEGMENT_END_0>>>'}],stop_reason:'end_turn',usage:{input_tokens:30,output_tokens:10} }));
+    res.end(JSON.stringify({ id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'答案已完成並準備就緒。'}],stop_reason:'end_turn',usage:{input_tokens:30,output_tokens:10} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
@@ -2393,7 +2395,8 @@ test('V0.2.26.4 missing external processor falls back to isolated Base language 
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].messages.length, 1);
   assert.equal(bodies[1].tools, undefined);
-  assert.match(bodies[1].messages[0].content, /<<<VCC_LANG_SEGMENT_0>>>/);
+  assert.doesNotMatch(bodies[1].messages[0].content, /VCC_LANG_SEGMENT/);
+  assert.match(bodies[1].messages[0].content, /The answer is complete and ready\./);
   assert.doesNotMatch(JSON.stringify(bodies[1]), /請直接回答，不需要搜尋/);
   assert.equal(bodies[1].chat_template_kwargs.enable_thinking, false);
 });
@@ -2424,7 +2427,7 @@ test('V0.2.26.4 compliant Traditional Chinese final answer bypasses both repair 
   assert.equal(processorCalls, 0);
 });
 
-test('V0.2.26.4 non-managed streaming final answer is buffered, language-repaired, then emitted as Anthropic SSE', async (t) => {
+test('V0.2.28.6 non-managed streaming final answer uses direct Base repair before Anthropic SSE emission', async (t) => {
   let baseCalls = 0;
   const base = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -2436,7 +2439,9 @@ test('V0.2.26.4 non-managed streaming final answer is buffered, language-repaire
     }
     assert.equal(payload.stream, false);
     res.writeHead(200, { 'content-type':'application/json' });
-    res.end(JSON.stringify({id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'<<<VCC_LANG_SEGMENT_0>>>\n直接回答已準備完成。\n<<<VCC_LANG_SEGMENT_END_0>>>'}],stop_reason:'end_turn',usage:{}}));
+    assert.doesNotMatch(payload.messages[0].content, /VCC_LANG_SEGMENT/);
+    assert.match(payload.messages[0].content, /The direct answer is ready for the user\./);
+    res.end(JSON.stringify({id:'repair',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'直接回答已準備完成。'}],stop_reason:'end_turn',usage:{}}));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url, responseLanguage:'zh-TW',
@@ -2462,7 +2467,7 @@ test('V0.2.26.5 native web search lane bypasses Final Language Gate even when it
   const processor = await startJsonServer(async (_req, res) => {
     processorCalls += 1;
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'<<<VCC_LANG_SEGMENT_0>>>\n不應執行翻譯。\n<<<VCC_LANG_SEGMENT_END_0>>>'}}] }));
+    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'不應執行翻譯。'}}] }));
   });
   const vllm = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
