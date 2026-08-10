@@ -8,6 +8,7 @@ import {
   stripProgressHistory,
 } from '../src/proxy/progress.js';
 import { pipeAnthropicUpstreamStream } from '../src/proxy/anthropic-sse.js';
+import { totalAnthropicInputTokens } from '../src/proxy/anthropic-usage.js';
 
 class FakeResponse extends EventEmitter {
   constructor() {
@@ -336,6 +337,92 @@ test('V0.2.24 dynamic byte progress header is recognized and stripped from histo
   }];
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});
+
+test('V0.2.28.8 ProgressStream replaces preflight total with cache-split input usage atomically', () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+    initialUsage: {
+      input_tokens: 197500,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      output_tokens: 0,
+    },
+  });
+
+  const merged = progress.usageForDelta({
+    input_tokens: 5000,
+    cache_read_input_tokens: 192500,
+    output_tokens: 25,
+  });
+
+  assert.deepEqual(merged, {
+    input_tokens: 5000,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 192500,
+    output_tokens: 25,
+  });
+  assert.equal(totalAnthropicInputTokens(merged), 197500);
+  progress.stopKeepalive();
+});
+
+test('V0.2.28.8 managed SSE does not double-count vLLM cache-split usage after preflight total', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+    initialUsage: { input_tokens: 197500, output_tokens: 0 },
+  });
+  await progress.open();
+
+  const encoder = new TextEncoder();
+  const upstream = new Response(new ReadableStream({
+    start(controller) {
+      const frames = [
+        'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5000,"cache_creation_input_tokens":0,"cache_read_input_tokens":192500,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+        'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":5000,"cache_creation_input_tokens":0,"cache_read_input_tokens":192500,"output_tokens":25}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ];
+      for (const frame of frames) controller.enqueue(encoder.encode(frame));
+      controller.close();
+    },
+  }), { headers: { 'content-type': 'text/event-stream' } });
+
+  await pipeAnthropicUpstreamStream(progress, upstream);
+  const stream = response.chunks.join('');
+  assert.match(stream, /"input_tokens":5000/);
+  assert.match(stream, /"cache_read_input_tokens":192500/);
+  assert.doesNotMatch(stream, /"input_tokens":197500[^\n]*"cache_read_input_tokens":192500/);
+});
+
+test('V0.2.28.8 ProgressStream preserves authoritative input tuple on output-only usage delta', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+    initialUsage: { input_tokens: 197500, output_tokens: 0 },
+  });
+
+  await progress.updateUsage({
+    input_tokens: 5000,
+    cache_read_input_tokens: 192500,
+    output_tokens: 20,
+  });
+
+  const outputOnly = progress.usageForDelta({ output_tokens: 55 });
+  assert.deepEqual(outputOnly, {
+    input_tokens: 5000,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 192500,
+    output_tokens: 55,
+  });
+  assert.equal(totalAnthropicInputTokens(outputOnly), 197500);
+  await progress.stop();
 });
 
 test('V0.2.27.1 ProgressStream can publish exact cumulative input usage after early message_start', async () => {

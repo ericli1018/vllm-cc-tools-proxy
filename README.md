@@ -1,7 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.7 adds low-noise main-model generation phase observability (`等待 / 思考 / 回應 / 工具`) to managed Anthropic SSE progress while preserving V0.2.28.6 Final Language Repair, V0.2.28.5 continuation recovery, and V0.2.28.4 PDF/Vision behavior.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.8 fixes managed Anthropic context-token accounting when `/count_tokens` preflight totals are followed by vLLM prefix-cache split usage, preventing cached input from being counted twice while preserving V0.2.28.7 model-phase progress and all earlier workflows.
 
+
+## V0.2.28.8 cache-aware context token accounting
+
+V0.2.28.8 changes only managed Anthropic usage accounting. The early `/v1/messages/count_tokens` result remains a provisional total so Claude Code receives context usage immediately when the proxy opens its synthetic `message_start`. When upstream vLLM later reports Anthropic cache-aware usage, the input-side tuple (`input_tokens`, `cache_creation_input_tokens`, `cache_read_input_tokens`) is treated atomically and replaces the provisional representation instead of being merged field-by-field.
+
+For example, a 197,500-token prompt may first appear as `input_tokens=197500`, then vLLM may report `input_tokens=5000` plus `cache_read_input_tokens=192500`. Both represent the same 197,500-token prompt. V0.2.28.7 could combine those representations into an invalid 390,000-token total; V0.2.28.8 preserves the correct 197,500 total. Output-only usage deltas keep the last authoritative input tuple.
+
+No ENV variables are added. This release does not add the planned external Context Compact model and does not modify Managed Continuation, WebFetch Processor, Final Language Repair, PDF/Vision, reasoning, token budget, or cache generations.
 
 ## V0.2.28.7 compact main-model phase progress
 

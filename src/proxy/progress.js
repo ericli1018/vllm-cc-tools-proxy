@@ -247,12 +247,20 @@ export class ProgressStream {
 
   usageForDelta(observed = {}) {
     const current = normalizeAnthropicUsage(this.authoritativeUsage, { includeZeroCacheFields: true });
-    const next = normalizeAnthropicUsage(observed);
+    const source = observed && typeof observed === 'object' && !Array.isArray(observed) ? observed : {};
+    const hasValidCounter = (field) => Number.isInteger(source[field]) && source[field] >= 0;
+    const hasInputUsage = [
+      'input_tokens',
+      'cache_creation_input_tokens',
+      'cache_read_input_tokens',
+    ].some(hasValidCounter);
+    const next = normalizeAnthropicUsage(source, { includeZeroCacheFields: true });
+    const inputUsage = hasInputUsage ? next : current;
     return normalizeAnthropicUsage({
-      input_tokens: Math.max(current.input_tokens || 0, next.input_tokens || 0),
-      cache_creation_input_tokens: Math.max(current.cache_creation_input_tokens || 0, next.cache_creation_input_tokens || 0),
-      cache_read_input_tokens: Math.max(current.cache_read_input_tokens || 0, next.cache_read_input_tokens || 0),
-      output_tokens: next.output_tokens || 0,
+      input_tokens: inputUsage.input_tokens || 0,
+      cache_creation_input_tokens: inputUsage.cache_creation_input_tokens || 0,
+      cache_read_input_tokens: inputUsage.cache_read_input_tokens || 0,
+      output_tokens: hasValidCounter('output_tokens') ? next.output_tokens : (current.output_tokens || 0),
       server_tool_use: next.server_tool_use || current.server_tool_use,
     }, { includeZeroCacheFields: true });
   }

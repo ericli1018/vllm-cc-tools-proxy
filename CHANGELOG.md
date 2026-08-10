@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.28.8 - 2026-08-10
+
+- Fixed managed Anthropic context-token accounting when `/v1/messages/count_tokens` preflight totals are followed by vLLM cache-split usage.
+- Replaced field-by-field `Math.max()` merging of input/cache counters with atomic input-side usage replacement.
+- Preserved the last authoritative input tuple when an upstream usage delta contains only output counters.
+- Added regression coverage for `197500 total -> 5000 uncached + 192500 cache_read`, ensuring the Claude-facing total remains `197500` instead of `390000`.
+- Added no ENV variables and did not add Context Compact model routing in this release.
+
 ## 0.2.28.7 - 2026-08-10
 
 - Added protocol-derived main-model generation phases for managed Anthropic SSE: `waiting`, `thinking`, `response`, and `tool`.

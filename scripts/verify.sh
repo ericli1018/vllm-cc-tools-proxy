@@ -102,8 +102,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.7'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.7'
+test "$(node -p "require('./package.json').version")" = '0.2.28.8'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.8'
 
 
 test -f src/i18n/response-language.js
@@ -322,6 +322,15 @@ grep -Fq 'visual-v9' README.md
 grep -Fq 'evidence-v5' README.md
 
 
+
+# V0.2.28.8 cache-aware context token accounting
+grep -Fq 'V0.2.28.8 cache-aware context token accounting' README.md
+test -f V0.2.28.8-更新說明.md
+grep -Fq 'hasInputUsage' src/proxy/progress.js
+! grep -Fq 'Math.max(current.input_tokens' src/proxy/progress.js
+grep -Fq 'replaces preflight total with cache-split input usage atomically' test/progress.test.js
+grep -Fq 'does not double-count vLLM cache-split usage after preflight total' test/progress.test.js
+! grep -Eq '^CONTEXT_COMPACT_[A-Z0-9_]+=' .env.example
 
 # V0.2.28.7 compact main-model phase progress
 grep -Fq 'V0.2.28.7 compact main-model phase progress' README.md
