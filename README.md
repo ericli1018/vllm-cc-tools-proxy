@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.10 adds an optional independent Qwen Context Compact worker on top of the V0.2.28.9 Compact routing guard, while preserving the V0.2.28.8 cache-aware context-token accounting fix and all earlier workflows.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.11 removes Proxy-wide Base/Managed admission scheduling so every Claude Code connection is independent, and adds request-local retry when the Base vLLM explicitly rejects a generation as temporarily busy. V0.2.28.10 Context Compact routing and all earlier token-accounting/media/tool workflows remain intact.
+
+
+## V0.2.28.11 independent Base connections + explicit-busy retry
+
+V0.2.28.11 removes the Proxy-wide `ManagedQueue`, native-WebSearch fast-lane admission queue, 100K large-context one-slot gate, and ingress admission semaphore from Base/Managed request routing. Every Claude Code connection is submitted independently to the Base vLLM; the Proxy does not cap, serialize, or queue main-model requests. vLLM remains the scheduling authority. In particular, `--max-num-seqs` controls how many sequences vLLM processes per scheduler iteration, while accepted excess work remains owned by vLLM rather than being resubmitted by the Proxy.
+
+If the Base vLLM **rejects before generation starts** with HTTP `429`, or with an explicit transient-capacity `503` (for example `Retry-After`, busy/overload/capacity text), only that HTTP request enters a request-local wait loop. The Claude Code connection remains open and the same generation request is retried every **15 seconds** until vLLM accepts it or the client disconnects. Ordinary `500`, transport errors, non-capacity `503`, and any failure after a generation has been accepted are not blindly retried, preventing duplicate Agent turns or tool side effects.
+
+Streaming callers receive safe progress such as:
+
+```text
+主模型目前忙碌，正在等待可用執行資源…
+主模型仍忙碌，已等待 15 秒；正在重試第 2 次請求…
+主模型已取得執行資源，開始處理…
+```
+
+Busy-wait time is not counted against the Managed Loop first-byte deadline. After a busy retry is accepted, the first-byte deadline restarts from acceptance; real response-byte stall detection remains unchanged. Client abort cancels the retry timer immediately.
+
+Vision and WebFetch Processor remain separate auxiliary resources with their existing semaphores. Context Compact keeps its V0.2.28.10 provider-specific routing/fallback and is not folded into Base busy retry. No new ENV is added; the retry interval is deliberately fixed at 15 seconds.
 
 ## V0.2.28.10 external Context Compact model
 
@@ -1419,36 +1438,26 @@ base_upstream_stream_completed
 base_upstream_request_failed
 ```
 
-After PDF/image preprocessing finishes, the managed slot is released and the final Base vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted after the bounded loop completes.
+After PDF/image preprocessing finishes, the final Base vLLM answer continues directly on the same independent Claude Code connection and is streamed into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted after the bounded loop completes.
 
-## Concurrency and queue
+## Concurrency and upstream busy waiting
 
-Only managed workflows enter the proxy queue. Plain text, Claude Code native tools and arbitrary bypass endpoints are not queued by the proxy and remain subject to the base vLLM scheduler.
+Base and Managed Claude Code requests have **no Proxy-wide concurrency limit or waiting queue**. Plain requests, managed WebSearch/WebFetch rounds, native WebSearch children, and 100K+ contexts are all submitted independently to vLLM. Main-model scheduling is delegated to vLLM.
 
-Default configuration:
+The old settings are removed from the deployment surface:
 
-```env
-CONCURRENCY_PROFILE=default
+```text
+CONCURRENCY_PROFILE
+MANAGED_MAX_CONCURRENCY
+MANAGED_MAX_QUEUE
+MANAGED_QUEUE_TIMEOUT_MS
 ```
 
-Profiles:
+`VISION_MAX_CONCURRENCY` remains available because Vision is a separate auxiliary backend. `WEB_FETCH_PROCESSOR_CONCURRENCY` likewise continues to protect the independent processor backend.
 
-| Profile | Managed active | Managed waiting | Queue timeout | Vision active |
-|---|---:|---:|---:|---:|
-| `small` | 1 | 4 | 120 s | 1 |
-| `default` | 2 | 12 | 120 s | 1 |
-| `large` | 4 | 32 | 180 s | 2 |
+When Base vLLM explicitly rejects a generation as temporarily busy, the affected connection alone waits and retries every 15 seconds. An already accepted vLLM request is never periodically resubmitted: if it is waiting inside the vLLM scheduler, the Proxy simply keeps the original upstream request alive.
 
-Advanced overrides are optional:
-
-```env
-MANAGED_MAX_CONCURRENCY=
-MANAGED_MAX_QUEUE=
-MANAGED_QUEUE_TIMEOUT_MS=
-VISION_MAX_CONCURRENCY=
-```
-
-Streaming progress settings:
+Streaming progress settings remain:
 
 ```env
 PROGRESS_VISIBLE_AFTER_MS=1500
@@ -1457,21 +1466,12 @@ PROGRESS_HEARTBEAT_MS=30000
 SSE_DRAIN_TIMEOUT_MS=10000
 ```
 
-Queue behavior:
-
-- FIFO admission with no priority insertion.
-- Full queue returns `429 proxy_queue_full` and `Retry-After: 10`.
-- Expired wait returns `503 proxy_queue_timeout` and `Retry-After: 10`.
-- Streaming callers receive SSE pings and visible queue-position updates.
-- Client disconnect removes a waiting job or aborts active Poppler, ImageMagick, visual vLLM, WebSearch/WebFetch and base-vLLM work.
-- Media is decoded into a request-scoped private temporary directory before queueing; Base64 is not retained by queued jobs.
-
-The health endpoint exposes only aggregate counters:
+The health endpoint therefore reports auxiliary-resource state rather than a main-model Proxy queue:
 
 ```json
 {
-  "managed": { "active": 1, "limit": 2, "queued": 3, "queue_limit": 12 },
   "vision": { "active": 1, "limit": 1 },
+  "web_fetch_processor": { "active": 1, "limit": 3, "queued": 0 },
   "cache": {
     "entries": 42,
     "bytes": 183500800,

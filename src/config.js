@@ -10,12 +10,6 @@ const PROFILE_LIMITS = Object.freeze({
   large: { maxRequestBytes: 128 * MiB, maxDecodedBytes: 96 * MiB, maxPdfPages: 300, maxImagePixels: 80_000_000, maxOutputChars: 900_000, processTimeoutMs: 300_000 },
 });
 
-const CONCURRENCY_PROFILES = Object.freeze({
-  small: { managedLimit: 1, queueLimit: 4, queueTimeoutMs: 120_000, visionLimit: 1 },
-  default: { managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120_000, visionLimit: 1 },
-  large: { managedLimit: 4, queueLimit: 32, queueTimeoutMs: 180_000, visionLimit: 2 },
-});
-
 const CACHE_PROFILES = Object.freeze({
   small: { maxMb: 512, retentionDays: 3 },
   default: { maxMb: 2048, retentionDays: 7 },
@@ -155,15 +149,9 @@ export function loadConfig(env = process.env) {
     maxVisualPagesPerBatch: intValue(env.MAX_VISUAL_PAGES_PER_BATCH, 4, 'MAX_VISUAL_PAGES_PER_BATCH', { min: 1, max: 8 }),
   });
 
-  const concurrencyProfileName = env.CONCURRENCY_PROFILE || 'default';
-  const concurrencyProfile = CONCURRENCY_PROFILES[concurrencyProfileName];
-  if (!concurrencyProfile) throw new Error(`Unsupported CONCURRENCY_PROFILE: ${concurrencyProfileName}`);
+  const defaultVisionLimit = profileName === 'large' ? 2 : 1;
   const concurrency = Object.freeze({
-    profile: concurrencyProfileName,
-    managedLimit: intValue(env.MANAGED_MAX_CONCURRENCY, concurrencyProfile.managedLimit, 'MANAGED_MAX_CONCURRENCY', { min: 1, max: 128 }),
-    queueLimit: intValue(env.MANAGED_MAX_QUEUE, concurrencyProfile.queueLimit, 'MANAGED_MAX_QUEUE', { min: 0, max: 10_000 }),
-    queueTimeoutMs: intValue(env.MANAGED_QUEUE_TIMEOUT_MS, concurrencyProfile.queueTimeoutMs, 'MANAGED_QUEUE_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
-    visionLimit: intValue(env.VISION_MAX_CONCURRENCY, concurrencyProfile.visionLimit, 'VISION_MAX_CONCURRENCY', { min: 1, max: 64 }),
+    visionLimit: intValue(env.VISION_MAX_CONCURRENCY, defaultVisionLimit, 'VISION_MAX_CONCURRENCY', { min: 1, max: 64 }),
   });
 
   const cacheProfile = CACHE_PROFILES[profileName];
@@ -195,6 +183,7 @@ export function loadConfig(env = process.env) {
       headersTimeoutMs: intValue(env.VLLM_BASE_HEADERS_TIMEOUT_MS, 900000, 'VLLM_BASE_HEADERS_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
       bodyTimeoutMs: intValue(env.VLLM_BASE_BODY_TIMEOUT_MS, 900000, 'VLLM_BASE_BODY_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
     }),
+    vllmBusyRetryIntervalMs: 15_000,
     vllmVisionUrl,
     vllmVisionModel,
     vllmVisionApiKey: env.VLLM_VISION_API_KEY || '',

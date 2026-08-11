@@ -6,7 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createProxyServer } from '../src/services/proxy-server.js';
-import { AdmissionController } from '../src/concurrency/admission-controller.js';
 
 async function listen(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function startJsonServer(handler) { const server = http.createServer(handler); const url = await listen(server); return { server, url }; }
@@ -18,7 +17,7 @@ function config(overrides = {}) {
     vllmBaseApiKey: '', vllmBaseTimeouts: { connectTimeoutMs: 10000, headersTimeoutMs: 900000, bodyTimeoutMs: 900000 }, vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
     searxngUrl: '', webFetchUrl: '', webFetchApiKey: '', maxToolRounds: 6,
     progressVisibleAfterMs: 0, progressPingIntervalMs: 10000, progressHeartbeatMs: 15000,
-    concurrency: { profile: 'default', managedLimit: 2, queueLimit: 12, queueTimeoutMs: 120000, visionLimit: 1 },
+    concurrency: { visionLimit: 1 },
     logLevel: 'error', gitRevision: 'test', usagePreflightEnabled: false, responseLanguage: 'zh-TW', ...overrides,
   };
 }
@@ -29,10 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.10', revision: 'test',
-    managed: { active: 0, limit: 2, queued: 0, queue_limit: 12 },
-    native_web_search: { active: 0, limit: 1, queued: 0, queue_limit: 12 },
-    large_context: { active: 0, limit: 1, queued: 0, queue_limit: 12, threshold_tokens: 100000 },
+    status: 'ok', service: 'proxy', version: '0.2.28.11', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -255,7 +251,7 @@ test('streamed media request preprocesses under managed slot then streams base v
   assert.match(text, /"index":1/);
 });
 
-test('managed queue is bounded and exposed through health', async (t) => {
+test('managed Claude Code connections execute independently without a Proxy-wide queue', async (t) => {
   let releaseFirstSearch;
   let firstSearchStartedResolve;
   const firstSearchStarted = new Promise((resolve) => { firstSearchStartedResolve = resolve; });
@@ -271,153 +267,28 @@ test('managed queue is bounded and exposed through health', async (t) => {
   });
   const vllm = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
-    const hasResult = payload.messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'));
-    const body = hasResult
+    const hasResult = payload.messages.some((message) => Array.isArray(message.content)
+      && message.content.some((block) => block.type === 'tool_result'));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(hasResult
       ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${Math.random()}`, name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } };
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(body));
+      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${Math.random()}`, name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 } }));
   });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: vllm.url, searxngUrl: searx.url,
-    concurrency: { profile: 'test', managedLimit: 1, queueLimit: 1, queueTimeoutMs: 5000, visionLimit: 1 },
-  }));
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const request = () => fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] }) });
-  const a = request();
+  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
+  const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
   await firstSearchStarted;
-  const b = request();
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const health = await (await fetch(`${proxyUrl}/health`)).json();
-  assert.equal(health.native_web_search.active, 1);
-  assert.equal(health.native_web_search.queued, 1);
-  const c = await request();
-  assert.equal(c.status, 429);
-  assert.equal((await c.json()).error.type, 'proxy_queue_full');
+  const second = await Promise.race([
+    fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('second connection was blocked by first connection')), 500)),
+  ]);
+  assert.equal(second.status, 200);
+  await second.text();
+  assert.equal(searchCalls, 2);
   releaseFirstSearch();
-  assert.equal((await a).status, 200);
-  assert.equal((await b).status, 200);
-});
-
-test('managed queue timeout returns 503 without starting queued work', async (t) => {
-  let releaseSearch;
-  let searchStartedResolve;
-  const searchStarted = new Promise((resolve) => { searchStartedResolve = resolve; });
-  let searchCalls = 0;
-  const searx = await startJsonServer(async (_req, res) => {
-    searchCalls += 1;
-    if (searchCalls === 1) {
-      searchStartedResolve();
-      await new Promise((resolve) => { releaseSearch = resolve; });
-    }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ results: [] }));
-  });
-  const vllm = await startJsonServer(async (req, res) => {
-    const payload = JSON.parse((await read(req)).toString());
-    const hasResult = payload.messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'));
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(hasResult
-      ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: vllm.url, searxngUrl: searx.url,
-    concurrency: { profile: 'test', managedLimit: 1, queueLimit: 1, queueTimeoutMs: 30, visionLimit: 1 },
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
-  const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-  await searchStarted;
-  const second = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-  assert.equal(second.status, 503);
-  assert.equal(second.headers.get('retry-after'), '10');
-  assert.equal((await second.json()).error.type, 'proxy_queue_timeout');
-  assert.equal(searchCalls, 1);
-  releaseSearch();
   assert.equal((await first).status, 200);
-});
-
-test('queued streaming request reports position and starts after admission', async (t) => {
-  let releaseSearch;
-  let searchStartedResolve;
-  const searchStarted = new Promise((resolve) => { searchStartedResolve = resolve; });
-  let searchCalls = 0;
-  const searx = await startJsonServer(async (_req, res) => {
-    searchCalls += 1;
-    if (searchCalls === 1) {
-      searchStartedResolve();
-      await new Promise((resolve) => { releaseSearch = resolve; });
-    }
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ results: [] }));
-  });
-  const vllm = await startJsonServer(async (req, res) => {
-    const payload = JSON.parse((await read(req)).toString());
-    const hasResult = payload.messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'));
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(hasResult
-      ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: `tool-${searchCalls}`, name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: vllm.url, searxngUrl: searx.url,
-    concurrency: { profile: 'test', managedLimit: 1, queueLimit: 2, queueTimeoutMs: 1000, visionLimit: 1 },
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const makeBody = (stream) => JSON.stringify({ model: 'm', stream, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
-  const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody(false) });
-  await searchStarted;
-  const secondResponse = await fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: makeBody(true) });
-  assert.equal(secondResponse.status, 200);
-  releaseSearch();
-  assert.equal((await first).status, 200);
-  const streamText = await secondResponse.text();
-  assert.match(streamText, /正在等待主模型執行資源/);
-  assert.match(streamText, /任務已開始處理/);
-  assert.match(streamText, /event: message_stop/);
-});
-
-test('client cancellation removes a queued request', async (t) => {
-  let releaseSearch;
-  let searchStartedResolve;
-  const searchStarted = new Promise((resolve) => { searchStartedResolve = resolve; });
-  const searx = await startJsonServer(async (_req, res) => {
-    searchStartedResolve();
-    await new Promise((resolve) => { releaseSearch = resolve; });
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ results: [] }));
-  });
-  const vllm = await startJsonServer(async (req, res) => {
-    const payload = JSON.parse((await read(req)).toString());
-    const hasResult = payload.messages.some((message) => Array.isArray(message.content) && message.content.some((block) => block.type === 'tool_result'));
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify(hasResult
-      ? { id: 'done', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'done' }], stop_reason: 'end_turn', usage: {} }
-      : { id: 'tool', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'tool_use', id: 'tool', name: 'web_search', input: { query: 'q' } }], stop_reason: 'tool_use', usage: {} }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: vllm.url, searxngUrl: searx.url,
-    concurrency: { profile: 'test', managedLimit: 1, queueLimit: 2, queueTimeoutMs: 1000, visionLimit: 1 },
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => searx.server.close()); t.after(() => vllm.server.close()); t.after(() => proxy.close());
-  const body = JSON.stringify({ model: 'm', stream: false, tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }], messages: [{ role: 'user', content: 'search' }] });
-  const first = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
-  await searchStarted;
-  const controller = new AbortController();
-  const second = fetch(`${proxyUrl}/v1/messages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body, signal: controller.signal });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  controller.abort();
-  await assert.rejects(second, (error) => error.name === 'AbortError');
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  const health = await (await fetch(`${proxyUrl}/health`)).json();
-  assert.equal(health.native_web_search.queued, 0);
-  releaseSearch();
-  await first;
 });
 
 test('quick managed stream does not show a progress block only to announce completion', async (t) => {
@@ -2025,10 +1896,7 @@ test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON ro
   assert.equal(round, 2);
 });
 
-test('V0.2.25 exclusive native WebSearch child uses fast lane while general managed slot is occupied', async (t) => {
-  const admission = new AdmissionController({ managedLimit: 1, queueLimit: 4, queueTimeoutMs: 80, visionLimit: 1, webFetchProcessorLimit: 3 });
-  const holdGeneral = await admission.acquireManaged({ requestId: 'held-general' });
-  t.after(() => holdGeneral());
+test('native WebSearch child no longer depends on a dedicated Proxy admission lane', async (t) => {
   let modelCalls = 0;
   const searx = await startJsonServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -2043,7 +1911,7 @@ test('V0.2.25 exclusive native WebSearch child uses fast lane while general mana
       ? { id:'s',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'s1',name:'web_search',input:{query:'news'}}],stop_reason:'tool_use',usage:{input_tokens:180,output_tokens:5} }
       : { id:'f',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FOUND'}],stop_reason:'end_turn',usage:{input_tokens:200,output_tokens:5} }));
   });
-  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url, usagePreflightEnabled: true }), { admission });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, searxngUrl: searx.url, usagePreflightEnabled: true }));
   const proxyUrl = await listen(proxy);
   t.after(() => proxy.close()); t.after(() => vllm.server.close()); t.after(() => searx.server.close());
   const response = await fetch(`${proxyUrl}/v1/messages`, {
@@ -2053,11 +1921,9 @@ test('V0.2.25 exclusive native WebSearch child uses fast lane while general mana
   assert.equal(response.status, 200);
   assert.match(await response.text(), /FOUND/);
   assert.equal(modelCalls, 2);
-  assert.equal(admission.health().managed.active, 1);
 });
 
-test('V0.2.25 large-context gate serializes 100K-plus managed model requests without reducing normal managed limit', async (t) => {
-  const admission = new AdmissionController({ managedLimit: 2, queueLimit: 4, queueTimeoutMs: 1000, visionLimit: 1, webFetchProcessorLimit: 3 });
+test('100K-plus managed model requests are submitted concurrently and vLLM owns scheduling', async (t) => {
   let concurrent = 0;
   let maxConcurrent = 0;
   const vllm = await startJsonServer(async (req, res) => {
@@ -2070,7 +1936,7 @@ test('V0.2.25 large-context gate serializes 100K-plus managed model requests wit
     concurrent -= 1;
     res.end(JSON.stringify({ id:'f',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'DONE'}],stop_reason:'end_turn',usage:{input_tokens:120000,output_tokens:5} }));
   });
-  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, usagePreflightEnabled: true }), { admission });
+  const proxy = createProxyServer(config({ vllmBaseUrl: vllm.url, usagePreflightEnabled: true }));
   const proxyUrl = await listen(proxy);
   t.after(() => proxy.close()); t.after(() => vllm.server.close());
   const body = JSON.stringify({ model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object',properties:{query:{type:'string'}}}}],messages:[{role:'user',content:'research'}] });
@@ -2079,8 +1945,7 @@ test('V0.2.25 large-context gate serializes 100K-plus managed model requests wit
     fetch(`${proxyUrl}/v1/messages`, { method:'POST',headers:{'content-type':'application/json'},body }).then((r)=>r.text()),
   ]);
   assert.match(a, /DONE/); assert.match(b, /DONE/);
-  assert.equal(maxConcurrent, 1);
-  assert.equal(admission.health().managed.limit, 2);
+  assert.equal(maxConcurrent, 2);
 });
 
 test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero bytes before completion', async (t) => {
@@ -2230,7 +2095,7 @@ test('V0.2.26 adapts raw image to Vision evidence before Base count_tokens prefl
   assert.doesNotMatch(preflightSerialized, /proxy_file/);
   assert.doesNotMatch(preflightSerialized, new RegExp(png.toString('base64').slice(0, 80)));
   assert.match(preflightSerialized, /VCC_PROXY_EVIDENCE_BEGIN/);
-  assert.ok(logs.some((entry) => entry.event === 'managed_request_classified' && entry.class === 'large_context' && entry.input_tokens === 120000));
+  assert.ok(logs.some((entry) => entry.event === 'managed_request_started' && entry.input_tokens === 120000 && entry.independent_connection === true));
 });
 
 test('V0.2.26.4 managed rounds keep language repair out of Base prompts and user history', async (t) => {

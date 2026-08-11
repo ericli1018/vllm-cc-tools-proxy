@@ -22,11 +22,14 @@ grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_PROVIDER WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS MODEL_RESPONSE_LANGUAGE LOG_PROTOCOL_SNIPPETS DIAGNOSTIC_WEB_TOOL_PASSTHROUGH DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_TOOL_TRACE DIAGNOSTIC_WEB_TOOL_TRACE_DIR; do
   grep -q "^${name}=" .env.example
 done
-grep -q '^CONCURRENCY_PROFILE=default$' .env.example
-grep -Fq 'CONCURRENCY_PROFILE: ${CONCURRENCY_PROFILE:-default}' compose.yaml
-grep -Fq 'MANAGED_MAX_CONCURRENCY: ${MANAGED_MAX_CONCURRENCY:-}' compose.yaml
-grep -Fq 'MANAGED_MAX_QUEUE: ${MANAGED_MAX_QUEUE:-}' compose.yaml
-grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS: ${MANAGED_QUEUE_TIMEOUT_MS:-}' compose.yaml
+! grep -q '^CONCURRENCY_PROFILE=' .env.example
+! grep -q '^MANAGED_MAX_CONCURRENCY=' .env.example
+! grep -q '^MANAGED_MAX_QUEUE=' .env.example
+! grep -q '^MANAGED_QUEUE_TIMEOUT_MS=' .env.example
+! grep -Fq 'CONCURRENCY_PROFILE:' compose.yaml
+! grep -Fq 'MANAGED_MAX_CONCURRENCY:' compose.yaml
+! grep -Fq 'MANAGED_MAX_QUEUE:' compose.yaml
+! grep -Fq 'MANAGED_QUEUE_TIMEOUT_MS:' compose.yaml
 grep -Fq 'MANAGED_TASK_TIMEOUT_MS: ${MANAGED_TASK_TIMEOUT_MS:-}' compose.yaml
 ! grep -q '^MANAGED_TASK_TIMEOUT_MS=' .env.example
 grep -Fq 'MANAGED_MODEL_ROUND_TIMEOUT_MS: ${MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000}' compose.yaml
@@ -102,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.10'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.10'
+test "$(node -p "require('./package.json').version")" = '0.2.28.11'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.11'
 
 
 test -f src/i18n/response-language.js
@@ -415,5 +418,21 @@ test -f V0.2.28.9-更新說明.md
  grep -Fq 'context_compact_backend_fallback' src/services/proxy-server.js
  grep -Fq 'context_compact_external' src/services/proxy-server.js
  grep -Fq 'backend_prompt_tokens' src/services/context-compact-client.js
+
+
+# V0.2.28.11 independent Base connections + explicit-busy retry
+test -f src/services/base-busy-retry.js
+test -f test/base-busy-retry.test.js
+test -f test/vllm-busy-retry.test.js
+test -f V0.2.28.11-更新說明.md
+grep -Fq 'V0.2.28.11 independent Base connections' README.md
+grep -Fq 'base_upstream_busy_${event}' src/services/proxy-server.js
+grep -Fq "event === 'wait'" src/services/proxy-server.js
+grep -Fq "event === 'accepted'" src/services/proxy-server.js
+! test -e src/concurrency/managed-queue.js
+! grep -Fq 'acquireManaged' src/services/proxy-server.js
+! grep -Fq 'acquireLargeContext' src/services/proxy-server.js
+! grep -Fq 'proxy_queue_timeout' src/services/proxy-server.js
+! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
 
 echo 'Verification complete.'

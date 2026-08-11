@@ -1,3 +1,12 @@
+## 0.2.28.11 - 2026-08-11
+
+- Removed the Proxy-wide Base/Managed `ManagedQueue`, native WebSearch admission fast lane, large-context one-slot gate, and ingress admission queue; Claude Code main-model connections now execute independently and vLLM owns scheduling.
+- Removed `CONCURRENCY_PROFILE`, `MANAGED_MAX_CONCURRENCY`, `MANAGED_MAX_QUEUE`, and `MANAGED_QUEUE_TIMEOUT_MS` from the active deployment surface; Vision and WebFetch Processor keep their independent auxiliary semaphores.
+- Added request-local Base-vLLM retry for explicit pre-generation busy rejection: HTTP 429 or clearly transient capacity/overload 503 responses are retried every 15 seconds while the client connection remains open.
+- Added streaming busy-wait progress and safe `base_upstream_busy_wait`, `base_upstream_busy_retry`, and `base_upstream_busy_accepted` diagnostics.
+- Busy wait does not consume the Managed Loop first-byte deadline; once vLLM accepts the retry, the first-byte deadline restarts from the acceptance point.
+- Preserved V0.2.28.10 Context Compact routing, V0.2.28.9 compact guard, and V0.2.28.8 cache-aware token accounting unchanged.
+
 # Changelog
 
 ## 0.2.28.10 - 2026-08-10

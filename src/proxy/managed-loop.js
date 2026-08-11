@@ -122,16 +122,32 @@ async function runModelWithActivityDeadline(operation, {
     };
   };
   const hardError = managedTimeoutError(timeoutCode, timeoutMs, 'model');
-  const hardPromise = new Promise((_, reject) => {
+  let rejectHard;
+  const hardPromise = new Promise((_, reject) => { rejectHard = reject; });
+  const armHardDeadline = (delayMs) => {
     hardTimer = setTimeout(() => {
       // With activity telemetry, this deadline only bounds time-to-first-byte.
-      // Once the current round has produced upstream bytes, the sliding stall
-      // detector below owns liveness instead of total wall-clock round time.
+      // Explicit upstream busy rejection is request-local waiting, not model
+      // execution time. While busy, keep the round alive; after vLLM accepts
+      // the retry, restart the first-byte deadline from that acceptance point.
       if (currentRoundActivity().started) return;
+      const rawActivity = typeof getUpstreamActivity === 'function' ? (getUpstreamActivity() || {}) : {};
+      if (rawActivity.busyWaiting) {
+        armHardDeadline(Math.max(5, Math.min(1000, timeoutMs)));
+        return;
+      }
+      const acceptedAt = Number(rawActivity.busyAcceptedAt) || 0;
+      const deadlineBase = acceptedAt > startedAt ? acceptedAt : startedAt;
+      const remainingMs = timeoutMs - (Date.now() - deadlineBase);
+      if (remainingMs > 0) {
+        armHardDeadline(remainingMs);
+        return;
+      }
       controller.abort(hardError);
-      reject(hardError);
-    }, timeoutMs);
-  });
+      rejectHard(hardError);
+    }, Math.max(1, delayMs));
+  };
+  armHardDeadline(timeoutMs);
   const parentAbortPromise = new Promise((_, reject) => {
     if (!signal) return;
     parentAbort = () => {
