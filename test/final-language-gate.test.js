@@ -178,3 +178,71 @@ test('V0.2.28.12 zh-TW classifier ignores dense technical identifiers when natur
   assert.ok(result.technicalLatinChars > 100);
   assert.ok(result.naturalLatinWords < result.technicalTokenCount);
 });
+
+test('V0.2.28.13 accepts an otherwise English-classified zh-TW repair when target-language gain and source-language reduction are substantial', async () => {
+  const originalText = 'The proxy completed the request but the response remains in English. The model should translate every natural language sentence for the user while preserving identifiers, commands, paths, URLs, numbers, and technical names. This paragraph intentionally contains a large amount of ordinary English prose so the source language is unambiguous and the repair operation has meaningful work to perform.';
+  const shiftedRepair = '主要內容已翻成繁體中文，原本英文也明顯減少。 However some explanatory English prose still remains in the repaired answer because the translation model preserved several ordinary English sentences that describe the request status, processing behavior, response structure, and fallback behavior for the user.';
+  assert.equal(classifyFinalLanguage(originalText, 'zh-TW').detected, 'en');
+  assert.equal(classifyFinalLanguage(shiftedRepair, 'zh-TW').detected, 'en');
+
+  const events = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: originalText }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async () => [shiftedRepair],
+    rewriteBase: async () => ['Base 不應在語言轉移已明確成功時執行。'],
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.backend, 'external');
+  assert.equal(result.action, 'rewritten');
+  assert.equal(result.response.content[0].text, shiftedRepair);
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_validation'
+    && entry.backend === 'external'
+    && entry.decision === 'accept_by_language_shift'
+    && entry.original_detected === 'en'
+    && entry.repaired_detected === 'en'
+    && entry.target_gain >= 12
+    && entry.source_reduction_ratio >= 0.30));
+});
+
+test('V0.2.28.13 rejects a repair that only adds a short target-language preface without reducing the source language', async () => {
+  const originalText = 'The proxy request failed because the upstream model is busy. Please retry after the current request is completed. The response must remain complete and preserve all technical details for the user.';
+  const weakRepair = `以下是繁體中文翻譯： ${originalText}`;
+  const events = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: originalText }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async () => [weakRepair],
+    rewriteBase: async () => ['代理目前忙碌，請在目前請求完成後重新嘗試；所有技術細節均已保留。'],
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.backend, 'base');
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_validation'
+    && entry.backend === 'external'
+    && entry.decision === 'reject_by_language_shift'
+    && entry.source_reduction <= 0));
+});
+
+test('V0.2.28.13 never rescues a wrong Chinese variant through language-shift validation', async () => {
+  const originalText = 'The test result is ready. The problem has been processed and the device can now transfer data normally.';
+  const simplifiedRepair = '这是测试结果，问题已经处理，设备现在可以正常进行数据传输。';
+  const events = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: originalText }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async () => [simplifiedRepair],
+    rewriteBase: async () => ['這是測試結果，問題已經處理，設備現在可以正常進行資料傳輸。'],
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.backend, 'base');
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_validation'
+    && entry.backend === 'external'
+    && entry.decision === 'reject_wrong_target_language'
+    && entry.repaired_detected === 'zh-CN'));
+});

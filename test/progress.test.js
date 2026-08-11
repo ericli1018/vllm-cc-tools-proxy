@@ -454,7 +454,7 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
   await progress.open();
   await progress.showStartupBanner([
     '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
-    '│  VERSION   0.2.28.12          UPTIME  2h18m  │',
+    '│  VERSION   0.2.28.13          UPTIME  2h18m  │',
     '│  SESSIONS  3        ACTIVE  2        WAIT  0  │',
     '│  COMPACT ● ON       LANG ● ON       VISION ● │',
     '╰───────────────────────────────────────────────╯',
@@ -467,7 +467,7 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
 
   const messages = [{ role: 'assistant', content: [{ type: 'text', text: [
     '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
-    '│  VERSION   0.2.28.12          UPTIME  2h18m  │',
+    '│  VERSION   0.2.28.13          UPTIME  2h18m  │',
     '╰───────────────────────────────────────────────╯',
   ].join('\n') }, { type: 'text', text: '真正答案' }] }];
   assert.equal(hasProgressHistory(messages), true);

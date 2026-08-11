@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.28.13 - 2026-08-11
+
+- Added original-vs-repaired Final Language shift validation as a second layer after the V0.2.28.12 technical-prose absolute classifier.
+- Added `accept_by_language_shift` when repaired output remains classified as the original source language but gains at least 12 target-language characters, removes at least 12 source-language characters, and reduces source-language natural prose by at least 30%.
+- Added `final_language_repair_validation` diagnostics with original/repaired target/source counts, target gain, source reduction, and source-reduction ratio.
+- Kept wrong target languages and Chinese variants as hard failures; zh-CN cannot be rescued for a zh-TW request.
+- Kept short target-language prefaces from passing when the original source-language prose is not materially reduced.
+- Preserved V0.2.28.12 `LANG_PROCESSOR_*`, Technical Token stripping, session banner, and V0.2.28.11 independent Base connection behavior.
+
 ## 0.2.28.12 - 2026-08-11
 
 - Fixed Final Language Gate false positives for Traditional Chinese technical prose by excluding technical identifiers from natural-language Latin dominance checks and adding safe classifier telemetry.

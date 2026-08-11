@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.12'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.12'
+test "$(node -p "require('./package.json').version")" = '0.2.28.13'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.13'
 
 
 test -f src/i18n/response-language.js
@@ -434,6 +434,14 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 ! grep -Fq 'acquireLargeContext' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_timeout' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
+
+# V0.2.28.13 original-vs-repaired language-shift validation
+test -f V0.2.28.13-更新說明.md
+grep -Fq 'LANGUAGE_SHIFT_MIN_TARGET_GAIN = 12' src/proxy/final-language-gate.js
+grep -Fq 'LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION_RATIO = 0.30' src/proxy/final-language-gate.js
+grep -Fq 'accept_by_language_shift' src/proxy/final-language-gate.js
+grep -Fq 'final_language_repair_validation' src/proxy/final-language-gate.js
+grep -Fq 'V0.2.28.13 Original-vs-Repaired Language Shift Validation' README.md
 
 # V0.2.28.12 technical-prose language classification + dedicated Language Processor + session banner
 test -f src/proxy/runtime-telemetry.js

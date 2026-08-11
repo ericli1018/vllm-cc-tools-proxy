@@ -163,6 +163,71 @@ function classificationTelemetry(classification) {
   };
 }
 
+const LANGUAGE_SHIFT_MIN_TARGET_GAIN = 12;
+const LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION = 12;
+const LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION_RATIO = 0.30;
+
+function targetLanguageChars(classification, locale) {
+  if (!classification) return 0;
+  if (locale === 'zh-TW' || locale === 'zh-CN') return classification.han || 0;
+  if (locale === 'ja-JP') return (classification.kana || 0) + (classification.han || 0);
+  if (locale === 'ko-KP') return classification.hangul || 0;
+  return classification.naturalLatinChars || classification.latin || 0;
+}
+
+function detectedLanguageChars(classification, detected) {
+  if (!classification) return 0;
+  if (detected === 'en') return classification.naturalLatinChars || classification.latin || 0;
+  if (detected === 'zh' || detected === 'zh-CN' || detected === 'zh-TW') return classification.han || 0;
+  if (detected === 'ja') return (classification.kana || 0) + (classification.han || 0);
+  if (detected === 'ko') return classification.hangul || 0;
+  return 0;
+}
+
+function languageShiftTelemetry(originalClassification, repairedClassification, locale) {
+  const originalTarget = targetLanguageChars(originalClassification, locale);
+  const repairedTarget = targetLanguageChars(repairedClassification, locale);
+  const sourceLanguage = originalClassification?.detected || 'unknown';
+  const originalSource = detectedLanguageChars(originalClassification, sourceLanguage);
+  const repairedSource = detectedLanguageChars(repairedClassification, sourceLanguage);
+  const targetGain = repairedTarget - originalTarget;
+  const sourceReduction = originalSource - repairedSource;
+  const sourceReductionRatio = originalSource > 0 ? sourceReduction / originalSource : 0;
+  return {
+    original_detected: sourceLanguage,
+    repaired_detected: repairedClassification?.detected || 'unknown',
+    original_target_chars: originalTarget,
+    repaired_target_chars: repairedTarget,
+    target_gain: targetGain,
+    original_source_chars: originalSource,
+    repaired_source_chars: repairedSource,
+    source_reduction: sourceReduction,
+    source_reduction_ratio: Number(sourceReductionRatio.toFixed(4)),
+  };
+}
+
+function validateRepairedLanguage(originalClassification, repairedClassification, locale) {
+  const shift = languageShiftTelemetry(originalClassification, repairedClassification, locale);
+  if (repairedClassification?.decision === 'compliant') {
+    return { accepted: true, decision: 'accept_absolute', ...shift };
+  }
+  if (repairedClassification?.decision !== 'repair') {
+    return { accepted: true, decision: 'accept_uncertain', ...shift };
+  }
+  if (repairedClassification?.detected !== originalClassification?.detected) {
+    return { accepted: false, decision: 'reject_wrong_target_language', ...shift };
+  }
+  const accepted = shift.repaired_target_chars >= LANGUAGE_SHIFT_MIN_TARGET_GAIN
+    && shift.target_gain >= LANGUAGE_SHIFT_MIN_TARGET_GAIN
+    && shift.source_reduction >= LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION
+    && shift.source_reduction_ratio >= LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION_RATIO;
+  return {
+    accepted,
+    decision: accepted ? 'accept_by_language_shift' : 'reject_by_language_shift',
+    ...shift,
+  };
+}
+
 export async function applyFinalLanguageGate(response, {
   locale = 'en-US',
   rewriteExternal,
@@ -198,17 +263,28 @@ export async function applyFinalLanguageGate(response, {
         throw Object.assign(new Error('Language repair returned invalid segments.'), { code: 'invalid_segments' });
       }
       const repairedClassification = classifyFinalLanguage(rewritten.join('\n\n'), locale);
-      if (repairedClassification.decision === 'repair') {
+      const validation = validateRepairedLanguage(classification, repairedClassification, locale);
+      await onEvent('final_language_repair_validation', {
+        backend,
+        target: locale,
+        decision: validation.decision,
+        accepted: validation.accepted,
+        ...validation,
+      });
+      if (!validation.accepted) {
         throw Object.assign(new Error('Language repair output is not compliant with the target language.'), {
           code: 'language_not_compliant',
           languageClassification: repairedClassification,
+          languageValidation: validation,
         });
       }
       const clone = structuredClone(response);
       entries.forEach(({ index }, segmentIndex) => { clone.content[index].text = rewritten[segmentIndex]; });
       await onEvent('final_language_repair_completed', {
         backend, target: locale, segment_count: segments.length, elapsed_ms: Date.now() - startedAt,
+        validation: validation.decision,
         ...classificationTelemetry(repairedClassification),
+        ...languageShiftTelemetry(classification, repairedClassification, locale),
       });
       return { response: clone, action: 'rewritten', backend, classification };
     } catch (error) {
@@ -220,6 +296,19 @@ export async function applyFinalLanguageGate(response, {
           detected: error.languageClassification.detected,
           decision: error.languageClassification.decision,
           ...classificationTelemetry(error.languageClassification),
+        } : {}),
+        ...(error?.languageValidation ? {
+          validation: error.languageValidation.decision,
+          validation_accepted: error.languageValidation.accepted,
+          original_detected: error.languageValidation.original_detected,
+          repaired_detected: error.languageValidation.repaired_detected,
+          original_target_chars: error.languageValidation.original_target_chars,
+          repaired_target_chars: error.languageValidation.repaired_target_chars,
+          target_gain: error.languageValidation.target_gain,
+          original_source_chars: error.languageValidation.original_source_chars,
+          repaired_source_chars: error.languageValidation.repaired_source_chars,
+          source_reduction: error.languageValidation.source_reduction,
+          source_reduction_ratio: error.languageValidation.source_reduction_ratio,
         } : {}),
         fallback: backend === 'external' && typeof rewriteBase === 'function' ? 'base' : 'original',
         elapsed_ms: Date.now() - startedAt,

@@ -1,5 +1,13 @@
 # VLLM-CC-TOOLS-PROXY
 
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.13 adds original-vs-repaired language-shift validation on top of V0.2.28.12 Technical-Prose Language Classification, while preserving the independent Language Processor, session banner, and V0.2.28.11 independent Base connections.
+
+## V0.2.28.13 Original-vs-Repaired Language Shift Validation
+
+V0.2.28.13 keeps the V0.2.28.12 absolute target-language classifier as the first validation layer. When a repair is still classified as the same original source language, Proxy now compares the original text with the repaired text after code/URL/path/technical-token stripping. A repair can be accepted as `accept_by_language_shift` only when target-language characters increase by at least 12, source-language characters decrease by at least 12, and the source-language natural prose is reduced by at least 30%.
+
+This relative validator does not override a clearly wrong target language or Chinese variant. For example, zh-CN output requested as zh-TW remains a hard failure. A repair that merely adds a short target-language preface while leaving the original English prose intact also remains a failure. Diagnostics now emit `final_language_repair_validation` with original/repaired target counts, source counts, target gain, source reduction, and source-reduction ratio.
+
 `VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.12 adds Technical-Prose Language Classification, an independent Final Language Processor, and a one-time per-session runtime banner while preserving V0.2.28.11 independent Base connections and explicit-busy retry.
 
 ## V0.2.28.12 Technical-Prose Language Classification, Language Processor, and Session Banner
