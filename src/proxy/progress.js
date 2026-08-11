@@ -89,6 +89,30 @@ function event(name, data) {
   return `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`;
 }
 
+function terminalDisplayWidth(text) {
+  let width = 0;
+  for (const char of String(text || '')) {
+    const code = char.codePointAt(0);
+    if (code == null || code === 0 || code < 0x20 || (code >= 0x7f && code < 0xa0)) continue;
+    if (/\p{Mark}/u.test(char)) continue;
+    const wide = (
+      (code >= 0x1100 && code <= 0x115f)
+      || code === 0x2329 || code === 0x232a
+      || (code >= 0x2e80 && code <= 0xa4cf)
+      || (code >= 0xac00 && code <= 0xd7a3)
+      || (code >= 0xf900 && code <= 0xfaff)
+      || (code >= 0xfe10 && code <= 0xfe19)
+      || (code >= 0xfe30 && code <= 0xfe6f)
+      || (code >= 0xff00 && code <= 0xff60)
+      || (code >= 0xffe0 && code <= 0xffe6)
+      || (code >= 0x1f300 && code <= 0x1faff)
+      || (code >= 0x20000 && code <= 0x3fffd)
+    );
+    width += wide ? 2 : 1;
+  }
+  return width;
+}
+
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
@@ -112,6 +136,8 @@ export class ProgressStream {
     this.progressClosed = false;
     this.lastStateKey = '';
     this.lastHeartbeatMessage = '';
+    this.liveLineActive = false;
+    this.liveLineWidth = 0;
     this.revision = 0;
     this.queue = Promise.resolve();
     this.sequence = 0;
@@ -249,6 +275,12 @@ export class ProgressStream {
         revision: entry.revision,
         changedAt: entry.changedAt,
       };
+      const renderMode = entry.renderMode === 'live' || (entry.renderMode !== 'milestone' && entry.kind === 'semantic_heartbeat')
+        ? 'live'
+        : 'milestone';
+      metadata.renderMode = renderMode;
+      const message = String(entry.message);
+      const messageWidth = terminalDisplayWidth(message);
       if (!this.visible) {
         this.visible = true;
         await this.#write(event('content_block_start', {
@@ -259,14 +291,27 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${entry.message}` },
+          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${message}` },
         }), metadata);
-      } else {
+        this.liveLineActive = renderMode === 'live';
+        this.liveLineWidth = this.liveLineActive ? messageWidth : 0;
+      } else if (renderMode === 'live' && this.liveLineActive) {
+        const padding = ' '.repeat(Math.max(0, this.liveLineWidth - messageWidth));
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `\n${entry.message}` },
+          delta: { type: 'text_delta', text: `\r${message}${padding}` },
         }), metadata);
+        this.liveLineWidth = messageWidth;
+      } else {
+        const lineBreak = this.liveLineActive ? '\r\n' : '\n';
+        await this.#write(event('content_block_delta', {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: `${lineBreak}${message}` },
+        }), metadata);
+        this.liveLineActive = renderMode === 'live';
+        this.liveLineWidth = this.liveLineActive ? messageWidth : 0;
       }
     });
   }
@@ -302,7 +347,7 @@ export class ProgressStream {
     }), { kind: 'usage_delta', phase });
   }
 
-  async update(message, { force = false, kind = 'progress_delta', details = {} } = {}) {
+  async update(message, { force = false, kind = 'progress_delta', details = {}, renderMode = 'auto' } = {}) {
     if (this.closed || this.progressClosed || !message) return;
     const changedAt = Date.now();
     const isHeartbeat = kind === 'semantic_heartbeat';
@@ -319,7 +364,7 @@ export class ProgressStream {
       try { await this.onStateChange({ revision, phase: details.phase, changedAt, message }); } catch {}
     }
 
-    const entry = { message, kind, details, revision, changedAt };
+    const entry = { message, kind, details, revision, changedAt, renderMode };
     const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
     if (!force && belowThreshold) {
       this.pendingUpdate = entry;

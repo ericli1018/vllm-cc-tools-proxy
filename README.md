@@ -1,6 +1,24 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.14 upgrades model progress into multilingual runtime telemetry while preserving V0.2.28.13 language-shift validation, the independent Language Processor, and independent Base connections.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.15 adds a carriage-return Progress Live-Line Renderer on top of V0.2.28.14 multilingual runtime telemetry while preserving V0.2.28.13 language-shift validation, the independent Language Processor, and independent Base connections.
+
+## V0.2.28.15 Progress Live-Line Renderer
+
+V0.2.28.15 separates Proxy progress into immutable **milestone** lines and one replaceable **live line**. The first heartbeat is appended below the current milestone; later heartbeat samples replace that same line using a carriage return (`\r`) plus conservative trailing-space padding. When the model changes phase, Proxy commits the current live snapshot with `\r\n` and appends the new milestone.
+
+Example terminal intent:
+
+```text
+◐ 主模型開始思考 · 510 B
+◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s
+◆ 主模型開始回應 · 44.61 KB
+◆ 主模型回應中 · 71s · 48.21 KB · 506 B/s
+◇ 主模型建立工具動作 · 48.58 KB
+```
+
+Only the active heartbeat line is rewritten; phase transitions and tool handoff messages remain visible as history. The existing `◐ ◓ ◑ ◒` pulse therefore becomes a true low-frequency live indicator without adding a timer or increasing semantic-heartbeat cadence. This release intentionally uses **no ANSI** cursor-up or erase control sequences: replacement is limited to carriage return, CRLF milestone commit, and padding, reducing terminal/TUI compatibility risk.
+
+The renderer is language-agnostic and keeps the existing localized telemetry for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`; unknown locales still fall back to `en-US`. Progress blocks containing carriage-return updates remain recognized by `stripProgressHistory()` and are removed before model reuse.
 
 ## V0.2.28.14 Multilingual Runtime Progress Telemetry
 

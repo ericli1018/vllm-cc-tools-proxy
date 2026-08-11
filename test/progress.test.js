@@ -501,3 +501,84 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
 });
+
+test('V0.2.28.15 semantic heartbeat replaces the current live line with carriage return instead of appending history lines', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+    locale: 'zh-TW',
+  });
+  await progress.open();
+  await progress.update('◐ 主模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 主模型思考中 · 29s · 20.87 KB', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.update('◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const deltas = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)))
+    .filter((data) => data?.type === 'content_block_delta')
+    .map((data) => data.delta?.text || '');
+
+  assert.equal(deltas[0], '目前處理進度：\n◐ 主模型開始思考 · 510 B');
+  assert.equal(deltas[1], '\n◐ 主模型思考中 · 29s · 20.87 KB');
+  assert.match(deltas[2], /^\r◓ 主模型思考中 · 59s · 44\.02 KB · 790 B\/s/);
+  assert.doesNotMatch(deltas[2], /^\n/);
+  assert.doesNotMatch(deltas.join(''), /\x1b\[/);
+});
+
+test('V0.2.28.15 milestone after a live line commits a newline and preserves the final live snapshot', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000, locale: 'zh-TW' });
+  await progress.open();
+  await progress.update('◐ 主模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.update('◆ 主模型開始回應 · 44.61 KB', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const deltas = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)))
+    .filter((data) => data?.type === 'content_block_delta')
+    .map((data) => data.delta?.text || '');
+
+  assert.equal(deltas[1], '\n◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s');
+  assert.equal(deltas[2], '\r\n◆ 主模型開始回應 · 44.61 KB');
+});
+
+test('V0.2.28.15 shorter live replacement pads the remainder so stale terminal characters are erased without ANSI', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
+  await progress.open();
+  await progress.update('phase', { force: true });
+  await progress.update('LONG-LIVE-STATUS-12345', { force: true, kind: 'semantic_heartbeat' });
+  await progress.update('SHORT', { force: true, kind: 'semantic_heartbeat' });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const deltas = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)))
+    .filter((data) => data?.type === 'content_block_delta')
+    .map((data) => data.delta?.text || '');
+  const replacement = deltas[2];
+  assert.match(replacement, /^\rSHORT +$/);
+  assert.ok(replacement.length >= '\rLONG-LIVE-STATUS-12345'.length);
+  assert.doesNotMatch(replacement, /\x1b/);
+});
+
+test('V0.2.28.15 progress history containing carriage-return live updates is still stripped before model reuse', () => {
+  const messages = [{
+    role: 'assistant',
+    content: [
+      { type: 'text', text: '目前處理進度：\n◐ 主模型開始思考 · 510 B\n◐ 主模型思考中 · 29s\r◓ 主模型思考中 · 59s\n◆ 主模型開始回應 · 44.61 KB' },
+      { type: 'text', text: '真正答案' },
+    ],
+  }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});

@@ -62,6 +62,16 @@ test('Compose exposes no Base/Managed Proxy queue settings and keeps only auxili
   assert.match(compose, /WEB_FETCH_PROCESSOR_CONCURRENCY:\s*\$\{WEB_FETCH_PROCESSOR_CONCURRENCY:-3\}/);
 });
 
+
+
+test('README documents V0.2.28.15 carriage-return live-line progress rendering', () => {
+  assert.match(readme, /V0\.2\.28\.15 Progress Live-Line Renderer/);
+  assert.match(readme, /carriage return/i);
+  assert.match(readme, /milestone/i);
+  assert.match(readme, /live line/i);
+  assert.match(readme, /no ANSI/i);
+  assert.match(readme, /zh-TW.*zh-CN.*en-US.*ja-JP.*ko-KP/s);
+});
 test('README documents V0.2.28.14 multilingual runtime progress telemetry', () => {
   assert.match(readme, /V0\.2\.28\.14 Multilingual Runtime Progress Telemetry/);
   assert.match(readme, /WAITING.*THINKING.*RESPONDING.*STALLED/s);

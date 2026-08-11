@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.28.15 - 2026-08-11
+
+- Added a carriage-return Progress Live-Line Renderer: semantic heartbeat telemetry now reuses one terminal line instead of appending one history line per heartbeat.
+- Separated immutable milestone updates from replaceable live heartbeat updates; model phase changes and Claude Code tool handoffs remain visible.
+- Added conservative trailing-space padding when a replacement line is shorter so stale terminal characters are cleared without ANSI erase sequences.
+- Commit a live line with `\r\n` before appending the next milestone so the new phase starts from column zero.
+- Kept the V0.2.28.14 low-frequency `◐ ◓ ◑ ◒` pulse and existing heartbeat cadence; no new animation timer or SSE refresh loop was added.
+- Kept the renderer language-agnostic across `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`, with `en-US` fallback for unknown locales.
+- Preserved progress-history stripping for control-bearing progress blocks so live telemetry cannot become model conversation evidence.
+- Preserved Base/Managed scheduling, explicit-busy retry, `LANG_PROCESSOR_*`, Final Language shift validation, Context Compact, and Vision behavior unchanged.
+
 ## 0.2.28.14 - 2026-08-11
 
 - Replaced the dynamic `目前處理進度（已收到 ...）`-style header with a stable localized progress header so delayed visibility cannot contradict an earlier phase byte snapshot.
