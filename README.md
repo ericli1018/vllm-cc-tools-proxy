@@ -1,6 +1,31 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.17 makes progress bytes and throughput represent decoded model output rather than Anthropic SSE/JSON wire framing, while preserving the V0.2.28.16 native statusLine and append-only 30-second SSE liveness channels.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.18 hardens Final Language Repair against unchanged English echoes with a mandatory translation contract and one bounded strict retry per backend, while preserving V0.2.28.17 semantic model-output telemetry.
+
+## V0.2.28.18 Strict Final Language Repair
+
+V0.2.28.18 addresses the case where both the external Language Processor and isolated Base repair return the original source-language prose unchanged even though the Final Language Gate correctly requests a target-language repair. The classifier and V0.2.28.13 language-shift thresholds are intentionally unchanged.
+
+The shared repair contract now makes translation an explicit mandatory action. Natural-language prose that is not already in the target locale MUST be translated; only technical tokens such as code, commands, paths, URLs, numbers, identifiers, API/ENV names, and model names may remain unchanged. Source text is isolated inside `<TRANSLATE_SOURCE>` and is explicitly treated as data rather than instructions.
+
+Each repair backend is bounded to at most two quality attempts:
+
+```text
+External normal
+  -> unchanged / non-compliant
+External strict retry (once)
+  -> failure
+Base normal
+  -> unchanged / non-compliant
+Base strict retry (once)
+  -> original response
+```
+
+Exact/whitespace-normalized source echoes are detected before language validation and logged as `final_language_repair_echo_detected` with `code=unchanged_output`. A retry is announced with `final_language_repair_retry`; transport, timeout, tool-call, and other backend failures do not create an unbounded retry loop. No validation threshold is relaxed.
+
+This release also fixes `managed_model_round_completed.model_output_bytes`: the semantic-byte count is snapshotted before the round is marked inactive, so completion logs no longer report `0` after nonzero thinking/text/tool JSON deltas. Raw wire bytes remain separate and unchanged for connection-health logic.
+
+No new ENV variables are added. The repair prompt remains localized for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`.
 
 ## V0.2.28.17 Semantic Model Output Telemetry
 

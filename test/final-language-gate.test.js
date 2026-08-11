@@ -139,9 +139,9 @@ test('V0.2.28.1 rejects structurally valid external repair that remains English 
   assert.equal(result.response.content[0].text, '這張圖片顯示兩名動漫風格角色。');
   assert.ok(events.some((entry) => entry.event === 'final_language_repair_failed'
     && entry.backend === 'external'
-    && entry.code === 'language_not_compliant'
-    && entry.detected === 'en'
-    && entry.decision === 'repair'
+    && entry.attempt === 2
+    && entry.strict === true
+    && entry.code === 'unchanged_output'
     && entry.fallback === 'base'));
 });
 
@@ -245,4 +245,56 @@ test('V0.2.28.13 never rescues a wrong Chinese variant through language-shift va
     && entry.backend === 'external'
     && entry.decision === 'reject_wrong_target_language'
     && entry.repaired_detected === 'zh-CN'));
+});
+
+test('V0.2.28.18 retries unchanged External output once with strict contract before Base fallback', async () => {
+  const originalText = 'The test result is ready. The problem has been processed and the device can now transfer data normally.';
+  const calls = [];
+  const events = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: originalText }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async (segments, _locale, options = {}) => {
+      calls.push({ backend: 'external', strict: Boolean(options.strict), attempt: options.attempt });
+      return options.strict
+        ? ['測試結果已準備完成。問題已經處理，設備現在可以正常傳輸資料。']
+        : [segments[0]];
+    },
+    rewriteBase: async () => { throw new Error('Base should not be used after strict External success.'); },
+    onEvent: async (event, fields) => events.push({ event, ...fields }),
+  });
+
+  assert.equal(result.backend, 'external');
+  assert.deepEqual(calls, [
+    { backend: 'external', strict: false, attempt: 1 },
+    { backend: 'external', strict: true, attempt: 2 },
+  ]);
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_echo_detected'
+    && entry.backend === 'external' && entry.unchanged === true));
+  assert.ok(events.some((entry) => entry.event === 'final_language_repair_retry'
+    && entry.backend === 'external' && entry.attempt === 2 && entry.strict === true));
+});
+
+test('V0.2.28.18 bounds strict retries to one retry per backend', async () => {
+  const originalText = 'The test result is ready. The problem has been processed and the device can now transfer data normally.';
+  const calls = [];
+  const result = await applyFinalLanguageGate({
+    stop_reason: 'end_turn', content: [{ type: 'text', text: originalText }],
+  }, {
+    locale: 'zh-TW',
+    rewriteExternal: async (segments, _locale, options = {}) => {
+      calls.push(`external:${options.attempt}:${Boolean(options.strict)}`);
+      return [segments[0]];
+    },
+    rewriteBase: async (segments, _locale, options = {}) => {
+      calls.push(`base:${options.attempt}:${Boolean(options.strict)}`);
+      return [segments[0]];
+    },
+  });
+  assert.equal(result.action, 'fallback_original');
+  assert.deepEqual(calls, [
+    'external:1:false', 'external:2:true',
+    'base:1:false', 'base:2:true',
+  ]);
 });

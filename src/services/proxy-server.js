@@ -836,15 +836,16 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       const rewriteExternal = languageProcessorAvailable()
-        ? (segments, locale) => rewriteFinalSegmentsWithExternalProcessor(segments, {
+        ? (segments, locale, options = {}) => rewriteFinalSegmentsWithExternalProcessor(segments, {
           locale,
           processor: config.langProcessor,
           signal: abortController.signal,
           onEvent: onLanguageEvent,
+          strict: Boolean(options.strict),
         })
         : undefined;
 
-      const rewriteBase = async (segments, locale) => {
+      const rewriteBase = async (segments, locale, options = {}) => {
         const rewritten = [];
         for (const segment of segments) {
           const repairRequest = buildBaseLanguageRepairRequest(segment, {
@@ -853,6 +854,7 @@ export function createProxyServer(config, dependencies = {}) {
             maxTokens: Number.isInteger(sourceRequest?.max_tokens) && sourceRequest.max_tokens > 0
               ? sourceRequest.max_tokens
               : 16384,
+            strict: Boolean(options.strict),
           });
           const repaired = await callUpstreamJson(
             repairRequest,
@@ -1734,13 +1736,14 @@ export function createProxyServer(config, dependencies = {}) {
               runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
+              const completedModelOutputBytes = getCurrentRoundResponseBytes();
               modelRoundProgress.active = false;
               progressTiming.mode = 'step';
               progressTiming.startedAt = endedAt || Date.now();
               log(config, 'info', 'managed_model_round_completed', {
                 requestId, lane, round, elapsed_ms: (endedAt || Date.now()) - startedAt,
                 wire_received_bytes: getBaseResponseBytes(),
-                model_output_bytes: getCurrentRoundResponseBytes(),
+                model_output_bytes: completedModelOutputBytes,
               });
             }
           },

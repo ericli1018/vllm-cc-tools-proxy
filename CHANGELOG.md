@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.28.18 - 2026-08-11
+
+- Strengthened the shared Final Language Repair prompt so target-language translation is mandatory for natural-language prose while technical tokens remain protected.
+- Isolated repair source text inside `<TRANSLATE_SOURCE>` and explicitly marked it as data rather than instructions.
+- Added normalized unchanged-output detection with `final_language_repair_echo_detected` and `code=unchanged_output`.
+- Added exactly one strict quality retry per External and Base repair backend for unchanged, invalid-segment, or language-noncompliant outputs; transport/tool/timeout failures keep the existing fallback behavior.
+- Added `final_language_repair_retry` telemetry plus attempt/strict fields on repair lifecycle events.
+- Kept V0.2.28.13 absolute/shift language validation thresholds unchanged and preserved the final fallback to the original successful response.
+- Fixed `managed_model_round_completed.model_output_bytes` by snapshotting semantic output bytes before round deactivation.
+- Corrected package-lock release metadata and added lock-version verification.
+- Preserved V0.2.28.17 semantic output telemetry, V0.2.28.16 statusLine + 30-second SSE liveness, independent Base scheduling, explicit-busy retry, Context Compact, and Vision behavior.
+
 ## 0.2.28.17 - 2026-08-11
 
 - Split Base-vLLM transport byte accounting from user-visible model-output telemetry.

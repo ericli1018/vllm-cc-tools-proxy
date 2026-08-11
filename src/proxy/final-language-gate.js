@@ -149,6 +149,27 @@ function validSegments(value, expectedLength) {
     && value.every((segment) => typeof segment === 'string' && segment.trim().length > 0);
 }
 
+
+function normalizeRepairComparison(value) {
+  return String(value ?? '')
+    .replace(/\r\n/g, '\n')
+    .trim()
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function repairOutputUnchanged(sourceSegments, rewrittenSegments) {
+  if (!Array.isArray(sourceSegments) || !Array.isArray(rewrittenSegments)
+      || sourceSegments.length !== rewrittenSegments.length) return false;
+  return sourceSegments.every((segment, index) => (
+    normalizeRepairComparison(segment) === normalizeRepairComparison(rewrittenSegments[index])
+  ));
+}
+
+function repairRetryableCode(code) {
+  return ['unchanged_output', 'language_not_compliant', 'invalid_segments'].includes(String(code || ''));
+}
+
 function errorCode(error) {
   return String(error?.code || error?.cause?.code || error?.name || 'repair_error').slice(0, 120);
 }
@@ -255,66 +276,105 @@ export async function applyFinalLanguageGate(response, {
 
   const attempt = async (backend, rewrite) => {
     if (typeof rewrite !== 'function') return null;
-    await onEvent('final_language_repair_started', { backend, target: locale, segment_count: segments.length });
-    const startedAt = Date.now();
-    try {
-      const rewritten = await rewrite(segments, locale);
-      if (!validSegments(rewritten, segments.length)) {
-        throw Object.assign(new Error('Language repair returned invalid segments.'), { code: 'invalid_segments' });
-      }
-      const repairedClassification = classifyFinalLanguage(rewritten.join('\n\n'), locale);
-      const validation = validateRepairedLanguage(classification, repairedClassification, locale);
-      await onEvent('final_language_repair_validation', {
-        backend,
-        target: locale,
-        decision: validation.decision,
-        accepted: validation.accepted,
-        ...validation,
+
+    for (let attemptNumber = 1; attemptNumber <= 2; attemptNumber += 1) {
+      const strict = attemptNumber === 2;
+      await onEvent('final_language_repair_started', {
+        backend, target: locale, segment_count: segments.length, attempt: attemptNumber, strict,
       });
-      if (!validation.accepted) {
-        throw Object.assign(new Error('Language repair output is not compliant with the target language.'), {
-          code: 'language_not_compliant',
-          languageClassification: repairedClassification,
-          languageValidation: validation,
+      const startedAt = Date.now();
+      try {
+        const rewritten = await rewrite(segments, locale, { strict, attempt: attemptNumber });
+        if (!validSegments(rewritten, segments.length)) {
+          throw Object.assign(new Error('Language repair returned invalid segments.'), { code: 'invalid_segments' });
+        }
+
+        if (repairOutputUnchanged(segments, rewritten)) {
+          await onEvent('final_language_repair_echo_detected', {
+            backend,
+            target: locale,
+            attempt: attemptNumber,
+            strict,
+            unchanged: true,
+            input_chars: segments.reduce((sum, segment) => sum + String(segment ?? '').length, 0),
+            output_chars: rewritten.reduce((sum, segment) => sum + String(segment ?? '').length, 0),
+          });
+          throw Object.assign(new Error('Language repair returned unchanged source text.'), {
+            code: 'unchanged_output',
+          });
+        }
+
+        const repairedClassification = classifyFinalLanguage(rewritten.join('\n\n'), locale);
+        const validation = validateRepairedLanguage(classification, repairedClassification, locale);
+        await onEvent('final_language_repair_validation', {
+          backend,
+          target: locale,
+          attempt: attemptNumber,
+          strict,
+          decision: validation.decision,
+          accepted: validation.accepted,
+          ...validation,
         });
+        if (!validation.accepted) {
+          throw Object.assign(new Error('Language repair output is not compliant with the target language.'), {
+            code: 'language_not_compliant',
+            languageClassification: repairedClassification,
+            languageValidation: validation,
+          });
+        }
+        const clone = structuredClone(response);
+        entries.forEach(({ index }, segmentIndex) => { clone.content[index].text = rewritten[segmentIndex]; });
+        await onEvent('final_language_repair_completed', {
+          backend, target: locale, segment_count: segments.length, elapsed_ms: Date.now() - startedAt,
+          attempt: attemptNumber, strict,
+          validation: validation.decision,
+          ...classificationTelemetry(repairedClassification),
+          ...languageShiftTelemetry(classification, repairedClassification, locale),
+        });
+        return { response: clone, action: 'rewritten', backend, classification };
+      } catch (error) {
+        const code = errorCode(error);
+        const willRetryStrict = attemptNumber === 1 && repairRetryableCode(code);
+        const fallback = willRetryStrict
+          ? 'same_backend_strict'
+          : backend === 'external' && typeof rewriteBase === 'function' ? 'base' : 'original';
+        await onEvent('final_language_repair_failed', {
+          backend,
+          target: locale,
+          attempt: attemptNumber,
+          strict,
+          code,
+          ...(error?.languageClassification ? {
+            detected: error.languageClassification.detected,
+            decision: error.languageClassification.decision,
+            ...classificationTelemetry(error.languageClassification),
+          } : {}),
+          ...(error?.languageValidation ? {
+            validation: error.languageValidation.decision,
+            validation_accepted: error.languageValidation.accepted,
+            original_detected: error.languageValidation.original_detected,
+            repaired_detected: error.languageValidation.repaired_detected,
+            original_target_chars: error.languageValidation.original_target_chars,
+            repaired_target_chars: error.languageValidation.repaired_target_chars,
+            target_gain: error.languageValidation.target_gain,
+            original_source_chars: error.languageValidation.original_source_chars,
+            repaired_source_chars: error.languageValidation.repaired_source_chars,
+            source_reduction: error.languageValidation.source_reduction,
+            source_reduction_ratio: error.languageValidation.source_reduction_ratio,
+          } : {}),
+          fallback,
+          elapsed_ms: Date.now() - startedAt,
+        });
+        if (willRetryStrict) {
+          await onEvent('final_language_repair_retry', {
+            backend, target: locale, attempt: 2, strict: true, reason: code,
+          });
+          continue;
+        }
+        return null;
       }
-      const clone = structuredClone(response);
-      entries.forEach(({ index }, segmentIndex) => { clone.content[index].text = rewritten[segmentIndex]; });
-      await onEvent('final_language_repair_completed', {
-        backend, target: locale, segment_count: segments.length, elapsed_ms: Date.now() - startedAt,
-        validation: validation.decision,
-        ...classificationTelemetry(repairedClassification),
-        ...languageShiftTelemetry(classification, repairedClassification, locale),
-      });
-      return { response: clone, action: 'rewritten', backend, classification };
-    } catch (error) {
-      await onEvent('final_language_repair_failed', {
-        backend,
-        target: locale,
-        code: errorCode(error),
-        ...(error?.languageClassification ? {
-          detected: error.languageClassification.detected,
-          decision: error.languageClassification.decision,
-          ...classificationTelemetry(error.languageClassification),
-        } : {}),
-        ...(error?.languageValidation ? {
-          validation: error.languageValidation.decision,
-          validation_accepted: error.languageValidation.accepted,
-          original_detected: error.languageValidation.original_detected,
-          repaired_detected: error.languageValidation.repaired_detected,
-          original_target_chars: error.languageValidation.original_target_chars,
-          repaired_target_chars: error.languageValidation.repaired_target_chars,
-          target_gain: error.languageValidation.target_gain,
-          original_source_chars: error.languageValidation.original_source_chars,
-          repaired_source_chars: error.languageValidation.repaired_source_chars,
-          source_reduction: error.languageValidation.source_reduction,
-          source_reduction_ratio: error.languageValidation.source_reduction_ratio,
-        } : {}),
-        fallback: backend === 'external' && typeof rewriteBase === 'function' ? 'base' : 'original',
-        elapsed_ms: Date.now() - startedAt,
-      });
-      return null;
     }
+    return null;
   };
 
   const external = await attempt('external', rewriteExternal);

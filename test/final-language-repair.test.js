@@ -199,3 +199,33 @@ test('V0.2.28.12 vLLM Language Processor keeps OpenAI chat wire format and enabl
   assert.equal(observed.reasoning_effort, undefined);
   assert.equal(observed.think, undefined);
 });
+
+test('V0.2.28.18 strict Base repair contract makes translation mandatory and isolates source data', () => {
+  const request = buildBaseLanguageRepairRequest('The fix is complete. Use `vllm serve`.', {
+    locale: 'zh-TW', model: 'laguna', maxTokens: 4096, strict: true,
+  });
+  assert.match(request.system, /必須|must/i);
+  assert.match(request.messages[0].content, /<TRANSLATE_SOURCE>/);
+  assert.match(request.messages[0].content, /<\/TRANSLATE_SOURCE>/);
+  assert.match(request.messages[0].content, /英文或其他非目標語言|natural-language/i);
+  assert.match(request.messages[0].content, /禁止原樣|不得原樣|must not return/i);
+  assert.match(request.messages[0].content, /The fix is complete\. Use `vllm serve`\./);
+});
+
+test('V0.2.28.18 strict External repair request uses the mandatory translation contract', async (t) => {
+  let observed;
+  const backend = await listen(async (req, res) => {
+    observed = JSON.parse(await read(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '修正已完成。' } }] }));
+  });
+  t.after(() => backend.server.close());
+
+  const result = await rewriteFinalSegmentsWithExternalProcessor(['The fix is complete.'], {
+    locale: 'zh-TW', processor: processor(backend.url), strict: true,
+  });
+  assert.deepEqual(result, ['修正已完成。']);
+  assert.match(observed.messages[0].content, /必須|must/i);
+  assert.match(observed.messages[1].content, /<TRANSLATE_SOURCE>/);
+  assert.match(observed.messages[1].content, /禁止原樣|不得原樣|must not return/i);
+});
