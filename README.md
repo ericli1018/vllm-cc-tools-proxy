@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.13 adds original-vs-repaired language-shift validation on top of V0.2.28.12 Technical-Prose Language Classification, while preserving the independent Language Processor, session banner, and V0.2.28.11 independent Base connections.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.14 upgrades model progress into multilingual runtime telemetry while preserving V0.2.28.13 language-shift validation, the independent Language Processor, and independent Base connections.
+
+## V0.2.28.14 Multilingual Runtime Progress Telemetry
+
+V0.2.28.14 replaces the ambiguous live-byte progress header with a stable localized header and moves byte telemetry into phase-aware status lines. Main-model progress now distinguishes `WAITING`, `THINKING`, `RESPONDING`, `TOOL`, and observational `STALLED` states, with elapsed time, per-round received bytes, and recent upstream throughput where meaningful.
+
+Example zh-TW telemetry:
+
+```text
+目前處理進度：
+◌ 主模型等待輸出 · 29s · 0 B
+◐ 主模型思考中 · 60s · 29.82 KB · 512 B/s
+◆ 主模型回應中 · 90s · 43.59 KB · 1.25 KB/s
+◇ 主模型建立工具動作 · 120s · 57.63 KB · 256 B/s
+⚠ 主模型資料暫停 · 30s 無新資料 · 總計 57.63 KB
+```
+
+`STALLED` is telemetry only: it is emitted only after at least one upstream byte has arrived and then no new upstream data arrives for at least one semantic-heartbeat interval. It does not cancel, retry, or resubmit an accepted model request. First-byte waiting remains `WAITING`; explicit upstream busy rejection remains the separate `VLLM BUSY` retry state.
+
+The low-frequency pulse (`◐ ◓ ◑ ◒`) advances only when an existing semantic heartbeat is already emitted. There is **no new timer** and no increase in SSE heartbeat frequency solely for animation. The same progress contract is localized for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`, with unknown locales continuing to fall back to `en-US`. Language Repair and Vision progress use the stable `◇` glyph, while explicit busy retry uses `↻`.
 
 ## V0.2.28.13 Original-vs-Repaired Language Shift Validation
 

@@ -656,6 +656,55 @@ export function createProxyServer(config, dependencies = {}) {
         ? Math.max(0, baseResponseBytes - modelRoundProgress.startBytes)
         : 0
     );
+    const modelHeartbeatSample = {
+      roundKey: '',
+      sampledAt: 0,
+      sampledBytes: 0,
+      pulseIndex: 0,
+    };
+    const sampleModelHeartbeat = (now = Date.now()) => {
+      const roundBytes = getCurrentRoundResponseBytes();
+      const roundKey = `${modelRoundProgress.round}|${modelRoundProgress.startedAt}|${modelRoundProgress.startBytes}`;
+      if (modelHeartbeatSample.roundKey !== roundKey) {
+        modelHeartbeatSample.roundKey = roundKey;
+        modelHeartbeatSample.sampledAt = 0;
+        modelHeartbeatSample.sampledBytes = 0;
+        modelHeartbeatSample.pulseIndex = 0;
+      }
+
+      let recentBytesPerSecond;
+      if (modelHeartbeatSample.sampledAt > 0
+          && now > modelHeartbeatSample.sampledAt
+          && roundBytes >= modelHeartbeatSample.sampledBytes) {
+        recentBytesPerSecond = (roundBytes - modelHeartbeatSample.sampledBytes) * 1000
+          / (now - modelHeartbeatSample.sampledAt);
+      }
+
+      const pulseIndex = modelHeartbeatSample.pulseIndex;
+      modelHeartbeatSample.pulseIndex = (modelHeartbeatSample.pulseIndex + 1) % 4;
+      modelHeartbeatSample.sampledAt = now;
+      modelHeartbeatSample.sampledBytes = roundBytes;
+
+      const idleMs = modelRoundProgress.firstByteNotified && lastBaseResponseChunkAt > 0
+        ? Math.max(0, now - lastBaseResponseChunkAt)
+        : 0;
+      const stalled = Boolean(
+        modelRoundProgress.firstByteNotified
+        && roundBytes > 0
+        && idleMs >= Math.max(1, config.progressHeartbeatMs),
+      );
+      return {
+        seconds: modelRoundProgress.startedAt > 0
+          ? Math.floor(Math.max(0, now - modelRoundProgress.startedAt) / 1000)
+          : 0,
+        receivedBytes: roundBytes,
+        modelPhase: modelRoundProgress.phase || 'waiting',
+        recentBytesPerSecond,
+        stalled,
+        idleSeconds: Math.floor(idleMs / 1000),
+        pulseIndex,
+      };
+    };
     const baseBusyState = { waiting: false, acceptedAt: 0 };
     const getBaseUpstreamActivity = () => ({
       receivedBytes: baseResponseBytes,
@@ -1179,11 +1228,11 @@ export function createProxyServer(config, dependencies = {}) {
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
             details: { phase: 'managed_model_round_start', round: 1 },
           });
-          progress.startSemanticHeartbeat(() => statusText(config.responseLanguage, 'modelHeartbeat', {
-            seconds: Math.floor((Date.now() - directStartedAt) / 1000),
-            receivedBytes: getCurrentRoundResponseBytes(),
-            modelPhase: modelRoundProgress.phase || 'waiting',
-          }));
+          progress.startSemanticHeartbeat(() => statusText(
+            config.responseLanguage,
+            'modelHeartbeat',
+            sampleModelHeartbeat(),
+          ));
           let response = await callUpstreamManagedStream(
             original, config, req.headers, abortController.signal, '/v1/messages', {
               onResponseChunk: onBaseResponseChunk,
@@ -1457,11 +1506,11 @@ export function createProxyServer(config, dependencies = {}) {
         await maybeShowStartupBanner(progress);
         progress.startSemanticHeartbeat(() => {
           if (progressTiming.mode === 'model') {
-            return statusText(config.responseLanguage, 'modelHeartbeat', {
-              seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
-              receivedBytes: getCurrentRoundResponseBytes(),
-              modelPhase: modelRoundProgress.phase || 'waiting',
-            });
+            return statusText(
+              config.responseLanguage,
+              'modelHeartbeat',
+              sampleModelHeartbeat(),
+            );
           }
           return mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() })
             || statusText(config.responseLanguage, 'currentStepWaiting', {

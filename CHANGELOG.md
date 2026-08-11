@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.28.14 - 2026-08-11
+
+- Replaced the dynamic `目前處理進度（已收到 ...）`-style header with a stable localized progress header so delayed visibility cannot contradict an earlier phase byte snapshot.
+- Added phase-aware runtime telemetry for main-model `WAITING`, `THINKING`, `RESPONDING`, `TOOL`, and observational `STALLED` states.
+- Added recent upstream throughput to semantic heartbeat lines using request-local heartbeat samples; no new timer or higher SSE cadence is introduced.
+- Added low-frequency `◐ ◓ ◑ ◒` thinking pulse frames driven only by existing semantic heartbeats.
+- Added post-first-byte stall visibility without retrying, cancelling, or resubmitting accepted vLLM requests; explicit upstream busy retry remains a separate state.
+- Localized the new telemetry contract for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`, preserving `en-US` fallback for unknown locales.
+- Preserved V0.2.28.13 language-shift validation, V0.2.28.12 `LANG_PROCESSOR_*` and session banner, and V0.2.28.11 independent Base connection behavior.
+
 ## 0.2.28.13 - 2026-08-11
 
 - Added original-vs-repaired Final Language shift validation as a second layer after the V0.2.28.12 technical-prose absolute classifier.

@@ -73,13 +73,13 @@ test('V0.2.24 formats cumulative Base vLLM response bytes with binary units', ()
   assert.equal(language.formatReceivedBytes(-1), '0 B');
 });
 
-test('V0.2.24 progress headers and heartbeats include cumulative received bytes in every locale', () => {
+test('V0.2.28.14 progress headers remain stable labels even when live bytes are available', () => {
   const expectedHeaders = {
-    'zh-TW': '目前處理進度（已收到 1.22 KB）：',
-    'zh-CN': '当前处理进度（已收到 1.22 KB）：',
-    'en-US': 'Current progress (received 1.22 KB):',
-    'ja-JP': '現在の処理状況（受信 1.22 KB）：',
-    'ko-KP': '현재 처리 상태 (수신 1.22 KB):',
+    'zh-TW': '目前處理進度：',
+    'zh-CN': '当前处理进度：',
+    'en-US': 'Current progress:',
+    'ja-JP': '現在の処理状況：',
+    'ko-KP': '현재 처리 상태:',
   };
   const expectedWaiting = {
     'zh-TW': '主模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…',
@@ -150,10 +150,10 @@ test('V0.2.26.4 tool_result history is not modified by language policy', () => {
 });
 
 
-test('V0.2.28.2 exposes distinct external-to-Base language repair fallback progress', () => {
+test('V0.2.28.14 keeps external-to-Base language repair fallback distinct with processor telemetry glyph', () => {
   assert.equal(
     language.statusText('zh-TW', 'finalLanguageRepairFallbackBase'),
-    '外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
+    '◇ 外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
   );
 });
 
@@ -172,32 +172,82 @@ test('V0.2.28.5 controlled continuation progress reports produced and preserved 
   );
 });
 
-test('V0.2.28.7 renders compact single-line managed model phase progress', () => {
-  assert.equal(
-    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 60, receivedBytes: 30536, modelPhase: 'thinking' }),
-    '主模型處理中 60 秒（思考，29.82 KB）…',
-  );
-  assert.equal(
-    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 90, receivedBytes: 44636, modelPhase: 'response' }),
-    '主模型處理中 90 秒（回應，43.59 KB）…',
-  );
-  assert.equal(
-    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 120, receivedBytes: 59013, modelPhase: 'tool' }),
-    '主模型處理中 120 秒（工具，57.63 KB）…',
-  );
-  assert.equal(
-    language.statusText('zh-TW', 'modelHeartbeat', { seconds: 29, receivedBytes: 0, modelPhase: 'waiting' }),
-    '主模型處理中 29 秒（等待，0 B）…',
-  );
-  for (const phase of ['waiting', 'thinking', 'response', 'tool']) {
-    assert.doesNotMatch(language.statusText('zh-TW', 'modelHeartbeat', {
-      seconds: 30, receivedBytes: 1024, modelPhase: phase,
-    }), /\r|\n/);
+test('V0.2.28.14 renders compact main-model telemetry with localized phase, rate and stall state', () => {
+  const cases = {
+    'zh-TW': {
+      waiting: '◌ 主模型等待輸出 · 29s · 0 B',
+      thinking: '◐ 主模型思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 主模型回應中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 主模型建立工具動作 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 主模型資料暫停 · 30s 無新資料 · 總計 57.63 KB',
+    },
+    'zh-CN': {
+      waiting: '◌ 主模型等待输出 · 29s · 0 B',
+      thinking: '◐ 主模型思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 主模型响应中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 主模型建立工具动作 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 主模型数据暂停 · 30s 无新数据 · 总计 57.63 KB',
+    },
+    'en-US': {
+      waiting: '◌ Main model waiting · 29s · 0 B',
+      thinking: '◐ Main model thinking · 60s · 29.82 KB · 512 B/s',
+      response: '◆ Main model responding · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ Main model building tool action · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ Main model stalled · no upstream data for 30s · total 57.63 KB',
+    },
+    'ja-JP': {
+      waiting: '◌ メインモデル待機中 · 29s · 0 B',
+      thinking: '◐ メインモデル思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ メインモデル応答中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ メインモデルがツール操作を生成中 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ メインモデルのデータ受信が停止 · 30s 新規データなし · 合計 57.63 KB',
+    },
+    'ko-KP': {
+      waiting: '◌ 주 모델 출력 대기 · 29s · 0 B',
+      thinking: '◐ 주 모델 사고 중 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 주 모델 응답 중 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 주 모델 도구 동작 생성 중 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 주 모델 데이터 정체 · 30s 동안 새 데이터 없음 · 총 57.63 KB',
+    },
+  };
+  for (const [locale, expected] of Object.entries(cases)) {
+    assert.equal(language.statusText(locale, 'modelHeartbeat', {
+      seconds: 29, receivedBytes: 0, modelPhase: 'waiting', pulseIndex: 0,
+    }), expected.waiting);
+    assert.equal(language.statusText(locale, 'modelHeartbeat', {
+      seconds: 60, receivedBytes: 30536, modelPhase: 'thinking', recentBytesPerSecond: 512, pulseIndex: 0,
+    }), expected.thinking);
+    assert.equal(language.statusText(locale, 'modelHeartbeat', {
+      seconds: 90, receivedBytes: 44636, modelPhase: 'response', recentBytesPerSecond: 1280, pulseIndex: 1,
+    }), expected.response);
+    assert.equal(language.statusText(locale, 'modelHeartbeat', {
+      seconds: 120, receivedBytes: 59013, modelPhase: 'tool', recentBytesPerSecond: 256, pulseIndex: 2,
+    }), expected.tool);
+    assert.equal(language.statusText(locale, 'modelHeartbeat', {
+      seconds: 150, receivedBytes: 59013, modelPhase: 'response', stalled: true, idleSeconds: 30, pulseIndex: 3,
+    }), expected.stalled);
   }
 });
 
-test('V0.2.28.7 renders compact single-line model phase transition notices', () => {
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'thinking', receivedBytes: 494 }), '主模型開始思考（494 B）…');
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '主模型開始回應（2 KB）…');
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'tool', receivedBytes: 4096 }), '主模型建立工具動作（4 KB）…');
+test('V0.2.28.14 thinking pulse rotates only the glyph and phase telemetry stays single-line', () => {
+  const frames = [0, 1, 2, 3].map((pulseIndex) => language.statusText('zh-TW', 'modelHeartbeat', {
+    seconds: 60, receivedBytes: 4096, modelPhase: 'thinking', recentBytesPerSecond: 100, pulseIndex,
+  }));
+  assert.deepEqual(frames.map((line) => [...line][0]), ['◐', '◓', '◑', '◒']);
+  for (const line of frames) assert.doesNotMatch(line, /\r|\n/);
+});
+
+test('V0.2.28.14 renders compact localized model phase transition notices', () => {
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'thinking', receivedBytes: 494 }), '◐ 主模型開始思考 · 494 B');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ 主模型開始回應 · 2 KB');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'tool', receivedBytes: 4096 }), '◇ 主模型建立工具動作 · 4 KB');
+  assert.equal(language.statusText('en-US', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ Main model started responding · 2 KB');
+});
+
+test('V0.2.28.14 prefixes busy, language and vision processor states in every locale', () => {
+  for (const locale of language.SUPPORTED_RESPONSE_LANGUAGES) {
+    assert.match(language.statusText(locale, 'upstreamBusyRetry', { seconds: 30, attempt: 3 }), /^↻ /);
+    assert.match(language.statusText(locale, 'finalLanguageRepair'), /^◇ /);
+    assert.match(language.statusText(locale, 'imageVision'), /^◇ /);
+  }
 });

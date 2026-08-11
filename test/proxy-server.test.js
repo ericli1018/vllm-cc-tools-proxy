@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.13', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.14', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -507,7 +507,7 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   const stream = await response.text();
   assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
   assert.match(stream, /圖片 1\/1/);
-  assert.match(stream, /主模型處理中/);
+  assert.match(stream, /(?:◌ 主模型等待輸出|[◐◓◑◒] 主模型思考中|◆ 主模型回應中|⚠ 主模型資料暫停)/);
   assert.match(stream, /FINAL/);
   assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
   for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
@@ -670,8 +670,8 @@ test('V0.2.27.3 continuation visible progress resets received bytes for the new 
   assert.ok(continuationIndex >= 0, 'missing continuation progress');
   const continuationStream = stream.slice(continuationIndex);
 
-  assert.match(continuationStream, /主模型處理中 \d+ 秒（等待，0 B）…/);
-  assert.doesNotMatch(continuationStream, /主模型處理中[^\n]*（等待，[0-9.]+ KB）/);
+  assert.match(continuationStream, /◌ 主模型等待輸出 · \d+s · 0 B/);
+  assert.doesNotMatch(continuationStream, /◌ 主模型等待輸出 · \d+s · [0-9.]+ KB/);
   assert.match(stream, /RECOVERED/);
 
   const roundFirstByte = logs.filter((entry) => entry.event === 'managed_model_first_byte_received').at(-1);
@@ -1823,7 +1823,7 @@ test('V0.2.26.4 plain Messages request preserves caller system without Base lang
   assert.equal(observed.system, 'Claude Code system');
 });
 
-test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON rounds are still arriving', async (t) => {
+test('V0.2.28.14 managed heartbeat reports stable header, per-round bytes and recent upstream throughput', async (t) => {
   const exactJson = (payload, targetBytes) => {
     const withPadding = { ...payload, padding: '' };
     const base = JSON.stringify(withPadding);
@@ -1889,11 +1889,52 @@ test('V0.2.24 managed heartbeat reports cumulative Base vLLM bytes while JSON ro
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /目前處理進度（已收到 512 B）：/);
-  assert.match(stream, /主模型處理中 \d+ 秒（等待，512 B）/);
-  assert.match(stream, /主模型處理中 \d+ 秒（等待，1\.22 KB）/);
+  assert.match(stream, /目前處理進度：/);
+  assert.doesNotMatch(stream, /目前處理進度（已收到/);
+  assert.match(stream, /◌ 主模型等待輸出 · \d+s · (?:512 B|1\.22 KB)(?: · [^\n]*\/s)?/);
+  assert.match(stream, /◌ 主模型等待輸出 · \d+s · [^\n]+ · [^\n]*\/s/);
   assert.match(stream, /FINAL/);
   assert.equal(round, 2);
+});
+
+
+
+test('V0.2.28.14 reports a post-first-byte upstream stall without retrying the accepted request', async (t) => {
+  const logs = [];
+  let modelCalls = 0;
+  const vllm = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    modelCalls += 1;
+    assert.equal(payload.stream, true);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"A"}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 85));
+    res.end('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"B"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    responseLanguage: 'zh-TW',
+    progressHeartbeatMs: 25,
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'reply in English' }] }),
+  });
+  const stream = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(stream, /⚠ 主模型資料暫停 · \d+s 無新資料 · 總計 [^\\n]+/);
+  assert.match(stream, /AB/);
+  assert.equal(modelCalls, 1);
+  assert.equal(logs.filter((entry) => String(entry.event || '').startsWith('base_upstream_busy_')).length, 0);
 });
 
 test('native WebSearch child no longer depends on a dedicated Proxy admission lane', async (t) => {
@@ -1992,7 +2033,7 @@ test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero byt
   const wire = await response.text();
   assert.deepEqual(observedStreams, [true]);
   assert.match(wire, /STREAMED/);
-  assert.match(wire, /已收到 (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
+  assert.match(wire, /◆ 主模型開始回應 · (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
 });
 
 test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arrive between heartbeats', async (t) => {
@@ -2028,8 +2069,8 @@ test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arr
     }),
   });
   const wire = await response.text();
-  assert.match(wire, /主模型處理中 0 秒（等待，0 B）/);
-  assert.match(wire, /主模型開始回應（(?!0 B)[^)]+）…/);
+  assert.match(wire, /◌ 主模型等待輸出 · 0s · 0 B/);
+  assert.match(wire, /◆ 主模型開始回應 · (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
   assert.match(wire, /DONE/);
 
   const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
@@ -2730,10 +2771,10 @@ test('V0.2.28.7 managed model progress exposes compact thinking and response pha
   });
   const stream = await response.text();
 
-  assert.match(stream, /主模型開始思考（[^）]+）…/);
-  assert.match(stream, /主模型處理中 \d+ 秒（思考，[^）]+）…/);
-  assert.match(stream, /主模型開始回應（[^）]+）…/);
-  assert.match(stream, /主模型處理中 \d+ 秒（回應，[^）]+）…/);
+  assert.match(stream, /◐ 主模型開始思考 · [^\n"]+/);
+  assert.match(stream, /◆ 主模型開始回應 · [^\n"]+/);
+  assert.match(stream, /(?:[◐◓◑◒] 主模型思考中|◆ 主模型回應中|⚠ 主模型資料暫停) · [^\n"]+/);
+  assert.match(stream, /◆ 主模型回應中 · \d+s · [^\n"]+/);
   assert.match(stream, /完成/);
   assert.doesNotMatch(stream, /主模型處理中[^\n]*\n[^\n]*秒/);
 
@@ -2781,8 +2822,8 @@ test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phas
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /主模型開始思考（[^）]+）…/);
-  assert.match(stream, /主模型建立工具動作（[^）]+）…/);
+  assert.match(stream, /◐ 主模型開始思考 · [^\n"]+/);
+  assert.match(stream, /◇ 主模型建立工具動作 · [^\n"]+/);
   assert.match(stream, /主模型已產生下一步 WebSearch/);
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
@@ -3010,7 +3051,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.13/);
+  assert.match(first, /VERSION\s+0\.2\.28\.14/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);

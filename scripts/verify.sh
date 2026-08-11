@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.13'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.13'
+test "$(node -p "require('./package.json').version")" = '0.2.28.14'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.14'
 
 
 test -f src/i18n/response-language.js
@@ -434,6 +434,16 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 ! grep -Fq 'acquireLargeContext' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_timeout' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
+
+
+# V0.2.28.14 multilingual runtime progress telemetry
+test -f V0.2.28.14-更新說明.md
+grep -Fq 'V0.2.28.14 Multilingual Runtime Progress Telemetry' README.md
+grep -Fq 'formatByteRate' src/i18n/response-language.js
+grep -Fq 'recentBytesPerSecond' src/services/proxy-server.js
+grep -Fq 'stalled' src/services/proxy-server.js
+grep -Fq 'progressBlockHeader(this.locale)' src/proxy/progress.js
+! grep -Fq 'progressBlockHeader(this.locale, { receivedBytes:' src/proxy/progress.js
 
 # V0.2.28.13 original-vs-repaired language-shift validation
 test -f V0.2.28.13-更新說明.md

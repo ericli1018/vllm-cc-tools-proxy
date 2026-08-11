@@ -50,6 +50,33 @@ test('ProgressStream emits the V0.2.8 progress header without a V0.2.2 nonce sen
   assert.doesNotMatch(stream, /\u2063/);
 });
 
+
+
+test('V0.2.28.14 progress header does not sample live upstream bytes during delayed visibility', async () => {
+  const response = new FakeResponse();
+  let samples = 0;
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 20,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+    getReceivedBytes: () => {
+      samples += 1;
+      return 647;
+    },
+  });
+  await progress.open();
+  await progress.update('◐ 主模型開始思考 · 510 B', { details: { phase: 'model_stream_phase' } });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.match(stream, /目前處理進度：/);
+  assert.match(stream, /◐ 主模型開始思考 · 510 B/);
+  assert.doesNotMatch(stream, /目前處理進度（已收到/);
+  assert.equal(samples, 0);
+});
+
 test('stripProgressHistory removes a dedicated V0.2.3 progress block and keeps model blocks', () => {
   const messages = [{
     role: 'assistant',
@@ -308,7 +335,7 @@ test('V0.2.23 ProgressStream emits localized headers and strips every supported 
   }
 });
 
-test('V0.2.24 ProgressStream renders current cumulative Base vLLM bytes in the first visible header', async () => {
+test('V0.2.28.14 ProgressStream keeps the first visible header stable while byte telemetry stays in state lines', async () => {
   const response = new FakeResponse();
   let receivedBytes = 20;
   const progress = new ProgressStream(response, {
@@ -323,7 +350,8 @@ test('V0.2.24 ProgressStream renders current cumulative Base vLLM bytes in the f
   await progress.stop();
 
   const stream = response.chunks.join('');
-  assert.match(stream, /目前處理進度（已收到 20 B）：/);
+  assert.match(stream, /目前處理進度：/);
+  assert.doesNotMatch(stream, /目前處理進度（已收到/);
 });
 
 test('V0.2.24 dynamic byte progress header is recognized and stripped from history', () => {
@@ -454,7 +482,7 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
   await progress.open();
   await progress.showStartupBanner([
     '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
-    '│  VERSION   0.2.28.13          UPTIME  2h18m  │',
+    '│  VERSION   0.2.28.14          UPTIME  2h18m  │',
     '│  SESSIONS  3        ACTIVE  2        WAIT  0  │',
     '│  COMPACT ● ON       LANG ● ON       VISION ● │',
     '╰───────────────────────────────────────────────╯',
@@ -467,7 +495,7 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
 
   const messages = [{ role: 'assistant', content: [{ type: 'text', text: [
     '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
-    '│  VERSION   0.2.28.13          UPTIME  2h18m  │',
+    '│  VERSION   0.2.28.14          UPTIME  2h18m  │',
     '╰───────────────────────────────────────────────╯',
   ].join('\n') }, { type: 'text', text: '真正答案' }] }];
   assert.equal(hasProgressHistory(messages), true);

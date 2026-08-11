@@ -259,7 +259,7 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale, { receivedBytes: this.getReceivedBytes ? this.getReceivedBytes() : undefined })}\n${entry.message}` },
+          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${entry.message}` },
         }), metadata);
       } else {
         await this.#write(event('content_block_delta', {
