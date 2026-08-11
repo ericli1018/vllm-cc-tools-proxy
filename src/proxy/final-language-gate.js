@@ -1,7 +1,7 @@
 const SIMPLIFIED_MARKERS = new Set([...('这们为说国会个门体发现经应该问题处理进行实际结果数据还没从对开关请让显认证转换输设备统线网页读写软硬码误简单双过与后里并务项达态类时种点标记历产测试').replace(/\s/g, '')]);
 const TRADITIONAL_MARKERS = new Set([...('這們為說國會個門體發現經應該問題處理進行實際結果數據還沒從對開關請讓顯認證轉換輸設備統線網頁讀寫軟硬碼誤簡單雙過與後裡並務項達態類時種點標記歷產測試').replace(/\s/g, '')]);
 
-function proseOnly(value) {
+function markupStripped(value) {
   return String(value ?? '')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/`[^`\n]*`/g, ' ')
@@ -13,23 +13,59 @@ function proseOnly(value) {
     .trim();
 }
 
+function stripTechnicalTokens(value) {
+  let technicalTokenCount = 0;
+  let technicalLatinChars = 0;
+  let prose = String(value ?? '');
+  const patterns = [
+    /--[A-Za-z0-9][A-Za-z0-9._-]*/g,
+    /\b[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)+\b/g,
+    /\b(?=[A-Za-z0-9._:/-]*[A-Za-z])(?=[A-Za-z0-9._:/-]*[_/:.-])[A-Za-z0-9][A-Za-z0-9._:/-]*\b/g,
+    /\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b/g,
+    /\b(?:[a-z]+[A-Z][A-Za-z0-9]*|[A-Z][a-z]+(?:[A-Z][A-Za-z0-9]*)+)\b/g,
+    /\b[A-Za-z_$][A-Za-z0-9_$]*\s*(?=\()/g,
+  ];
+  for (const pattern of patterns) {
+    prose = prose.replace(pattern, (match) => {
+      technicalTokenCount += 1;
+      technicalLatinChars += [...match].filter((char) => /\p{Script=Latin}/u.test(char)).length;
+      return ' ';
+    });
+  }
+  return {
+    prose: prose.replace(/\s+/g, ' ').trim(),
+    technicalTokenCount,
+    technicalLatinChars,
+  };
+}
+
 function counts(value) {
-  const prose = proseOnly(value);
+  const rawProse = markupStripped(value);
+  const technical = stripTechnicalTokens(rawProse);
+  const prose = technical.prose;
   const chars = [...prose];
+  const rawChars = [...rawProse];
   const han = chars.filter((char) => /\p{Script=Han}/u.test(char));
   const kana = chars.filter((char) => /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(char));
   const hangul = chars.filter((char) => /\p{Script=Hangul}/u.test(char));
   const latin = chars.filter((char) => /\p{Script=Latin}/u.test(char));
+  const rawLatin = rawChars.filter((char) => /\p{Script=Latin}/u.test(char));
   const latinWords = prose.match(/\b[A-Za-z]{2,}\b/g) || [];
   const simplified = han.filter((char) => SIMPLIFIED_MARKERS.has(char)).length;
   const traditional = han.filter((char) => TRADITIONAL_MARKERS.has(char)).length;
   return {
     prose,
+    rawProse,
     han: han.length,
     kana: kana.length,
     hangul: hangul.length,
     latin: latin.length,
     latinWords: latinWords.length,
+    naturalLatinChars: latin.length,
+    naturalLatinWords: latinWords.length,
+    rawLatinChars: rawLatin.length,
+    technicalTokenCount: technical.technicalTokenCount,
+    technicalLatinChars: technical.technicalLatinChars,
     simplified,
     traditional,
   };
@@ -117,6 +153,16 @@ function errorCode(error) {
   return String(error?.code || error?.cause?.code || error?.name || 'repair_error').slice(0, 120);
 }
 
+function classificationTelemetry(classification) {
+  return {
+    han_chars: classification?.han || 0,
+    natural_latin_chars: classification?.naturalLatinChars || classification?.latin || 0,
+    natural_latin_words: classification?.naturalLatinWords || classification?.latinWords || 0,
+    technical_token_count: classification?.technicalTokenCount || 0,
+    technical_latin_chars: classification?.technicalLatinChars || 0,
+  };
+}
+
 export async function applyFinalLanguageGate(response, {
   locale = 'en-US',
   rewriteExternal,
@@ -136,6 +182,7 @@ export async function applyFinalLanguageGate(response, {
     target: locale,
     detected: classification.detected,
     decision: classification.decision,
+    ...classificationTelemetry(classification),
   });
   if (classification.decision !== 'repair') {
     return { response, action: classification.decision === 'compliant' ? 'pass' : 'pass_uncertain', classification };
@@ -161,6 +208,7 @@ export async function applyFinalLanguageGate(response, {
       entries.forEach(({ index }, segmentIndex) => { clone.content[index].text = rewritten[segmentIndex]; });
       await onEvent('final_language_repair_completed', {
         backend, target: locale, segment_count: segments.length, elapsed_ms: Date.now() - startedAt,
+        ...classificationTelemetry(repairedClassification),
       });
       return { response: clone, action: 'rewritten', backend, classification };
     } catch (error) {
@@ -171,6 +219,7 @@ export async function applyFinalLanguageGate(response, {
         ...(error?.languageClassification ? {
           detected: error.languageClassification.detected,
           decision: error.languageClassification.decision,
+          ...classificationTelemetry(error.languageClassification),
         } : {}),
         fallback: backend === 'external' && typeof rewriteBase === 'function' ? 'base' : 'original',
         elapsed_ms: Date.now() - startedAt,

@@ -163,3 +163,18 @@ test('V0.2.28.1 rejects non-compliant Base repair and preserves the original res
     && entry.backend === 'base'
     && entry.code === 'language_not_compliant'));
 });
+
+test('V0.2.28.12 zh-TW classifier ignores dense technical identifiers when natural-language prose is Traditional Chinese', () => {
+  const text = [
+    '已完成修正，以下項目現在會正確處理並保持既有行為。',
+    'managed_model_round_completed final_language_processor_request CONTEXT_COMPACT_PROVIDER MODEL_RESPONSE_LANGUAGE',
+    'ProgressStream classifyFinalLanguage WebFetchProcessor contextCompactEndpoint VLLM_BASE_URL LANG_PROCESSOR_MODEL',
+    '如果 upstream_busy_retry 發生，Proxy 仍會維持目前連線並顯示等待狀態。',
+  ].join('\n');
+  const result = classifyFinalLanguage(text, 'zh-TW');
+  assert.equal(result.decision, 'compliant');
+  assert.equal(result.detected, 'zh');
+  assert.ok(result.technicalTokenCount >= 8);
+  assert.ok(result.technicalLatinChars > 100);
+  assert.ok(result.naturalLatinWords < result.technicalTokenCount);
+});

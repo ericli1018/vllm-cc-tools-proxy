@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.11', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.12', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -2205,12 +2205,13 @@ test('V0.2.28.6 final language gate uses direct external translation for a manag
     const payload = JSON.parse((await read(req)).toString());
     processorBodies.push(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ choices:[{message:{role:'assistant',content:'最終回答已準備完成。'}}] }));
+    res.end(JSON.stringify({ message:{role:'assistant',content:'最終回答已準備完成。'} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
     responseLanguage: 'zh-TW',
-    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    webFetchProcessor: { enabled:true, provider:'vllm', url:'http://unused-web:9000/v1/chat/completions', model:'web-model', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    langProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/api/chat`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000 },
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => base.server.close()); t.after(() => processor.server.close()); t.after(() => proxy.close());
@@ -2224,6 +2225,8 @@ test('V0.2.28.6 final language gate uses direct external translation for a manag
   assert.equal(body.content[0].text, '最終回答已準備完成。');
   assert.equal(processorBodies.length, 1);
   assert.equal(baseBodies.length, 1);
+  assert.equal(processorBodies[0].think, false);
+  assert.equal(processorBodies[0].reasoning_effort, undefined);
   assert.doesNotMatch(processorBodies[0].messages[1].content, /VCC_LANG_SEGMENT/);
   assert.match(processorBodies[0].messages[1].content, /The final answer is ready for the user\./);
   assert.doesNotMatch(JSON.stringify(baseBodies[0]), /若使用者未明確要求其他語言|在 think 思考區塊之外/);
@@ -2279,7 +2282,8 @@ test('V0.2.26.4 compliant Traditional Chinese final answer bypasses both repair 
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
     responseLanguage: 'zh-TW',
-    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    webFetchProcessor: { enabled:true, provider:'vllm', url:'http://unused-web:9000/v1/chat/completions', model:'web-model', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    langProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/api/chat`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000 },
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => base.server.close()); t.after(() => processor.server.close()); t.after(() => proxy.close());
@@ -2351,7 +2355,8 @@ test('V0.2.26.5 native web search lane bypasses Final Language Gate even when it
     searxngUrl: searx.url,
     usagePreflightEnabled: true,
     responseLanguage: 'zh-TW',
-    webFetchProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/v1/chat/completions`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    webFetchProcessor: { enabled:true, provider:'vllm', url:'http://unused-web:9000/v1/chat/completions', model:'web-model', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    langProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/api/chat`, model:'qwen3.5:9b', apiKey:'', think:false, timeoutMs:5000 },
   }));
   const proxyUrl = await listen(proxy);
   t.after(() => searx.server.close());
@@ -2955,4 +2960,64 @@ test('V0.2.28.10 external compact failure falls back to original Base compact ro
   assert.equal('tools' in baseObserved, false);
   assert.equal('tool_choice' in baseObserved, false);
   assert.ok(logs.some((entry) => entry.event === 'context_compact_backend_fallback' && entry.reason === 'http_503'));
+});
+
+test('V0.2.28.12 shows one runtime startup banner per Claude Code session without sending it upstream', async (t) => {
+  const upstreamBodies = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"完成。"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    contextCompact: { enabled: true, provider: 'ollama', url: 'http://compact:11434', model: 'qwen', apiKey: '', think: false },
+    langProcessor: { enabled: true, provider: 'ollama', url: 'http://lang:11434/api/chat', model: 'glm', apiKey: '', think: false, timeoutMs: 300000 },
+    vllmVisionUrl: 'http://vision:8000',
+    vllmVisionModel: 'vision-model',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const send = () => fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'banner-session' },
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hi' }] }),
+  }).then((response) => response.text());
+
+  const first = await send();
+  const second = await send();
+  assert.match(first, /CC TOOL PROXY/);
+  assert.match(first, /VERSION\s+0\.2\.28\.12/);
+  assert.match(first, /SESSIONS\s+1/);
+  assert.match(first, /ACTIVE\s+1/);
+  assert.match(first, /WAIT\s+0/);
+  assert.match(first, /COMPACT\s+● ON/);
+  assert.match(first, /LANG\s+● ON/);
+  assert.match(first, /VISION\s+● ON/);
+  assert.doesNotMatch(second, /CC TOOL PROXY/);
+  assert.equal(upstreamBodies.length, 2);
+  assert.doesNotMatch(JSON.stringify(upstreamBodies), /CC TOOL PROXY/);
 });

@@ -70,6 +70,28 @@ function normalizedUrl(value, fallback, name, { required = false } = {}) {
   return candidate.replace(/\/$/, '');
 }
 
+
+function normalizedProviderChatUrl(value, name, provider) {
+  const candidate = normalizedUrl(value, '', name);
+  if (!candidate) return '';
+  const url = new URL(candidate);
+  const clean = url.pathname.replace(/\/+$/, '');
+  if (provider === 'ollama') {
+    if (clean.endsWith('/api/chat')) url.pathname = clean;
+    else if (clean.endsWith('/api')) url.pathname = `${clean}/chat`;
+    else if (!clean) url.pathname = '/api/chat';
+    else url.pathname = `${clean}/api/chat`.replace(/\/{2,}/g, '/');
+  } else {
+    if (clean.endsWith('/v1/chat/completions')) url.pathname = clean;
+    else if (clean.endsWith('/v1')) url.pathname = `${clean}/chat/completions`;
+    else if (!clean) url.pathname = '/v1/chat/completions';
+    else url.pathname = `${clean}/v1/chat/completions`.replace(/\/{2,}/g, '/');
+  }
+  url.search = '';
+  url.hash = '';
+  return url.toString().replace(/\/$/, '');
+}
+
 function normalizedChatCompletionsUrl(value, fallback, name) {
   const candidate = normalizedUrl(value, fallback, name);
   if (!candidate) return '';
@@ -115,6 +137,26 @@ export function loadConfig(env = process.env) {
     concurrency: intValue(env.WEB_FETCH_PROCESSOR_CONCURRENCY, 3, 'WEB_FETCH_PROCESSOR_CONCURRENCY', { min: 1, max: 3 }),
     timeoutMs: intValue(env.WEB_FETCH_PROCESSOR_TIMEOUT_MS, 300000, 'WEB_FETCH_PROCESSOR_TIMEOUT_MS', { min: 1000, max: 3600000 }),
   });
+
+  const langProcessorEnabled = booleanValue(env.LANG_PROCESSOR_ENABLED, false, 'LANG_PROCESSOR_ENABLED');
+  const langProcessorProvider = enumValue(env.LANG_PROCESSOR_PROVIDER, 'vllm', 'LANG_PROCESSOR_PROVIDER', ['vllm', 'ollama']);
+  const langProcessorUrl = normalizedProviderChatUrl(env.LANG_PROCESSOR_URL, 'LANG_PROCESSOR_URL', langProcessorProvider);
+  const langProcessorModel = env.LANG_PROCESSOR_MODEL || '';
+  const langProcessor = Object.freeze({
+    enabled: langProcessorEnabled,
+    provider: langProcessorProvider,
+    url: langProcessorUrl,
+    model: langProcessorModel,
+    apiKey: env.LANG_PROCESSOR_API_KEY || '',
+    think: booleanValue(env.LANG_PROCESSOR_THINK, false, 'LANG_PROCESSOR_THINK'),
+    timeoutMs: 300000,
+  });
+  if ((langProcessorEnabled || langProcessorUrl) && !langProcessorModel) {
+    throw new Error('LANG_PROCESSOR_MODEL is required when LANG_PROCESSOR_ENABLED=true or LANG_PROCESSOR_URL is set');
+  }
+  if ((langProcessorEnabled || langProcessorModel) && !langProcessorUrl) {
+    throw new Error('LANG_PROCESSOR_URL is required when LANG_PROCESSOR_ENABLED=true or LANG_PROCESSOR_MODEL is set');
+  }
 
   const contextCompactUrl = normalizedUrl(env.CONTEXT_COMPACT_URL, '', 'CONTEXT_COMPACT_URL');
   const contextCompactModel = env.CONTEXT_COMPACT_MODEL || '';
@@ -194,6 +236,7 @@ export function loadConfig(env = process.env) {
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),
     webFetchApiKey: env.WEB_FETCH_API_KEY || '',
     webFetchProcessor,
+    langProcessor,
     contextCompact,
     webToolDiagnostic,
     logLevel: env.LOG_LEVEL || 'info',

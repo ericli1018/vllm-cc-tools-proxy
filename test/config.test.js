@@ -356,3 +356,48 @@ test('V0.2.28.10 Context Compact Model ENV supports independent vLLM and Ollama 
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_PROVIDER: 'bad' }), /CONTEXT_COMPACT_PROVIDER/);
   assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', CONTEXT_COMPACT_THINK: 'yes' }), /CONTEXT_COMPACT_THINK/);
 });
+
+test('V0.2.28.12 Language Processor is independent from WebFetch Processor and uses provider-native endpoint normalization', () => {
+  const ollama = loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    WEB_FETCH_PROCESSOR_URL: 'http://web:9000',
+    WEB_FETCH_PROCESSOR_MODEL: 'web-model',
+    LANG_PROCESSOR_ENABLED: 'true',
+    LANG_PROCESSOR_PROVIDER: 'ollama',
+    LANG_PROCESSOR_URL: 'http://192.168.10.169:11434',
+    LANG_PROCESSOR_MODEL: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL',
+    LANG_PROCESSOR_API_KEY: 'ollama',
+    LANG_PROCESSOR_THINK: 'false',
+  });
+  assert.deepEqual(ollama.langProcessor, {
+    enabled: true,
+    provider: 'ollama',
+    url: 'http://192.168.10.169:11434/api/chat',
+    model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL',
+    apiKey: 'ollama',
+    think: false,
+    timeoutMs: 300000,
+  });
+  assert.equal(ollama.webFetchProcessor.model, 'web-model');
+
+  const vllm = loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    LANG_PROCESSOR_ENABLED: 'true',
+    LANG_PROCESSOR_PROVIDER: 'vllm',
+    LANG_PROCESSOR_URL: 'http://lang:8100/v1',
+    LANG_PROCESSOR_MODEL: 'lang-model',
+    LANG_PROCESSOR_THINK: 'true',
+  });
+  assert.equal(vllm.langProcessor.url, 'http://lang:8100/v1/chat/completions');
+  assert.equal(vllm.langProcessor.think, true);
+
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://base:8000', LANG_PROCESSOR_ENABLED: 'true', LANG_PROCESSOR_URL: 'http://lang:8100',
+  }), /LANG_PROCESSOR_MODEL/);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://base:8000', LANG_PROCESSOR_ENABLED: 'true', LANG_PROCESSOR_MODEL: 'm',
+  }), /LANG_PROCESSOR_URL/);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://base:8000', LANG_PROCESSOR_THINK: 'yes',
+  }), /LANG_PROCESSOR_THINK/);
+});

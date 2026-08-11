@@ -23,7 +23,7 @@ async function read(req) {
 function processor(url) {
   return {
     enabled: true,
-    provider: 'ollama',
+    provider: 'vllm',
     url,
     model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL',
     apiKey: 'x',
@@ -53,8 +53,8 @@ test('V0.2.28.6 external language processor translates one segment as plain text
   assert.deepEqual(result, ['經典 Pac-Man 遊戲已完成。']);
   assert.equal(observed.model, 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL');
   assert.equal(observed.stream, false);
-  assert.equal(observed.reasoning_effort, 'none');
-  assert.equal(observed.chat_template_kwargs, undefined);
+  assert.equal(observed.reasoning_effort, undefined);
+  assert.equal(observed.chat_template_kwargs.enable_thinking, false);
   assert.equal(observed.tools, undefined);
   assert.equal(observed.messages.length, 2);
   assert.doesNotMatch(observed.messages[1].content, /VCC_LANG_SEGMENT/);
@@ -145,4 +145,57 @@ test('V0.2.28.6 Base repair accepts direct visible text and rejects tool calls o
   }), /tool call/i);
 
   assert.throws(() => extractLanguageRepairSegmentFromAnthropic({ content: [] }), /no visible text/i);
+});
+
+test('V0.2.28.12 Ollama Language Processor uses native /api/chat and boolean think', async (t) => {
+  let observedPath = '';
+  let observed = null;
+  const backend = await listen(async (req, res) => {
+    observedPath = req.url;
+    observed = JSON.parse(await read(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: { role: 'assistant', content: '修正已完成。', thinking: 'ignored' }, prompt_eval_count: 42, eval_count: 8 }));
+  });
+  const base = new URL(backend.url).origin;
+  t.after(() => backend.server.close());
+
+  const result = await rewriteFinalSegmentsWithExternalProcessor(['The fix is complete.'], {
+    locale: 'zh-TW',
+    processor: {
+      enabled: true, provider: 'ollama', url: `${base}/api/chat`, model: 'glm', apiKey: 'ollama', think: false, timeoutMs: 5000,
+    },
+  });
+
+  assert.deepEqual(result, ['修正已完成。']);
+  assert.equal(observedPath, '/api/chat');
+  assert.equal(observed.model, 'glm');
+  assert.equal(observed.stream, false);
+  assert.equal(observed.think, false);
+  assert.equal(observed.reasoning_effort, undefined);
+  assert.equal(observed.chat_template_kwargs, undefined);
+  assert.equal(observed.options.temperature, 0.1);
+});
+
+test('V0.2.28.12 vLLM Language Processor keeps OpenAI chat wire format and enable_thinking', async (t) => {
+  let observedPath = '';
+  let observed = null;
+  const backend = await listen(async (req, res) => {
+    observedPath = req.url;
+    observed = JSON.parse(await read(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: '修正已完成。' } }] }));
+  });
+  t.after(() => backend.server.close());
+
+  const result = await rewriteFinalSegmentsWithExternalProcessor(['The fix is complete.'], {
+    locale: 'zh-TW',
+    processor: {
+      enabled: true, provider: 'vllm', url: backend.url, model: 'glm', apiKey: '', think: true, timeoutMs: 5000,
+    },
+  });
+  assert.deepEqual(result, ['修正已完成。']);
+  assert.equal(observedPath, '/v1/chat/completions');
+  assert.equal(observed.chat_template_kwargs.enable_thinking, true);
+  assert.equal(observed.reasoning_effort, undefined);
+  assert.equal(observed.think, undefined);
 });

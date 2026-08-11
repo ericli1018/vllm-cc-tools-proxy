@@ -273,3 +273,16 @@ test('V0.2.28.10 deployment documents and exposes external Context Compact model
   assert.match(readme, /\/api\/chat/);
   assert.match(readme, /chat_template_kwargs\.enable_thinking/);
 });
+
+test('V0.2.28.12 deployment exposes independent Language Processor settings and session banner documentation', () => {
+  for (const name of ['LANG_PROCESSOR_ENABLED','LANG_PROCESSOR_PROVIDER','LANG_PROCESSOR_URL','LANG_PROCESSOR_MODEL','LANG_PROCESSOR_API_KEY','LANG_PROCESSOR_THINK']) {
+    assert.match(envExample, new RegExp(`^${name}=`, 'm'));
+    assert.match(compose, new RegExp(`${name}:\\s*\\$\\{${name}`));
+    assert.match(readme, new RegExp(name));
+  }
+  assert.match(readme, /V0\.2\.28\.12.*Language Processor/i);
+  assert.match(readme, /Technical-Prose Language Classification/i);
+  assert.match(readme, /CC TOOL PROXY/);
+  assert.match(readme, /SESSIONS.*ACTIVE.*WAIT/is);
+  assert.match(readme, /session.*once/i);
+});

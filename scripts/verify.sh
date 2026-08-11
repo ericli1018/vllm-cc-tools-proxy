@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.11'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.11'
+test "$(node -p "require('./package.json').version")" = '0.2.28.12'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.12'
 
 
 test -f src/i18n/response-language.js
@@ -434,5 +434,19 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 ! grep -Fq 'acquireLargeContext' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_timeout' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
+
+# V0.2.28.12 technical-prose language classification + dedicated Language Processor + session banner
+test -f src/proxy/runtime-telemetry.js
+test -f V0.2.28.12-更新說明.md
+grep -Fq 'LANG_PROCESSOR_ENABLED=false' .env.example
+grep -Fq 'LANG_PROCESSOR_PROVIDER: ${LANG_PROCESSOR_PROVIDER:-vllm}' compose.yaml
+grep -Fq 'LANG_PROCESSOR_URL: ${LANG_PROCESSOR_URL:-}' compose.yaml
+grep -Fq 'LANG_PROCESSOR_MODEL: ${LANG_PROCESSOR_MODEL:-}' compose.yaml
+grep -Fq 'LANG_PROCESSOR_API_KEY: ${LANG_PROCESSOR_API_KEY:-}' compose.yaml
+grep -Fq 'LANG_PROCESSOR_THINK: ${LANG_PROCESSOR_THINK:-false}' compose.yaml
+grep -Fq 'V0.2.28.12 Technical-Prose Language Classification' README.md
+grep -Fq 'CC TOOL PROXY' src/proxy/runtime-telemetry.js
+grep -Fq 'showStartupBanner' src/proxy/progress.js
+grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
 
 echo 'Verification complete.'

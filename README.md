@@ -1,25 +1,40 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.11 removes Proxy-wide Base/Managed admission scheduling so every Claude Code connection is independent, and adds request-local retry when the Base vLLM explicitly rejects a generation as temporarily busy. V0.2.28.10 Context Compact routing and all earlier token-accounting/media/tool workflows remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.12 adds Technical-Prose Language Classification, an independent Final Language Processor, and a one-time per-session runtime banner while preserving V0.2.28.11 independent Base connections and explicit-busy retry.
 
+## V0.2.28.12 Technical-Prose Language Classification, Language Processor, and Session Banner
+
+V0.2.28.12 fixes Final Language Gate false positives on technical Traditional Chinese. The classifier now treats code, URLs, paths, CLI flags, model tags, environment names, snake_case, dotted identifiers, function-like names, and camel/Pascal identifiers as technical tokens instead of counting their Latin letters as ordinary English prose. Language diagnostics include natural-language Han/Latin counts and technical-token counts so `language_not_compliant` can be distinguished from a translation that was actually still English.
+
+Final Language Repair now has an independent configuration namespace and no longer borrows `WEB_FETCH_PROCESSOR_*` settings:
+
+```env
+MODEL_RESPONSE_LANGUAGE=zh-TW
+LANG_PROCESSOR_ENABLED=true
+LANG_PROCESSOR_PROVIDER=ollama
+LANG_PROCESSOR_URL=http://192.168.10.169:11434
+LANG_PROCESSOR_MODEL=hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL
+LANG_PROCESSOR_API_KEY=ollama
+LANG_PROCESSOR_THINK=false
+```
+
+`LANG_PROCESSOR_ENABLED=true` enables the dedicated external repair backend. If it is disabled or its repair fails, the existing isolated Base repair remains the fallback before the original successful response is used. Ollama uses its native `/api/chat` contract with `think=true|false`; vLLM uses `/v1/chat/completions` with `chat_template_kwargs.enable_thinking=true|false`. `WEB_FETCH_PROCESSOR_*`, `CONTEXT_COMPACT_*`, and `VLLM_VISION_*` remain independent resource/configuration domains.
+
+The first real streaming `/v1/messages` request for each Claude Code session also receives a Proxy-owned transient runtime banner such as:
+
+```text
+╭─◆ CC TOOL PROXY ─────────────────────────────╮
+│  VERSION   0.2.28.12          UPTIME  2h18m  │
+│  SESSIONS  3        ACTIVE  2        WAIT  0  │
+│  COMPACT ● ON       LANG ● ON       VISION ● │
+╰───────────────────────────────────────────────╯
+```
+
+`SESSIONS` is the number of distinct in-flight Claude Code sessions known to the Proxy, `ACTIVE` is the number of active `/v1/messages` requests, and `WAIT` is the number of requests currently in the V0.2.28.11 explicit-upstream-busy retry wait. These counters are telemetry only and do not reintroduce Proxy scheduling. The banner is shown once per session, is not sent upstream, is not token-counted or language-repaired, and is recognized by progress-history stripping so it does not become model conversation evidence.
 
 ## V0.2.28.11 independent Base connections + explicit-busy retry
 
-V0.2.28.11 removes the Proxy-wide `ManagedQueue`, native-WebSearch fast-lane admission queue, 100K large-context one-slot gate, and ingress admission semaphore from Base/Managed request routing. Every Claude Code connection is submitted independently to the Base vLLM; the Proxy does not cap, serialize, or queue main-model requests. vLLM remains the scheduling authority. In particular, `--max-num-seqs` controls how many sequences vLLM processes per scheduler iteration, while accepted excess work remains owned by vLLM rather than being resubmitted by the Proxy.
-
-If the Base vLLM **rejects before generation starts** with HTTP `429`, or with an explicit transient-capacity `503` (for example `Retry-After`, busy/overload/capacity text), only that HTTP request enters a request-local wait loop. The Claude Code connection remains open and the same generation request is retried every **15 seconds** until vLLM accepts it or the client disconnects. Ordinary `500`, transport errors, non-capacity `503`, and any failure after a generation has been accepted are not blindly retried, preventing duplicate Agent turns or tool side effects.
-
-Streaming callers receive safe progress such as:
-
-```text
-主模型目前忙碌，正在等待可用執行資源…
-主模型仍忙碌，已等待 15 秒；正在重試第 2 次請求…
-主模型已取得執行資源，開始處理…
-```
-
-Busy-wait time is not counted against the Managed Loop first-byte deadline. After a busy retry is accepted, the first-byte deadline restarts from acceptance; real response-byte stall detection remains unchanged. Client abort cancels the retry timer immediately.
-
-Vision and WebFetch Processor remain separate auxiliary resources with their existing semaphores. Context Compact keeps its V0.2.28.10 provider-specific routing/fallback and is not folded into Base busy retry. No new ENV is added; the retry interval is deliberately fixed at 15 seconds.
+V0.2.28.11 removes the Proxy-wide Base/Managed admission queue and large-context gate. Independent Claude Code connections are sent directly to vLLM; vLLM owns normal scheduler waiting and `--max-num-seqs` admission. Only an explicit transient busy rejection before generation starts is retried by that same connection at 15-second intervals while Proxy progress keeps the client informed. Once vLLM accepts the request or emits generation data, Proxy does not resubmit it.
 
 ## V0.2.28.10 external Context Compact model
 
@@ -1438,26 +1453,36 @@ base_upstream_stream_completed
 base_upstream_request_failed
 ```
 
-After PDF/image preprocessing finishes, the final Base vLLM answer continues directly on the same independent Claude Code connection and is streamed into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted after the bounded loop completes.
+After PDF/image preprocessing finishes, the managed slot is released and the final Base vLLM answer is streamed token-by-token into the same Anthropic SSE response. Proxy-owned WebSearch/WebFetch tool rounds still require complete tool-call JSON internally; their final result is emitted after the bounded loop completes.
 
-## Concurrency and upstream busy waiting
+## Concurrency and queue
 
-Base and Managed Claude Code requests have **no Proxy-wide concurrency limit or waiting queue**. Plain requests, managed WebSearch/WebFetch rounds, native WebSearch children, and 100K+ contexts are all submitted independently to vLLM. Main-model scheduling is delegated to vLLM.
+Only managed workflows enter the proxy queue. Plain text, Claude Code native tools and arbitrary bypass endpoints are not queued by the proxy and remain subject to the base vLLM scheduler.
 
-The old settings are removed from the deployment surface:
+Default configuration:
 
-```text
-CONCURRENCY_PROFILE
-MANAGED_MAX_CONCURRENCY
-MANAGED_MAX_QUEUE
-MANAGED_QUEUE_TIMEOUT_MS
+```env
+CONCURRENCY_PROFILE=default
 ```
 
-`VISION_MAX_CONCURRENCY` remains available because Vision is a separate auxiliary backend. `WEB_FETCH_PROCESSOR_CONCURRENCY` likewise continues to protect the independent processor backend.
+Profiles:
 
-When Base vLLM explicitly rejects a generation as temporarily busy, the affected connection alone waits and retries every 15 seconds. An already accepted vLLM request is never periodically resubmitted: if it is waiting inside the vLLM scheduler, the Proxy simply keeps the original upstream request alive.
+| Profile | Managed active | Managed waiting | Queue timeout | Vision active |
+|---|---:|---:|---:|---:|
+| `small` | 1 | 4 | 120 s | 1 |
+| `default` | 2 | 12 | 120 s | 1 |
+| `large` | 4 | 32 | 180 s | 2 |
 
-Streaming progress settings remain:
+Advanced overrides are optional:
+
+```env
+MANAGED_MAX_CONCURRENCY=
+MANAGED_MAX_QUEUE=
+MANAGED_QUEUE_TIMEOUT_MS=
+VISION_MAX_CONCURRENCY=
+```
+
+Streaming progress settings:
 
 ```env
 PROGRESS_VISIBLE_AFTER_MS=1500
@@ -1466,12 +1491,21 @@ PROGRESS_HEARTBEAT_MS=30000
 SSE_DRAIN_TIMEOUT_MS=10000
 ```
 
-The health endpoint therefore reports auxiliary-resource state rather than a main-model Proxy queue:
+Queue behavior:
+
+- FIFO admission with no priority insertion.
+- Full queue returns `429 proxy_queue_full` and `Retry-After: 10`.
+- Expired wait returns `503 proxy_queue_timeout` and `Retry-After: 10`.
+- Streaming callers receive SSE pings and visible queue-position updates.
+- Client disconnect removes a waiting job or aborts active Poppler, ImageMagick, visual vLLM, WebSearch/WebFetch and base-vLLM work.
+- Media is decoded into a request-scoped private temporary directory before queueing; Base64 is not retained by queued jobs.
+
+The health endpoint exposes only aggregate counters:
 
 ```json
 {
+  "managed": { "active": 1, "limit": 2, "queued": 3, "queue_limit": 12 },
   "vision": { "active": 1, "limit": 1 },
-  "web_fetch_processor": { "active": 1, "limit": 3, "queued": 0 },
   "cache": {
     "entries": 42,
     "bytes": 183500800,

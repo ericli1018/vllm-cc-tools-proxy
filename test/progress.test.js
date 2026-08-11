@@ -447,3 +447,29 @@ test('V0.2.27.1 ProgressStream can publish exact cumulative input usage after ea
   assert.match(stream, /event: message_delta/);
   assert.match(stream, /"stop_reason":null/);
 });
+
+test('V0.2.28.12 startup banner is a removable proxy-owned progress block', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
+  await progress.open();
+  await progress.showStartupBanner([
+    '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
+    '│  VERSION   0.2.28.12          UPTIME  2h18m  │',
+    '│  SESSIONS  3        ACTIVE  2        WAIT  0  │',
+    '│  COMPACT ● ON       LANG ● ON       VISION ● │',
+    '╰───────────────────────────────────────────────╯',
+  ].join('\n'));
+  await progress.closeProgress();
+  await progress.stop();
+  const stream = response.chunks.join('');
+  assert.match(stream, /CC TOOL PROXY/);
+  assert.doesNotMatch(stream, /目前處理進度：/);
+
+  const messages = [{ role: 'assistant', content: [{ type: 'text', text: [
+    '╭─◆ CC TOOL PROXY ─────────────────────────────╮',
+    '│  VERSION   0.2.28.12          UPTIME  2h18m  │',
+    '╰───────────────────────────────────────────────╯',
+  ].join('\n') }, { type: 'text', text: '真正答案' }] }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});

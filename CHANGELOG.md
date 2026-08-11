@@ -1,13 +1,13 @@
-## 0.2.28.11 - 2026-08-11
-
-- Removed the Proxy-wide Base/Managed `ManagedQueue`, native WebSearch admission fast lane, large-context one-slot gate, and ingress admission queue; Claude Code main-model connections now execute independently and vLLM owns scheduling.
-- Removed `CONCURRENCY_PROFILE`, `MANAGED_MAX_CONCURRENCY`, `MANAGED_MAX_QUEUE`, and `MANAGED_QUEUE_TIMEOUT_MS` from the active deployment surface; Vision and WebFetch Processor keep their independent auxiliary semaphores.
-- Added request-local Base-vLLM retry for explicit pre-generation busy rejection: HTTP 429 or clearly transient capacity/overload 503 responses are retried every 15 seconds while the client connection remains open.
-- Added streaming busy-wait progress and safe `base_upstream_busy_wait`, `base_upstream_busy_retry`, and `base_upstream_busy_accepted` diagnostics.
-- Busy wait does not consume the Managed Loop first-byte deadline; once vLLM accepts the retry, the first-byte deadline restarts from the acceptance point.
-- Preserved V0.2.28.10 Context Compact routing, V0.2.28.9 compact guard, and V0.2.28.8 cache-aware token accounting unchanged.
-
 # Changelog
+
+## 0.2.28.12 - 2026-08-11
+
+- Fixed Final Language Gate false positives for Traditional Chinese technical prose by excluding technical identifiers from natural-language Latin dominance checks and adding safe classifier telemetry.
+- Added independent `LANG_PROCESSOR_ENABLED`, `LANG_PROCESSOR_PROVIDER`, `LANG_PROCESSOR_URL`, `LANG_PROCESSOR_MODEL`, `LANG_PROCESSOR_API_KEY`, and `LANG_PROCESSOR_THINK` settings; Final Language Repair no longer borrows WebFetch Processor configuration.
+- Added provider-native language repair: Ollama uses `/api/chat` plus `think`, while vLLM uses `/v1/chat/completions` plus `chat_template_kwargs.enable_thinking`.
+- Added a one-time per-Claude-Code-session startup banner with Proxy version, uptime, active session/request counts, explicit-busy wait count, and Compact/Language/Vision feature state.
+- Kept startup telemetry transient: it is never sent upstream, token-counted, language-repaired, or retained as model conversation evidence.
+- Preserved V0.2.28.11 independent Base connections and explicit-busy retry semantics without adding a Proxy-wide scheduler.
 
 ## 0.2.28.10 - 2026-08-10
 

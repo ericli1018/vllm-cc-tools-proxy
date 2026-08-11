@@ -45,6 +45,36 @@ function repairErrorCode(error) {
   return String(error?.code || error?.cause?.code || 'language_repair_error').slice(0, 120);
 }
 
+function externalRequestBody(source, locale, processor) {
+  const p = prompt(locale);
+  const maxTokens = Math.max(512, Math.min(32768, source.length * 2));
+  const messages = [
+    { role: 'system', content: p.system },
+    { role: 'user', content: directRepairInput(source, locale) },
+  ];
+  if ((processor.provider || 'vllm') === 'ollama') {
+    return {
+      model: processor.model,
+      stream: false,
+      think: Boolean(processor.think),
+      options: { temperature: 0.1, num_predict: maxTokens },
+      messages,
+    };
+  }
+  return {
+    model: processor.model,
+    stream: false,
+    temperature: 0.1,
+    max_tokens: maxTokens,
+    messages,
+    chat_template_kwargs: { enable_thinking: Boolean(processor.think), preserve_thinking: false },
+  };
+}
+
+function externalMessage(payload, provider) {
+  return provider === 'ollama' ? payload?.message : payload?.choices?.[0]?.message;
+}
+
 async function rewriteExternalSegment(segment, {
   locale,
   processor,
@@ -57,20 +87,8 @@ async function rewriteExternalSegment(segment, {
   const headers = { 'content-type': 'application/json' };
   if (processor.apiKey) headers.authorization = `Bearer ${processor.apiKey}`;
   const provider = processor.provider || 'vllm';
-  const p = prompt(locale);
   const source = String(segment ?? '');
-  const body = {
-    model: processor.model,
-    stream: false,
-    temperature: 0.1,
-    max_tokens: Math.max(512, Math.min(32768, source.length * 2)),
-    messages: [
-      { role: 'system', content: p.system },
-      { role: 'user', content: directRepairInput(source, locale) },
-    ],
-  };
-  if (provider === 'ollama') body.reasoning_effort = processor.think ? 'high' : 'none';
-  else body.chat_template_kwargs = { enable_thinking: Boolean(processor.think), preserve_thinking: false };
+  const body = externalRequestBody(source, locale, processor);
 
   const startedAt = Date.now();
   await onEvent('final_language_processor_request', {
@@ -95,9 +113,9 @@ async function rewriteExternalSegment(segment, {
     throw Object.assign(new Error('External language processor returned invalid JSON.'), { code: 'invalid_json' });
   }
   if (!response.ok) {
-    throw Object.assign(new Error(payload?.error?.message || 'External language processor rejected the request.'), { code: `http_${response.status}` });
+    throw Object.assign(new Error(payload?.error?.message || payload?.error || 'External language processor rejected the request.'), { code: `http_${response.status}` });
   }
-  const message = payload?.choices?.[0]?.message || {};
+  const message = externalMessage(payload, provider) || {};
   if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
     throw Object.assign(new Error('External language processor attempted a tool call.'), { code: 'tool_call' });
   }
@@ -145,8 +163,10 @@ export async function rewriteFinalSegmentsWithExternalProcessor(segments, {
     return rewritten;
   } catch (error) {
     if (signal?.aborted) throw error;
-    error.code = error.code || repairErrorCode(error);
-    throw error;
+    if (error?.code) throw error;
+    const wrapped = new Error(error?.message || 'Language processor failed.', { cause: error });
+    wrapped.code = repairErrorCode(error);
+    throw wrapped;
   } finally {
     release();
   }

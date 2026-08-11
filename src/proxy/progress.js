@@ -7,6 +7,7 @@ export const PROGRESS_BLOCK_HEADER = '目前處理進度：';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
   'VLLM-CC-TOOLS-PROXY 進度：',
 ]);
+const STARTUP_BANNER_PREFIX = '╭─◆ CC TOOL PROXY ';
 const ALL_PROGRESS_BLOCK_HEADERS = Object.freeze([
   ...allProgressBlockHeaders(),
   ...LEGACY_PROGRESS_BLOCK_HEADERS,
@@ -31,6 +32,7 @@ function stripLegacyText(text) {
 function isDedicatedProgressText(text) {
   if (typeof text !== 'string') return false;
   const firstLine = text.split(/\r?\n/, 1)[0];
+  if (firstLine.startsWith(STARTUP_BANNER_PREFIX)) return true;
   return ALL_PROGRESS_BLOCK_HEADERS.some((header) => {
     if (firstLine === header) return true;
     const stem = header.replace(/[：:]$/, '');
@@ -158,6 +160,30 @@ export class ProgressStream {
   #enqueue(operation) {
     this.queue = this.queue.then(operation);
     return this.queue;
+  }
+
+  async showStartupBanner(text) {
+    if (this.closed || this.progressClosed || this.visible || !text) return false;
+    this.#clearPending();
+    const changedAt = Date.now();
+    const revision = ++this.revision;
+    this.lastStateKey = this.#stateKey(text, { phase: 'startup_banner' });
+    try { await this.onStateChange({ revision, phase: 'startup_banner', changedAt, message: text }); } catch {}
+    await this.#enqueue(async () => {
+      if (this.closed || this.progressClosed || this.visible) return;
+      this.visible = true;
+      await this.#write(event('content_block_start', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }), { kind: 'progress_block_start', phase: 'startup_banner', revision, changedAt });
+      await this.#write(event('content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: String(text) },
+      }), { kind: 'startup_banner', phase: 'startup_banner', revision, changedAt });
+    });
+    return true;
   }
 
   writeRaw(chunk, metadata = {}) {

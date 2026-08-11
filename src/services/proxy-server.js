@@ -29,6 +29,7 @@ import { observeImagePayloads } from '../proxy/image-payload-observer.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
+import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
@@ -475,6 +476,7 @@ function defaultConcurrency(config) {
 
 export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
+  const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
   const cacheReady = mediaCache.initialize();
@@ -575,6 +577,7 @@ export function createProxyServer(config, dependencies = {}) {
     let completed = false;
     let preparedMedia = null;
     let mediaProgress = null;
+    let releaseRuntimeRequest = null;
     let initialStreamUsage = usageFromTokenCount({});
     let baseResponseBytes = 0;
     let lastBaseResponseChunkAt = 0;
@@ -672,10 +675,12 @@ export function createProxyServer(config, dependencies = {}) {
       });
       if (event === 'wait' || event === 'retry') {
         baseBusyState.waiting = true;
+        runtimeTelemetry.setBusy(requestId, true);
         progressTiming.mode = 'busy';
         progressTiming.startedAt = Date.now() - waitedMs;
       } else if (event === 'accepted') {
         baseBusyState.waiting = false;
+        runtimeTelemetry.setBusy(requestId, false);
         baseBusyState.acceptedAt = Date.now();
         progressTiming.mode = 'model';
         progressTiming.startedAt = baseBusyState.acceptedAt;
@@ -709,10 +714,16 @@ export function createProxyServer(config, dependencies = {}) {
     };
     const url = new URL(req.url || '/', 'http://localhost');
 
-    const externalLanguageProcessorAvailable = () => Boolean(
+    const webFetchProcessorAvailable = () => Boolean(
       config.webFetchProcessor?.enabled
       && config.webFetchProcessor?.url
       && config.webFetchProcessor?.model
+    );
+
+    const languageProcessorAvailable = () => Boolean(
+      config.langProcessor?.enabled
+      && config.langProcessor?.url
+      && config.langProcessor?.model
     );
 
     const applyFinalPresentationLanguage = async (response, sourceRequest) => {
@@ -734,12 +745,11 @@ export function createProxyServer(config, dependencies = {}) {
         }
       };
 
-      const rewriteExternal = externalLanguageProcessorAvailable()
+      const rewriteExternal = languageProcessorAvailable()
         ? (segments, locale) => rewriteFinalSegmentsWithExternalProcessor(segments, {
           locale,
-          processor: config.webFetchProcessor,
+          processor: config.langProcessor,
           signal: abortController.signal,
-          acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
           onEvent: onLanguageEvent,
         })
         : undefined;
@@ -1069,6 +1079,38 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      if (messagesPath === '/v1/messages') {
+        releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
+      }
+      const maybeShowStartupBanner = async (stream) => {
+        if (!stream || original?.stream !== true || !clientSessionId) return false;
+        if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
+        const snapshot = runtimeTelemetry.snapshot();
+        const banner = formatStartupBanner({
+          version: VERSION,
+          snapshot,
+          features: {
+            compact: Boolean(config.contextCompact?.enabled),
+            lang: languageProcessorAvailable(),
+            vision: Boolean(config.vllmVisionUrl && config.vllmVisionModel),
+          },
+        });
+        const shown = await stream.showStartupBanner(banner);
+        if (shown) {
+          log(config, 'info', 'startup_banner_shown', {
+            requestId,
+            session_id: clientSessionId,
+            sessions: snapshot.sessions,
+            active: snapshot.active,
+            waiting: snapshot.waiting,
+            compact_enabled: Boolean(config.contextCompact?.enabled),
+            lang_enabled: languageProcessorAvailable(),
+            vision_enabled: Boolean(config.vllmVisionUrl && config.vllmVisionModel),
+          });
+        }
+        return shown;
+      };
+
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
@@ -1125,6 +1167,7 @@ export function createProxyServer(config, dependencies = {}) {
             getReceivedBytes: getBaseResponseBytes,
           });
           await progress.open();
+          await maybeShowStartupBanner(progress);
           const directStartedAt = Date.now();
           modelRoundProgress.active = true;
           modelRoundProgress.round = 1;
@@ -1335,6 +1378,7 @@ export function createProxyServer(config, dependencies = {}) {
             getReceivedBytes: getBaseResponseBytes,
           });
           await progress.open();
+          await maybeShowStartupBanner(progress);
           let response = await callUpstreamManagedStream(
             request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent },
           );
@@ -1410,6 +1454,7 @@ export function createProxyServer(config, dependencies = {}) {
           },
         });
         await progress.open();
+        await maybeShowStartupBanner(progress);
         progress.startSemanticHeartbeat(() => {
           if (progressTiming.mode === 'model') {
             return statusText(config.responseLanguage, 'modelHeartbeat', {
@@ -1565,7 +1610,7 @@ export function createProxyServer(config, dependencies = {}) {
           onManagedWebToolHandoff: ({ toolUses }) => {
             clientWebToolLifecycleRegistry.recordToolUses(clientSessionId, toolUses);
           },
-          compressContinuationWindow: externalLanguageProcessorAvailable()
+          compressContinuationWindow: webFetchProcessorAvailable()
             ? (window, { signal: compressionSignal } = {}) => compressContinuationWindowWithExternalProcessor(window, {
               processor: config.webFetchProcessor,
               signal: compressionSignal || abortController.signal,
@@ -1698,6 +1743,8 @@ export function createProxyServer(config, dependencies = {}) {
       else res.destroy(error);
       completed = true;
     } finally {
+      runtimeTelemetry.setBusy(requestId, false);
+      releaseRuntimeRequest?.();
       await preparedMedia?.cleanup();
     }
   });
