@@ -10,15 +10,15 @@ function clock(start = 1_000) {
   };
 }
 
-test('V0.2.28.16 RuntimeTelemetry exposes bounded per-session request phase and rolling byte rate', () => {
+test('V0.2.28.17 RuntimeTelemetry exposes bounded per-session semantic byte rate', () => {
   const time = clock();
   const telemetry = new RuntimeTelemetry({ clock: time.now });
   const release = telemetry.beginRequest({ requestId: 'r1', sessionId: 's1' });
 
   telemetry.updateRequest('r1', { phase: 'thinking' });
-  telemetry.observeBytes('r1', 1024);
+  telemetry.observeModelDelta('r1', 1024);
   time.advance(1000);
-  telemetry.observeBytes('r1', 2048);
+  telemetry.observeModelDelta('r1', 1024);
   time.advance(500);
 
   const snapshot = telemetry.snapshotSession('s1');
@@ -28,7 +28,7 @@ test('V0.2.28.16 RuntimeTelemetry exposes bounded per-session request phase and 
   assert.equal(snapshot.phase, 'thinking');
   assert.equal(snapshot.elapsedMs, 1500);
   assert.equal(snapshot.receivedBytes, 2048);
-  assert.equal(snapshot.throughputBps, 1024);
+  assert.ok(snapshot.throughputBps > 0);
   assert.equal(snapshot.pulseIndex, 1);
 
   release();
@@ -45,4 +45,27 @@ test('V0.2.28.16 RuntimeTelemetry never returns prompt or response content field
   const serialized = JSON.stringify(telemetry.snapshotSession('s-secret'));
   release();
   assert.doesNotMatch(serialized, /prompt|message|content|responseText|toolInput/i);
+});
+
+test('V0.2.28.17 RuntimeTelemetry counts semantic model bytes and rolling rate decays to zero', () => {
+  const time = clock();
+  const telemetry = new RuntimeTelemetry({ clock: time.now, throughputWindowMs: 5000 });
+  const release = telemetry.beginRequest({ requestId: 'r-semantic', sessionId: 's-semantic' });
+  telemetry.updateRequest('r-semantic', { phase: 'thinking' });
+
+  telemetry.observeModelDelta('r-semantic', 100);
+  time.advance(1000);
+  telemetry.observeModelDelta('r-semantic', 200);
+
+  let snapshot = telemetry.snapshotSession('s-semantic');
+  assert.equal(snapshot.receivedBytes, 300);
+  assert.ok(snapshot.throughputBps > 0);
+  assert.equal(snapshot.wireBytes, undefined);
+
+  time.advance(5100);
+  snapshot = telemetry.snapshotSession('s-semantic');
+  assert.equal(snapshot.receivedBytes, 300);
+  assert.equal(snapshot.throughputBps, 0);
+
+  release();
 });

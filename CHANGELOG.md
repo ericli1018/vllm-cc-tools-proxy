@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.28.17 - 2026-08-11
+
+- Split Base-vLLM transport byte accounting from user-visible model-output telemetry.
+- Kept raw HTTP response bytes for first-byte, connection activity, timeout, and stall diagnostics only.
+- Added semantic delta accounting for `thinking_delta.thinking`, `text_delta.text`, and `input_json_delta.partial_json` using UTF-8 byte length.
+- Excluded Anthropic SSE framing, JSON envelope keys, usage metadata, signatures, pings, and block lifecycle events from displayed byte totals.
+- Changed 30-second Progress heartbeat bytes/throughput to semantic model-output data and emit one immediate telemetry update on the first semantic delta of each model round.
+- Changed native Claude Code `statusLine` throughput to a rolling 5-second semantic-output window that decays to `0 B/s` after inactivity.
+- Kept managed-round displayed byte baselines per round while raw wire counters remain cumulative for connection-health logic.
+- Preserved V0.2.28.16 append-only 30-second SSE liveness, native statusLine integration, multilingual UI, independent Base scheduling, explicit-busy retry, Language Processor, Context Compact, and Vision behavior.
+
 ## 0.2.28.16 - 2026-08-11
 
 - Added a read-only per-Claude-Code-session runtime telemetry endpoint at `GET /cc-tool-proxy/status/<session-id>`.

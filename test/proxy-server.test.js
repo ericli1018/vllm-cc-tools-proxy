@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.16', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.17', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -1823,7 +1823,7 @@ test('V0.2.26.4 plain Messages request preserves caller system without Base lang
   assert.equal(observed.system, 'Claude Code system');
 });
 
-test('V0.2.28.14 managed heartbeat reports stable header, per-round bytes and recent upstream throughput', async (t) => {
+test('V0.2.28.17 JSON compatibility fallback does not misreport wire framing as model output', async (t) => {
   const exactJson = (payload, targetBytes) => {
     const withPadding = { ...payload, padding: '' };
     const base = JSON.stringify(withPadding);
@@ -1891,8 +1891,8 @@ test('V0.2.28.14 managed heartbeat reports stable header, per-round bytes and re
   const stream = await response.text();
   assert.match(stream, /目前處理進度：/);
   assert.doesNotMatch(stream, /目前處理進度（已收到/);
-  assert.match(stream, /◌ 主模型等待輸出 · \d+s · (?:512 B|1\.22 KB)(?: · [^\n]*\/s)?/);
-  assert.match(stream, /◌ 主模型等待輸出 · \d+s · [^\n]+ · [^\n]*\/s/);
+  assert.match(stream, /◌ 主模型等待輸出 · \d+s · 0 B/);
+  assert.doesNotMatch(stream, /◌ 主模型等待輸出 · \d+s · (?:512 B|1\.22 KB)/);
   assert.match(stream, /FINAL/);
   assert.equal(round, 2);
 });
@@ -1989,7 +1989,7 @@ test('100K-plus managed model requests are submitted concurrently and vLLM owns 
   assert.equal(maxConcurrent, 2);
 });
 
-test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero bytes before completion', async (t) => {
+test('V0.2.28.17 managed Base rounds expose semantic model bytes before completion', async (t) => {
   const observedStreams = [];
   const vllm = http.createServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -2033,10 +2033,10 @@ test('V0.2.25.1 managed Base rounds request Anthropic SSE and expose nonzero byt
   const wire = await response.text();
   assert.deepEqual(observedStreams, [true]);
   assert.match(wire, /STREAMED/);
-  assert.match(wire, /◆ 主模型開始回應 · (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
+  assert.match(wire, /◆ 主模型回應中 · \d+s · 8 B(?: · [^\n]*\/s)?/);
 });
 
-test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arrive between heartbeats', async (t) => {
+test('V0.2.28.17 emits semantic-byte progress immediately on first model delta between heartbeats', async (t) => {
   const logs = [];
   const vllm = http.createServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -2070,7 +2070,7 @@ test('V0.2.25.2 emits nonzero progress immediately when first upstream bytes arr
   });
   const wire = await response.text();
   assert.match(wire, /◌ 主模型等待輸出 · 0s · 0 B/);
-  assert.match(wire, /◆ 主模型開始回應 · (?!0 B)(?:\d+(?:\.\d+)? (?:B|KB|MB|GB))/);
+  assert.match(wire, /◆ 主模型回應中 · \d+s · 4 B(?: · [^\n]*\/s)?/);
   assert.match(wire, /DONE/);
 
   const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
@@ -3051,7 +3051,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.16/);
+  assert.match(first, /VERSION\s+0\.2\.28\.17/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3063,14 +3063,14 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   assert.doesNotMatch(JSON.stringify(upstreamBodies), /CC TOOL PROXY/);
 });
 
-test('V0.2.28.16 read-only session status endpoint returns localized telemetry without contacting Base vLLM', async (t) => {
+test('V0.2.28.17 read-only session status endpoint returns semantic telemetry without contacting Base vLLM', async (t) => {
   let upstreamCalls = 0;
   const upstream = http.createServer((_req, res) => { upstreamCalls += 1; res.writeHead(500); res.end(); });
   const upstreamUrl = await listen(upstream);
   const runtimeTelemetry = new (await import('../src/proxy/runtime-telemetry.js')).RuntimeTelemetry();
   const release = runtimeTelemetry.beginRequest({ requestId: 'status-r1', sessionId: 'status-s1' });
   runtimeTelemetry.updateRequest('status-r1', { phase: 'thinking' });
-  runtimeTelemetry.observeBytes('status-r1', 45_906);
+  runtimeTelemetry.observeModelDelta('status-r1', 45_906);
 
   const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, responseLanguage: 'zh-TW' }), { runtimeTelemetry });
   const proxyUrl = await listen(proxy);
@@ -3081,11 +3081,66 @@ test('V0.2.28.16 read-only session status endpoint returns localized telemetry w
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.2.28.16');
+  assert.equal(payload.version, '0.2.28.17');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.16/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.17/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
+});
+
+test('V0.2.28.17 session status exposes semantic model bytes instead of raw Anthropic SSE framing bytes', async (t) => {
+  let resolveSemanticSent;
+  let resolveFinish;
+  const semanticSent = new Promise((resolve) => { resolveSemanticSent = resolve; });
+  const finish = new Promise((resolve) => { resolveFinish = resolve; });
+  const thinking = '分析中';
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"semantic-status","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking } })}\n\n`);
+    resolveSemanticSent();
+    await finish;
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n');
+    res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}\n\n');
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n');
+    res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n');
+    res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    progressVisibleAfterMs: 0,
+    progressHeartbeatMs: 30_000,
+    responseLanguage: 'zh-TW',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => { resolveFinish?.(); upstream.close(); proxy.close(); });
+
+  const responsePromise = fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'semantic-status-session' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: '回答 OK' }],
+    }),
+  });
+
+  await semanticSent;
+  const statusResponse = await fetch(`${proxyUrl}/cc-tool-proxy/status/semantic-status-session`);
+  assert.equal(statusResponse.status, 200);
+  const status = await statusResponse.json();
+  assert.equal(status.phase, 'thinking');
+  assert.equal(status.received_bytes, Buffer.byteLength(thinking, 'utf8'));
+  assert.ok(status.received_bytes < 64, 'semantic bytes must exclude SSE/JSON framing');
+
+  resolveFinish();
+  const response = await responsePromise;
+  await response.text();
 });

@@ -24,10 +24,11 @@ function safeText(value, max = 120) {
 }
 
 export class RuntimeTelemetry {
-  constructor({ startedAt, maxRememberedSessions = 4096, clock = () => Date.now() } = {}) {
+  constructor({ startedAt, maxRememberedSessions = 4096, throughputWindowMs = 5000, clock = () => Date.now() } = {}) {
     this.clock = typeof clock === 'function' ? clock : (() => Date.now());
     this.startedAt = Number.isFinite(Number(startedAt)) ? Number(startedAt) : this.clock();
     this.maxRememberedSessions = maxRememberedSessions;
+    this.throughputWindowMs = Math.max(1000, Number(throughputWindowMs) || 5000);
     this.activeRequests = new Set();
     this.activeSessions = new Map();
     this.busyRequests = new Set();
@@ -63,8 +64,7 @@ export class RuntimeTelemetry {
         receivedBytes: 0,
         lastByteAt: 0,
         throughputBps: 0,
-        rateSampleAt: now,
-        rateSampleBytes: 0,
+        modelSamples: [],
         busyAttempt: 0,
         toolName: '',
         detail: '',
@@ -117,25 +117,39 @@ export class RuntimeTelemetry {
     return true;
   }
 
+  observeModelDelta(requestId, deltaBytes, now = this.clock()) {
+    const id = String(requestId || '');
+    const state = this.requestStates.get(id);
+    const delta = Math.max(0, Number.isFinite(Number(deltaBytes)) ? Number(deltaBytes) : 0);
+    if (!state || delta <= 0) return false;
+    state.receivedBytes += delta;
+    state.lastByteAt = now;
+    state.updatedAt = now;
+    state.modelSamples.push({ at: now, bytes: delta });
+    const cutoff = now - this.throughputWindowMs;
+    while (state.modelSamples.length && state.modelSamples[0].at < cutoff) state.modelSamples.shift();
+    return true;
+  }
+
+  // Backward-compatible cumulative observer for older tests/callers. New runtime code should use observeModelDelta().
   observeBytes(requestId, receivedBytes, now = this.clock()) {
     const id = String(requestId || '');
     const state = this.requestStates.get(id);
     const bytes = Math.max(0, Number.isFinite(Number(receivedBytes)) ? Number(receivedBytes) : 0);
-    if (!state) return false;
-    if (bytes < state.receivedBytes) return false;
-    if (state.receivedBytes === 0 && bytes > 0 && now <= state.rateSampleAt) {
-      state.rateSampleAt = now;
-      state.rateSampleBytes = bytes;
-    }
-    if (state.rateSampleAt > 0 && now > state.rateSampleAt && now - state.rateSampleAt >= 500) {
-      state.throughputBps = Math.max(0, (bytes - state.rateSampleBytes) * 1000 / (now - state.rateSampleAt));
-      state.rateSampleAt = now;
-      state.rateSampleBytes = bytes;
-    }
-    state.receivedBytes = bytes;
-    state.lastByteAt = now;
-    state.updatedAt = now;
-    return true;
+    if (!state || bytes < state.receivedBytes) return false;
+    const delta = bytes - state.receivedBytes;
+    if (delta <= 0) return true;
+    return this.observeModelDelta(id, delta, now);
+  }
+
+  #rollingThroughput(state, now) {
+    const cutoff = now - this.throughputWindowMs;
+    const samples = state.modelSamples.filter((sample) => sample.at >= cutoff);
+    if (!samples.length) return 0;
+    const bytes = samples.reduce((sum, sample) => sum + sample.bytes, 0);
+    const oldestAt = samples[0].at;
+    const elapsedMs = Math.max(1000, Math.min(this.throughputWindowMs, now - oldestAt || 1000));
+    return Math.max(0, bytes * 1000 / elapsedMs);
   }
 
   setBusy(requestId, busy, { attempt = 0 } = {}) {
@@ -181,7 +195,7 @@ export class RuntimeTelemetry {
         elapsedMs,
         phaseElapsedMs: Math.max(0, now - active.phaseStartedAt),
         receivedBytes: active.receivedBytes,
-        throughputBps: active.throughputBps,
+        throughputBps: this.#rollingThroughput(active, now),
         idleMs,
         busyAttempt: active.busyAttempt,
         toolName: active.toolName,

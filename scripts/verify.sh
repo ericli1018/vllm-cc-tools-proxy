@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.16'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.16'
+test "$(node -p "require('./package.json').version")" = '0.2.28.17'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.17'
 
 
 test -f src/i18n/response-language.js
@@ -435,6 +435,16 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_timeout' src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
 
+
+
+# V0.2.28.17 semantic model output telemetry
+ test -f V0.2.28.17-更新說明.md
+ grep -Fq 'V0.2.28.17 Semantic Model Output Telemetry' README.md
+ grep -Fq 'onSemanticDelta' src/proxy/anthropic-sse-collector.js
+ grep -Fq 'observeModelDelta' src/proxy/runtime-telemetry.js
+ grep -Fq 'wire_received_bytes' src/services/proxy-server.js
+ grep -Fq 'model_output_bytes' src/services/proxy-server.js
+ grep -Fq 'semantic model delta' test/anthropic-sse-collector.test.js
 
 # V0.2.28.16 Claude Code native statusLine + append-only SSE liveness
 test -f V0.2.28.16-更新說明.md

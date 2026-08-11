@@ -75,7 +75,7 @@ function finalizeToolInput(block, partialJson, index) {
 }
 
 export async function collectAnthropicMessageFromSse(upstream, {
-  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {},
+  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {}, onSemanticDelta = () => {},
 } = {}) {
   if (!upstream?.body) throw invalidStream('vLLM Anthropic SSE response did not contain a body.');
 
@@ -146,6 +146,28 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (parsed.name === 'content_block_delta') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
+      const delta = payload?.delta || {};
+      let semanticValue = '';
+      let semanticType = '';
+      if (delta.type === 'thinking_delta') {
+        semanticValue = typeof delta.thinking === 'string' ? delta.thinking : '';
+        semanticType = 'thinking';
+      } else if (delta.type === 'text_delta') {
+        semanticValue = typeof delta.text === 'string' ? delta.text : '';
+        semanticType = 'text';
+      } else if (delta.type === 'input_json_delta') {
+        semanticValue = typeof delta.partial_json === 'string' ? delta.partial_json : '';
+        semanticType = 'tool_json';
+      }
+      if (semanticValue) {
+        try {
+          await onSemanticDelta({
+            type: semanticType,
+            bytes: Buffer.byteLength(semanticValue, 'utf8'),
+            index,
+          });
+        } catch {}
+      }
       if (!firstModelEventObserved) {
         firstModelEventObserved = true;
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}

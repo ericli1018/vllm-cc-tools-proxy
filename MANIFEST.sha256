@@ -1,8 +1,8 @@
 da8303556b6ab274627513f0438552d62d964e20004d8ad7559129c270e42853  ./.env.example
 c25243596674d1d745ee7ef3c93b7cf72ee01b3d59702c81594c60e9ed2ce4ae  ./.gitignore
-569b3ea3666006217ce945b5751ea9f88d452a3d679fdd86ac9069bb1ea26f5f  ./CHANGELOG.md
+d6045e483d2582dc818b0614e01621a63c7483cedaaef90404251a8418e16f29  ./CHANGELOG.md
 0ad6856338f82966a546301aba13f36bd009b52959aff64cedf969571982343b  ./LICENSE
-6048d3bf8a303cbb670b678a47ec92a55998d5168d71bfa8ca6a9754c71747c9  ./README.md
+8a3a3953d5053872e1671a88916ae038243c3385e78c9cdee78c78bea64c62d4  ./README.md
 4ae45485d557282e1f69af6761ba2fe696caac83bcda64cec0b657e0bb1c360c  ./V0.2.10-更新說明.md
 e425f8e961ddb175d9035c190bf7255c6761a030e5ab0aa22e0599a182a2b292  ./V0.2.11-更新說明.md
 9b3771cda8082429ff32f797a8c4999c460159c2e143cf9f36abcc228aa93c01  ./V0.2.12-更新說明.md
@@ -46,6 +46,7 @@ cb96e6f1877a7a3350ed8de7d3014f65cedaa99e96b9de8bc1d73bf4d785af57  ./V0.2.28.13-�
 80d96e804138c400532f1286acf25a569a57e926a02466ebd6f90da3e5a52206  ./V0.2.28.14-更新說明.md
 64178062d032981e1914ec075016beba47fbf36d8d0bf99254775aa7ed53e976  ./V0.2.28.15-更新說明.md
 ba664164f40805ab25535fc759fb0e6f628249531810d0afa71cbcc9dcf89b64  ./V0.2.28.16-更新說明.md
+806564dfb34551778f88087a70653d344b64916faaac9587b458eae01e84bb74  ./V0.2.28.17-更新說明.md
 4750b6b07322396afb5a9c9992b1e85b28e8a5c9b3db2166759e5ff811c5d1d0  ./V0.2.28.2-更新說明.md
 5934418203e7bcabb9e09b8a420d7e8a68a251519fe84b4938342517a78b6d8b  ./V0.2.28.3-更新說明.md
 84155e902e15f60f896e539e8118db3e79d030079be6175d2790aeea63039431  ./V0.2.28.4-更新說明.md
@@ -75,11 +76,11 @@ ceeefde95da90ab97df426ec6057299ede8368f2556f3c4e575a2c02bcf8330c  ./docs/superpo
 3379e0edffed8c4ac219806d2b7b185f8ea3298d8e3be7f849170909c16499f1  ./docs/superpowers/specs/2026-08-10-managed-model-phase-progress-design.md
 23e42158bd2e4d451958f1e4e112473039b1f53ed0c212834fdc998dd9092cf7  ./docs/superpowers/specs/2026-08-11-progress-runtime-telemetry-design.md
 613a1f37f94f388cf82498cb8b237dd21d8b6835d6bfe5d1b3bbeccc5b0904b4  ./package-lock.json
-b783d0e2b65b5fec21de1144700d541d28a4a3f18e5d95da0b70d8d70ca915c6  ./package.json
+a2131e1d017aefaf553bd0d3aa22688b9785b6aa4ea1d5a33bc3b6d5ab523168  ./package.json
 65d46256f831d339c8e7586f12f9d338193578fdf7b2ca8b3411418b0f4591cf  ./scripts/cc-tool-proxy-statusline.js
 887be3109524a8ad3253e4b01d5623aa801b5f907a3b9230c892b0d33c02ff60  ./scripts/check-syntax.js
 ec14ecf7086117258faf8b04816cb6d4307c4b8180230ecd2d58759445d0c5d6  ./scripts/package.sh
-78b7f1f444c0fec72f2920e399d2dbd4a6950428c50609bb36396b29d2ef7b9c  ./scripts/verify.sh
+9321c171ad7aeab40d43aa78f102bd1cce69a4aa43ffeb36512a8b2182c58423  ./scripts/verify.sh
 b7dd0aed384eaf2ada8625652632faeafb2735ae468a3920cb492d2084df86de  ./src/app.js
 eb8f24ea1a2e9ce2b10351d1a59584140a0d05653c2c6bdb313de160db10d26e  ./src/cache/cache-key.js
 5529b7febbad0be48009e6f8cf8a7eed01c86589afe7a1f9bf09479c368c5e57  ./src/cache/media-cache.js
@@ -94,7 +95,7 @@ c11bc9c8793897d2db2d8e626176cb1c352fd87f60463983ec84a15e03b22dfb  ./src/i18n/res
 4d60d5b40a18e3630187601039e8293ef9ef49a6db6d79c3de56dafb395ce3c0  ./src/media/analysis-registry.js
 139561df52225102b64c8988801d0572cb754145ac59da3427d9ab7235cad13d  ./src/parsers/image.js
 23de4eb7ad6cf4d65f1a1623a5257343fce0d456ce8dcb11fd288a6b1e147c71  ./src/parsers/pdf.js
-c939fe8d7ffcad01c5b1902317f723bf7af117ee8d0607507a4c7b69a062f51d  ./src/proxy/anthropic-sse-collector.js
+7c9ce468182dcaedf4b8fbeeae728fd8ccd9900c62e386f3c39ed20a6ebb1158  ./src/proxy/anthropic-sse-collector.js
 3d45b710e4251dd7e161f0b3932d560035bb812be4a588794c641deb52bcdf89  ./src/proxy/anthropic-sse.js
 70585b66f415670a77ba6902f0d6f97f814671a04013d3576bafbe8a69ac38ea  ./src/proxy/anthropic-usage.js
 7742903ddb26c3e3bdd010063f480bc8233cef3671357964c066138d56b035d7  ./src/proxy/bypass.js
@@ -119,7 +120,7 @@ b779d3be7584d6c64b5a801ad6443870ed42f4e17b0668e4bf1f4d36a25ff93b  ./src/proxy/pr
 6a500c50b1d0b4b95e9842d28cb8e0003eb57686baabd9d0a6af1cc6c9a094d7  ./src/proxy/protocol-diagnostics.js
 921b2cc27026ef29fb360460f450b3c461ba2b34c6eed2d62f2aa06b3cd2ab81  ./src/proxy/protocol-sanitizer.js
 30b8e9dd4bb15e00e7404493a09f02c0f3a7f4dc904e1efdb427028bdb8c508e  ./src/proxy/response-language-policy.js
-93a8403a46735c58cbccf6aa07dedb6eda3af9b3235ade3c10f559fc4168e1e3  ./src/proxy/runtime-telemetry.js
+f61197c50141d959ea0b353e468659e151207ccb3e65766aaca8f30c18b9cf17  ./src/proxy/runtime-telemetry.js
 5f21d2ebed82df718efa4faa4d2d77c5ff2cd3a2167a3f417e0287ba1ccffea2  ./src/proxy/web-result-contract.js
 4beb73772f3549e237380090631cd2b58241e2c15b3511c5c79a6621f5f9e8e3  ./src/proxy/web-tool-diagnostic-trace-store.js
 37367ad191ce8886c31953fc7dab67b4d412d7ca2fd62163ad0f0199de4b6046  ./src/proxy/web-tool-diagnostic.js
@@ -129,9 +130,9 @@ ebc0b660afb31b262a2b0b3617823c63aa6a9f96fb4c0fbc3d5f008e56139016  ./src/proxy/we
 31a81232ae81fb91095b8697175b966f9f40b421875071b3490c319cd6909fbd  ./src/services/context-compact-client.js
 0a5250b4f059be67fc58849df3c9ff2623e582904f4ad664967cd6810e3db6ab  ./src/services/continuation-state-compressor.js
 18a4d7c8fee4959a842991e0397883565eecbdb9fe11f12226458579eb4a6a76  ./src/services/final-language-repair.js
-58b0090ecb440480789a67e8621b6e780ab7969d1e80f626fa74be7c8684fba9  ./src/services/proxy-server.js
+d06187e5499812e11ea7edefec95d6b12f0e0f3fe60c913db548a20297068a7d  ./src/services/proxy-server.js
 0ebeec63c60e3e799d99afc5b5e04fa0f92cc6e106817e769709c65808eb795b  ./src/services/web-fetch-processor.js
-ddbe31a6017ea698f4c46f94f3f998ae8f17d8f87060f0ce79bf1ce50d075456  ./src/version.js
+41f8574cb54cbc8dc3d108a8c1453403a5389ab921ee1fa5676e59a6cb4c8425  ./src/version.js
 31bdb002070bc42ee8f6418bb78b4b6867d5ad0c5208638db9d8ae7f4309b301  ./src/visual/asset-registry.js
 8f9b9239564299d364ca23e71b5ff4db95ddb9badd6e5fbae7ae386e82cf8b4e  ./src/visual/crop-errors.js
 7e611c77cabf2c875bbfe192f9bab47da8d39a6b49febb320fa46cee8743b323  ./src/visual/pdf-batcher.js
@@ -140,7 +141,7 @@ ddbe31a6017ea698f4c46f94f3f998ae8f17d8f87060f0ce79bf1ce50d075456  ./src/version.
 a2f75565f05ebf70f0b6ee1240a62181e840978b7dd3f3b67578150921f8ee04  ./src/visual/pdf-tiler.js
 b1f34eed38382704c27ed273981246a223c606fed142b5115f94798265622fab  ./src/visual/vision-client.js
 a73eccfb6439b4b1db411bf806eb69ddae6c2a1f5304c5830ab0b4dd7e1ade6c  ./test/analysis-registry.test.js
-a2d47ae274ec6f99cf2da822b0caf32532616a748aa1af7eba138c3e8e253378  ./test/anthropic-sse-collector.test.js
+bf58f99f9b4b2b1065d8f1e2e3bae722c594bea7d4b76648035a770b38596e5b  ./test/anthropic-sse-collector.test.js
 a43e7e3cf24225d94ea6d7c59504c10f5536f3c1b739741e865b473f820d93b1  ./test/anthropic-sse.test.js
 bc04596e79f7c2b8eb949731f83876f29d9f8aa8b11edbc3fd326b6d8eb27575  ./test/anthropic-usage.test.js
 f84e60d9995cb4bb765115c4fc5c88ae214e6eb37616d06138dece81939a173b  ./test/app.test.js
@@ -186,11 +187,11 @@ ba4f46a7c845d6d9b2e4e56c2ef59ff2dd59b9589f7de87dd2be207c9cbaa34e  ./test/pdf-til
 b5129ef28abfa2c85a94b4354149b0b91df91ef748a02109f5319694a923b958  ./test/progress.test.js
 6596e106a0da57382fbffb2378ef7ff23d8ae6984319cabd62264385a0d5739a  ./test/protocol-diagnostic-store.test.js
 3225f521d670f5d466c570a97934b4f34181c56469f1933ffaac64d684ecb4e5  ./test/protocol-diagnostics.test.js
-ac9f0f7455da907a2279e9f1d3f774fa5d66af586771a710eabb05d1579d549c  ./test/proxy-server.test.js
+bea741b271865e60dc5bc3d302db58ea1cfd8635e1baeacafa56a3320c4b58d4  ./test/proxy-server.test.js
 2f30c6180cd485b8696750e72b18dcd5cdb0ba6fd3df7dd459e1cac07d43f881  ./test/response-language.test.js
-c9a650214643bbbe1cad207ceb3221ac8bbcd4827b11c7a1a4d292612ee6eacb  ./test/runtime-telemetry.test.js
+666e16af5b6ba71cee0b18e98213af4c373f83ec4a41336d3474c857ea80e47a  ./test/runtime-telemetry.test.js
 f299574f3bcd2bfbbf465fe8c9d78cbb0b8a3d522f1f29e7747bd5325c307b7c  ./test/statusline-client.test.js
-34f449c84c89f518083eaa4e719a2728a6299d83ac95002ccb7aa42a0315c97a  ./test/version.test.js
+46517924e338954de724006423f86e4871fd3cece347dcf819640ededaa86c49  ./test/version.test.js
 e44f09dbdd055bb3a4de3afdc8808a92f999603acdf7d769da0709e318b410fe  ./test/vision-client.test.js
 da985f45da8da0fc8b0193e6c92ac2b2f207b4ea5a659ebe1e5b82743c7d913f  ./test/vllm-busy-retry.test.js
 7e6caa6c43d0af8ebda2b95c4a9dfac84812e6aab9f0c6f23b1961520b350b6b  ./test/web-fetch-processor.test.js

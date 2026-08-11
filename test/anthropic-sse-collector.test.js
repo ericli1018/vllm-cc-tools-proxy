@@ -146,3 +146,42 @@ test('V0.2.28.7 collector reports meaningful stream phase transitions once', asy
   assert.equal(phases[1].block_type, 'text');
   assert.equal(phases[2].block_type, 'tool_use');
 });
+
+test('V0.2.28.17 collector reports only semantic model delta bytes', async () => {
+  const thinking = '分析中';
+  const text = 'DONE';
+  const toolJson = '{"query":"Laguna"}';
+  const signature = 'not-user-visible-signature';
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'semantic-1', type: 'message', role: 'assistant', model: 'laguna', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 1 }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-1', name: 'WebSearch', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: toolJson } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 12 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+  const deltas = [];
+
+  await collectAnthropicMessageFromSse(upstreamFromChunks([wire]), {
+    onSemanticDelta: async (entry) => deltas.push(entry),
+  });
+
+  assert.deepEqual(deltas.map((entry) => entry.type), ['thinking', 'text', 'tool_json']);
+  assert.deepEqual(deltas.map((entry) => entry.bytes), [
+    Buffer.byteLength(thinking, 'utf8'),
+    Buffer.byteLength(text, 'utf8'),
+    Buffer.byteLength(toolJson, 'utf8'),
+  ]);
+  assert.equal(deltas.reduce((sum, entry) => sum + entry.bytes, 0),
+    Buffer.byteLength(thinking + text + toolJson, 'utf8'));
+  assert.equal(deltas.some((entry) => entry.bytes === Buffer.byteLength(signature, 'utf8')), false);
+});

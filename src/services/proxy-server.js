@@ -165,7 +165,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onBusyEvent = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onBusyEvent = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk, onBusyEvent });
   if (!response.ok) {
     const text = await response.text();
@@ -178,6 +178,7 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
   if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
     ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
+    ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
   });
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
@@ -287,7 +288,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
 
 
 async function collectManagedBase(request, config, incomingHeaders, signal, {
-  onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null, onBusyEvent = null,
+  onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null, onSemanticDelta = null, onBusyEvent = null,
 } = {}) {
   const outbound = { ...request, stream: true };
   const requestStartedAt = Date.now();
@@ -312,6 +313,7 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
   if (contentType.includes('text/event-stream')) {
     return collectAnthropicMessageFromSse(upstream, {
       onUsage,
+      ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
       onFirstEvent: async ({ event, type, block_type }) => onLifecycle('base_upstream_first_event', {
         upstream_event: event,
         upstream_type: type,
@@ -579,15 +581,19 @@ export function createProxyServer(config, dependencies = {}) {
     let mediaProgress = null;
     let releaseRuntimeRequest = null;
     let initialStreamUsage = usageFromTokenCount({});
-    let baseResponseBytes = 0;
+    let baseResponseBytes = 0; // raw upstream wire bytes; timeout/stall diagnostics only
     let lastBaseResponseChunkAt = 0;
+    let modelOutputBytes = 0; // semantic thinking/text/tool JSON payload bytes only
+    let lastModelOutputDeltaAt = 0;
     const modelRoundProgress = {
       active: false,
       round: 0,
       lane: 'managed',
       startedAt: 0,
       startBytes: 0,
+      startModelBytes: 0,
       firstByteNotified: false,
+      firstSemanticDeltaNotified: false,
       phase: 'waiting',
     };
     const onManagedModelStreamPhase = async ({ phase, previous_phase = 'waiting', event = '', block_type = '', delta_type = '' } = {}) => {
@@ -600,8 +606,8 @@ export function createProxyServer(config, dependencies = {}) {
         ? Math.max(0, Date.now() - modelRoundProgress.startedAt)
         : 0;
       const receivedThisRound = modelRoundProgress.active
-        ? Math.max(0, baseResponseBytes - modelRoundProgress.startBytes)
-        : baseResponseBytes;
+        ? Math.max(0, modelOutputBytes - modelRoundProgress.startModelBytes)
+        : modelOutputBytes;
       log(config, 'info', 'managed_model_stream_phase_changed', {
         requestId,
         lane: modelRoundProgress.lane,
@@ -636,7 +642,6 @@ export function createProxyServer(config, dependencies = {}) {
       if (!Number.isFinite(value) || value <= 0) return;
       baseResponseBytes += value;
       lastBaseResponseChunkAt = Date.now();
-      runtimeTelemetry.observeBytes(requestId, baseResponseBytes, lastBaseResponseChunkAt);
       if (!modelRoundProgress.active || modelRoundProgress.firstByteNotified || baseResponseBytes <= modelRoundProgress.startBytes) return;
 
       modelRoundProgress.firstByteNotified = true;
@@ -652,10 +657,37 @@ export function createProxyServer(config, dependencies = {}) {
         round_received_bytes: receivedThisRound,
       });
     };
+    const onModelSemanticDelta = async ({ bytes = 0, type = '' } = {}) => {
+      const value = Number(bytes);
+      if (!Number.isFinite(value) || value <= 0) return;
+      modelOutputBytes += value;
+      lastModelOutputDeltaAt = Date.now();
+      runtimeTelemetry.observeModelDelta(requestId, value, lastModelOutputDeltaAt);
+      log(config, 'debug', 'model_semantic_delta_observed', {
+        requestId,
+        delta_type: type,
+        delta_bytes: value,
+        model_output_bytes: modelOutputBytes,
+      });
+      if (modelRoundProgress.active && !modelRoundProgress.firstSemanticDeltaNotified && progress) {
+        modelRoundProgress.firstSemanticDeltaNotified = true;
+        await progress.update(statusText(config.responseLanguage, 'modelHeartbeat', sampleModelHeartbeat(lastModelOutputDeltaAt)), {
+          force: Boolean(progress.visible),
+          details: {
+            phase: 'model_semantic_first_delta',
+            model_phase: modelRoundProgress.phase || 'waiting',
+            round: modelRoundProgress.round || 1,
+            delta_type: type,
+            delta_bytes: value,
+            round_model_output_bytes: getCurrentRoundResponseBytes(),
+          },
+        });
+      }
+    };
     const getBaseResponseBytes = () => baseResponseBytes;
     const getCurrentRoundResponseBytes = () => (
       modelRoundProgress.active
-        ? Math.max(0, baseResponseBytes - modelRoundProgress.startBytes)
+        ? Math.max(0, modelOutputBytes - modelRoundProgress.startModelBytes)
         : 0
     );
     const modelHeartbeatSample = {
@@ -666,7 +698,7 @@ export function createProxyServer(config, dependencies = {}) {
     };
     const sampleModelHeartbeat = (now = Date.now()) => {
       const roundBytes = getCurrentRoundResponseBytes();
-      const roundKey = `${modelRoundProgress.round}|${modelRoundProgress.startedAt}|${modelRoundProgress.startBytes}`;
+      const roundKey = `${modelRoundProgress.round}|${modelRoundProgress.startedAt}|${modelRoundProgress.startModelBytes}`;
       if (modelHeartbeatSample.roundKey !== roundKey) {
         modelHeartbeatSample.roundKey = roundKey;
         modelHeartbeatSample.sampledAt = 0;
@@ -687,11 +719,11 @@ export function createProxyServer(config, dependencies = {}) {
       modelHeartbeatSample.sampledAt = now;
       modelHeartbeatSample.sampledBytes = roundBytes;
 
-      const idleMs = modelRoundProgress.firstByteNotified && lastBaseResponseChunkAt > 0
-        ? Math.max(0, now - lastBaseResponseChunkAt)
+      const idleMs = lastModelOutputDeltaAt > 0
+        ? Math.max(0, now - lastModelOutputDeltaAt)
         : 0;
       const stalled = Boolean(
-        modelRoundProgress.firstByteNotified
+        lastModelOutputDeltaAt > 0
         && roundBytes > 0
         && idleMs >= Math.max(1, config.progressHeartbeatMs),
       );
@@ -1274,7 +1306,9 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.lane = 'direct';
           modelRoundProgress.startedAt = directStartedAt;
           modelRoundProgress.startBytes = baseResponseBytes;
+          modelRoundProgress.startModelBytes = modelOutputBytes;
           modelRoundProgress.firstByteNotified = false;
+          modelRoundProgress.firstSemanticDeltaNotified = false;
           modelRoundProgress.phase = 'waiting';
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
@@ -1289,6 +1323,7 @@ export function createProxyServer(config, dependencies = {}) {
             original, config, req.headers, abortController.signal, '/v1/messages', {
               onResponseChunk: onBaseResponseChunk,
               onStreamPhase: onManagedModelStreamPhase,
+              onSemanticDelta: onModelSemanticDelta,
               onBusyEvent: onBaseBusyEvent,
             },
           );
@@ -1657,6 +1692,7 @@ export function createProxyServer(config, dependencies = {}) {
       const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
         onResponseChunk: onBaseResponseChunk,
         onStreamPhase: onManagedModelStreamPhase,
+        onSemanticDelta: onModelSemanticDelta,
         onBusyEvent: onBaseBusyEvent,
       });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
@@ -1691,7 +1727,9 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.lane = lane;
               modelRoundProgress.startedAt = startedAt;
               modelRoundProgress.startBytes = startBytes;
+              modelRoundProgress.startModelBytes = modelOutputBytes;
               modelRoundProgress.firstByteNotified = false;
+              modelRoundProgress.firstSemanticDeltaNotified = false;
               modelRoundProgress.phase = 'waiting';
               runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
@@ -1699,7 +1737,11 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.active = false;
               progressTiming.mode = 'step';
               progressTiming.startedAt = endedAt || Date.now();
-              log(config, 'info', 'managed_model_round_completed', { requestId, lane, round, elapsed_ms: (endedAt || Date.now()) - startedAt, received_bytes: getBaseResponseBytes() });
+              log(config, 'info', 'managed_model_round_completed', {
+                requestId, lane, round, elapsed_ms: (endedAt || Date.now()) - startedAt,
+                wire_received_bytes: getBaseResponseBytes(),
+                model_output_bytes: getCurrentRoundResponseBytes(),
+              });
             }
           },
           locale: config.responseLanguage,
@@ -1779,12 +1821,15 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.lane = lane;
           modelRoundProgress.startedAt = progressTiming.startedAt;
           modelRoundProgress.startBytes = baseResponseBytes;
+          modelRoundProgress.startModelBytes = modelOutputBytes;
           modelRoundProgress.firstByteNotified = false;
+          modelRoundProgress.firstSemanticDeltaNotified = false;
           modelRoundProgress.phase = 'waiting';
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
           let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
+            onSemanticDelta: onModelSemanticDelta,
             onBusyEvent: onBaseBusyEvent,
             onUsage: ({ stage, usage }) => log(config, 'info', 'managed_stream_usage_observed', {
               requestId,

@@ -1,6 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.16 adds optional Claude Code native `statusLine` telemetry while restoring the reliable append-only 30-second SSE heartbeat used as the primary liveness channel.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.17 makes progress bytes and throughput represent decoded model output rather than Anthropic SSE/JSON wire framing, while preserving the V0.2.28.16 native statusLine and append-only 30-second SSE liveness channels.
+
+## V0.2.28.17 Semantic Model Output Telemetry
+
+V0.2.28.17 separates transport activity from user-visible model-output telemetry. Raw Base-vLLM HTTP response bytes remain internal and continue to drive first-byte, connection-activity, and stall/timeout safety. They are no longer used as the `bytes` or `throughput` shown by Progress or Claude Code `statusLine`.
+
+User-visible counters now advance only for decoded Anthropic semantic deltas:
+
+- `thinking_delta.thinking`
+- `text_delta.text`
+- `input_json_delta.partial_json`
+
+SSE `event:`/`data:` framing, JSON keys, usage metadata, block start/stop events, signatures, pings, and HTTP framing are excluded. UTF-8 byte length is used, so multilingual model output is measured by its actual encoded payload size.
+
+The two counters are intentionally separate:
+
+```text
+WIRE BYTES
+  internal only -> first-byte / connection stall / timeout diagnostics
+
+MODEL OUTPUT BYTES
+  semantic deltas only -> 30s Progress + native statusLine
+```
+
+The first semantic delta of each model round triggers an immediate nonzero telemetry update; later Progress updates remain on the existing `PROGRESS_HEARTBEAT_MS` cadence (default 30000 ms). The native status line uses a rolling 5-second semantic-output window and naturally falls back to `0 B/s` when no new model delta has arrived for that window. Managed continuation rounds reset their displayed model-output byte baseline while raw wire activity remains cumulative for connection health.
+
+No new ENV variables are added. Localization remains unchanged for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`.
 
 ## V0.2.28.16 Claude Code Native StatusLine + SSE Liveness
 
