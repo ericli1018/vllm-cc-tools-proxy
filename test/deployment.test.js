@@ -64,12 +64,13 @@ test('Compose exposes no Base/Managed Proxy queue settings and keeps only auxili
 
 
 
-test('README documents V0.2.28.15 carriage-return live-line progress rendering', () => {
-  assert.match(readme, /V0\.2\.28\.15 Progress Live-Line Renderer/);
-  assert.match(readme, /carriage return/i);
-  assert.match(readme, /milestone/i);
-  assert.match(readme, /live line/i);
-  assert.match(readme, /no ANSI/i);
+test('README documents V0.2.28.16 native statusLine while preserving 30-second SSE liveness', () => {
+  assert.match(readme, /V0\.2\.28\.16 Claude Code Native StatusLine \+ SSE Liveness/);
+  assert.match(readme, /PROGRESS_HEARTBEAT_MS.*30000/s);
+  assert.match(readme, /GET \/cc-tool-proxy\/status\/<session-id>/);
+  assert.match(readme, /refreshInterval.*1/s);
+  assert.match(readme, /cc-tool-proxy-statusline\.js/);
+  assert.match(readme, /append-only heartbeat/i);
   assert.match(readme, /zh-TW.*zh-CN.*en-US.*ja-JP.*ko-KP/s);
 });
 test('README documents V0.2.28.14 multilingual runtime progress telemetry', () => {

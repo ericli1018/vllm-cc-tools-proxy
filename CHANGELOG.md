@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.28.16 - 2026-08-11
+
+- Added a read-only per-Claude-Code-session runtime telemetry endpoint at `GET /cc-tool-proxy/status/<session-id>`.
+- Added `scripts/cc-tool-proxy-statusline.js` for Claude Code native `statusLine` integration with 1-second refresh support.
+- Kept the existing semantic SSE heartbeat unchanged in cadence (`PROGRESS_HEARTBEAT_MS`, default 30000 ms) so long requests continue to receive visible progress independent of statusLine.
+- Retired V0.2.28.15 carriage-return live-line replacement and restored append-only heartbeat lines after real Claude Code TUI testing showed `\r` does not provide direct cursor control.
+- Added content-free session telemetry for waiting/thinking/response/tool/busy/compact/language/vision/stalled states, elapsed time, received bytes, rolling throughput, and processor/tool labels.
+- Added localized native status-line rendering for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`, with `en-US` fallback.
+- Preserved independent Base connections, explicit-busy retry, Language Processor, Context Compact, Vision, and Final Language Gate behavior.
+
 ## 0.2.28.15 - 2026-08-11
 
 - Added a carriage-return Progress Live-Line Renderer: semantic heartbeat telemetry now reuses one terminal line instead of appending one history line per heartbeat.

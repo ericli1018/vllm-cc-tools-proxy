@@ -62,6 +62,46 @@ export function formatByteRate(value) {
   return `${formatReceivedBytes(rate)}/s`;
 }
 
+
+const RUNTIME_STATUS_LINE_LABELS = Object.freeze({
+  'zh-TW': Object.freeze({ idle: '閒置', waiting: '等待輸出', thinking: '思考中', response: '回應中', tool: '工具動作', busy: 'VLLM 忙碌', compact: '壓縮中', language: '語言轉換', vision: '視覺分析', stalled: '資料暫停' }),
+  'zh-CN': Object.freeze({ idle: '空闲', waiting: '等待输出', thinking: '思考中', response: '响应中', tool: '工具动作', busy: 'VLLM 忙碌', compact: '压缩中', language: '语言转换', vision: '视觉分析', stalled: '数据暂停' }),
+  'en-US': Object.freeze({ idle: 'IDLE', waiting: 'WAITING', thinking: 'THINKING', response: 'RESPONDING', tool: 'TOOL', busy: 'VLLM BUSY', compact: 'COMPACT', language: 'LANGUAGE', vision: 'VISION', stalled: 'STALLED' }),
+  'ja-JP': Object.freeze({ idle: '待機', waiting: '出力待機', thinking: '思考中', response: '応答中', tool: 'ツール操作', busy: 'VLLM 混雑', compact: '圧縮中', language: '言語変換', vision: '視覚分析', stalled: 'データ停止' }),
+  'ko-KP': Object.freeze({ idle: '대기', waiting: '출력 대기', thinking: '사고 중', response: '응답 중', tool: '도구 동작', busy: 'VLLM 혼잡', compact: '압축 중', language: '언어 변환', vision: '시각 분석', stalled: '데이터 정체' }),
+});
+
+function runtimeStatusGlyph(phase, pulseIndex = 0) {
+  if (phase === 'thinking') return THINKING_PULSE[Math.abs(Math.trunc(Number(pulseIndex) || 0)) % THINKING_PULSE.length];
+  if (phase === 'response') return '◆';
+  if (phase === 'tool' || phase === 'compact' || phase === 'language' || phase === 'vision') return '◇';
+  if (phase === 'busy') return '↻';
+  if (phase === 'stalled') return '⚠';
+  if (phase === 'idle') return '○';
+  return '◌';
+}
+
+export function formatRuntimeStatusLine(locale, {
+  version = '', phase = 'idle', elapsedMs = 0, receivedBytes = 0, throughputBps = 0,
+  pulseIndex = 0, busyAttempt = 0, toolName = '', detail = '',
+} = {}) {
+  const resolved = resolveResponseLanguage(locale);
+  const labels = RUNTIME_STATUS_LINE_LABELS[resolved] || RUNTIME_STATUS_LINE_LABELS[DEFAULT_RESPONSE_LANGUAGE];
+  const normalizedPhase = Object.hasOwn(labels, phase) ? phase : 'idle';
+  const pieces = [
+    `◆ CC TOOL PROXY${version ? ` ${version}` : ''}`,
+    `${runtimeStatusGlyph(normalizedPhase, pulseIndex)} ${labels[normalizedPhase]}`,
+  ];
+  if (!['idle'].includes(normalizedPhase)) pieces.push(`${Math.max(0, Math.floor(Number(elapsedMs) || 0) / 1000)}s`);
+  if (Number(receivedBytes) > 0) pieces.push(formatReceivedBytes(receivedBytes));
+  const rate = formatByteRate(throughputBps);
+  if (rate && Number(throughputBps) > 0) pieces.push(rate);
+  if (normalizedPhase === 'busy' && Number(busyAttempt) > 0) pieces.push(`#${Math.max(1, Math.trunc(Number(busyAttempt)))}`);
+  if (normalizedPhase === 'tool' && toolName) pieces.push(String(toolName).slice(0, 40));
+  if (detail && ['compact', 'language', 'vision'].includes(normalizedPhase)) pieces.push(String(detail).slice(0, 60));
+  return pieces.join(' │ ');
+}
+
 function formatModelTelemetry(locale, {
   seconds = 0,
   receivedBytes = 0,

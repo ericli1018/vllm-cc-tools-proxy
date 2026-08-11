@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.15', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.16', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -3051,7 +3051,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.15/);
+  assert.match(first, /VERSION\s+0\.2\.28\.16/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3061,4 +3061,31 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   assert.doesNotMatch(second, /CC TOOL PROXY/);
   assert.equal(upstreamBodies.length, 2);
   assert.doesNotMatch(JSON.stringify(upstreamBodies), /CC TOOL PROXY/);
+});
+
+test('V0.2.28.16 read-only session status endpoint returns localized telemetry without contacting Base vLLM', async (t) => {
+  let upstreamCalls = 0;
+  const upstream = http.createServer((_req, res) => { upstreamCalls += 1; res.writeHead(500); res.end(); });
+  const upstreamUrl = await listen(upstream);
+  const runtimeTelemetry = new (await import('../src/proxy/runtime-telemetry.js')).RuntimeTelemetry();
+  const release = runtimeTelemetry.beginRequest({ requestId: 'status-r1', sessionId: 'status-s1' });
+  runtimeTelemetry.updateRequest('status-r1', { phase: 'thinking' });
+  runtimeTelemetry.observeBytes('status-r1', 45_906);
+
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, responseLanguage: 'zh-TW' }), { runtimeTelemetry });
+  const proxyUrl = await listen(proxy);
+  t.after(() => { release(); upstream.close(); proxy.close(); });
+
+  const response = await fetch(`${proxyUrl}/cc-tool-proxy/status/status-s1`);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
+  const payload = await response.json();
+  assert.equal(payload.service, 'cc-tool-proxy');
+  assert.equal(payload.version, '0.2.28.16');
+  assert.equal(payload.session_id, 'status-s1');
+  assert.equal(payload.phase, 'thinking');
+  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.16/);
+  assert.match(payload.display, /思考中/);
+  assert.equal(upstreamCalls, 0);
+  assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
 });

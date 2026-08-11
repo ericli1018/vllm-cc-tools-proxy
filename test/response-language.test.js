@@ -251,3 +251,25 @@ test('V0.2.28.14 prefixes busy, language and vision processor states in every lo
     assert.match(language.statusText(locale, 'imageVision'), /^◇ /);
   }
 });
+
+test('V0.2.28.16 native status line localizes runtime phases for every supported locale', () => {
+  const samples = {
+    'zh-TW': /思考中/,
+    'zh-CN': /思考中/,
+    'en-US': /THINKING/,
+    'ja-JP': /思考中/,
+    'ko-KP': /사고 중/,
+  };
+  for (const [locale, expected] of Object.entries(samples)) {
+    const line = language.formatRuntimeStatusLine(locale, {
+      version: '0.2.28.16', phase: 'thinking', elapsedMs: 59000,
+      receivedBytes: 45906, throughputBps: 760, pulseIndex: 1,
+    });
+    assert.match(line, /CC TOOL PROXY 0\.2\.28\.16/);
+    assert.match(line, expected);
+    assert.match(line, /59s/);
+    assert.match(line, /44\.83 KB/);
+    assert.match(line, /760 B\/s/);
+    assert.match(line, /◓/);
+  }
+});

@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.15'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.15'
+test "$(node -p "require('./package.json').version")" = '0.2.28.16'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.16'
 
 
 test -f src/i18n/response-language.js
@@ -436,14 +436,18 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 ! grep -Fq 'proxy_queue_full' src/services/proxy-server.js
 
 
-# V0.2.28.15 carriage-return Progress Live-Line Renderer
-test -f V0.2.28.15-更新說明.md
-grep -Fq 'V0.2.28.15 Progress Live-Line Renderer' README.md
-grep -Fq "this.liveLineActive = false" src/proxy/progress.js
-grep -Fq "entry.kind === 'semantic_heartbeat'" src/proxy/progress.js
-grep -Fq '\r${message}${padding}' src/proxy/progress.js
-grep -Fq "const lineBreak = this.liveLineActive ? '\r\n' : '\n';" src/proxy/progress.js
-! grep -Fq '\x1b' src/proxy/progress.js
+# V0.2.28.16 Claude Code native statusLine + append-only SSE liveness
+test -f V0.2.28.16-更新說明.md
+test -f scripts/cc-tool-proxy-statusline.js
+test -f test/runtime-telemetry.test.js
+test -f test/statusline-client.test.js
+grep -Fq 'V0.2.28.16 Claude Code Native StatusLine + SSE Liveness' README.md
+grep -Fq '/cc-tool-proxy/status/' src/services/proxy-server.js
+grep -Fq 'formatRuntimeStatusLine' src/i18n/response-language.js
+grep -Fq 'snapshotSession' src/proxy/runtime-telemetry.js
+grep -Fq 'PROGRESS_HEARTBEAT_MS' README.md
+grep -Fq 'refreshInterval' README.md
+! grep -Fq '\r${message}${padding}' src/proxy/progress.js
 
 # V0.2.28.14 multilingual runtime progress telemetry
 test -f V0.2.28.14-更新說明.md

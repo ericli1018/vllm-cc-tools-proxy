@@ -502,7 +502,7 @@ test('V0.2.28.12 startup banner is a removable proxy-owned progress block', asyn
   assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
 });
 
-test('V0.2.28.15 semantic heartbeat replaces the current live line with carriage return instead of appending history lines', async () => {
+test('V0.2.28.16 semantic heartbeat appends each liveness sample as a new visible line', async () => {
   const response = new FakeResponse();
   const progress = new ProgressStream(response, {
     visibleAfterMs: 0,
@@ -525,12 +525,11 @@ test('V0.2.28.15 semantic heartbeat replaces the current live line with carriage
 
   assert.equal(deltas[0], '目前處理進度：\n◐ 主模型開始思考 · 510 B');
   assert.equal(deltas[1], '\n◐ 主模型思考中 · 29s · 20.87 KB');
-  assert.match(deltas[2], /^\r◓ 主模型思考中 · 59s · 44\.02 KB · 790 B\/s/);
-  assert.doesNotMatch(deltas[2], /^\n/);
+  assert.equal(deltas[2], '\n◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s');
   assert.doesNotMatch(deltas.join(''), /\x1b\[/);
 });
 
-test('V0.2.28.15 milestone after a live line commits a newline and preserves the final live snapshot', async () => {
+test('V0.2.28.16 milestone after heartbeat appends normally without cursor control', async () => {
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000, locale: 'zh-TW' });
   await progress.open();
@@ -547,10 +546,10 @@ test('V0.2.28.15 milestone after a live line commits a newline and preserves the
     .map((data) => data.delta?.text || '');
 
   assert.equal(deltas[1], '\n◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s');
-  assert.equal(deltas[2], '\r\n◆ 主模型開始回應 · 44.61 KB');
+  assert.equal(deltas[2], '\n◆ 主模型開始回應 · 44.61 KB');
 });
 
-test('V0.2.28.15 shorter live replacement pads the remainder so stale terminal characters are erased without ANSI', async () => {
+test('V0.2.28.16 shorter heartbeat is appended without padding or ANSI cursor control', async () => {
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
   await progress.open();
@@ -565,10 +564,9 @@ test('V0.2.28.15 shorter live replacement pads the remainder so stale terminal c
     .map((line) => JSON.parse(line.slice(6)))
     .filter((data) => data?.type === 'content_block_delta')
     .map((data) => data.delta?.text || '');
-  const replacement = deltas[2];
-  assert.match(replacement, /^\rSHORT +$/);
-  assert.ok(replacement.length >= '\rLONG-LIVE-STATUS-12345'.length);
-  assert.doesNotMatch(replacement, /\x1b/);
+  const appended = deltas[2];
+  assert.equal(appended, '\nSHORT');
+  assert.doesNotMatch(appended, /\r|\x1b/);
 });
 
 test('V0.2.28.15 progress history containing carriage-return live updates is still stripped before model reuse', () => {
@@ -581,4 +579,27 @@ test('V0.2.28.15 progress history containing carriage-return live updates is sti
   }];
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, [{ type: 'text', text: '真正答案' }]);
+});
+
+test('V0.2.28.16 semantic heartbeat keeps append-only 30-second liveness lines and does not emit carriage-return redraws', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.update('◐ 主模型開始思考 · 511 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 主模型思考中 · 29s · 22.56 KB', { force: true, kind: 'semantic_heartbeat' });
+  await progress.update('◓ 主模型思考中 · 59s · 44.83 KB · 760 B/s', { force: true, kind: 'semantic_heartbeat' });
+  await progress.stop();
+
+  const deltas = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)))
+    .filter((data) => data?.type === 'content_block_delta')
+    .map((data) => data.delta?.text || '');
+  assert.equal(deltas[1], '\n◐ 主模型思考中 · 29s · 22.56 KB');
+  assert.equal(deltas[2], '\n◓ 主模型思考中 · 59s · 44.83 KB · 760 B/s');
+  assert.doesNotMatch(deltas.join(''), /\r|\x1b/);
 });

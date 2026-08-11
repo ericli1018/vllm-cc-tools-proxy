@@ -18,7 +18,7 @@ import { forwardTransparent } from '../proxy/bypass.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
-import { localizeProgressMessage, statusText } from '../i18n/response-language.js';
+import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '../i18n/response-language.js';
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
@@ -595,6 +595,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (modelRoundProgress.phase === phase) return;
       const previousPhase = modelRoundProgress.phase || previous_phase || 'waiting';
       modelRoundProgress.phase = phase;
+      runtimeTelemetry.updateRequest(requestId, { phase });
       const elapsedMs = modelRoundProgress.startedAt > 0
         ? Math.max(0, Date.now() - modelRoundProgress.startedAt)
         : 0;
@@ -635,6 +636,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (!Number.isFinite(value) || value <= 0) return;
       baseResponseBytes += value;
       lastBaseResponseChunkAt = Date.now();
+      runtimeTelemetry.observeBytes(requestId, baseResponseBytes, lastBaseResponseChunkAt);
       if (!modelRoundProgress.active || modelRoundProgress.firstByteNotified || baseResponseBytes <= modelRoundProgress.startBytes) return;
 
       modelRoundProgress.firstByteNotified = true;
@@ -724,12 +726,13 @@ export function createProxyServer(config, dependencies = {}) {
       });
       if (event === 'wait' || event === 'retry') {
         baseBusyState.waiting = true;
-        runtimeTelemetry.setBusy(requestId, true);
+        runtimeTelemetry.setBusy(requestId, true, { attempt });
         progressTiming.mode = 'busy';
         progressTiming.startedAt = Date.now() - waitedMs;
       } else if (event === 'accepted') {
         baseBusyState.waiting = false;
         runtimeTelemetry.setBusy(requestId, false);
+        runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', busyAttempt: 0 });
         baseBusyState.acceptedAt = Date.now();
         progressTiming.mode = 'model';
         progressTiming.startedAt = baseBusyState.acceptedAt;
@@ -782,6 +785,12 @@ export function createProxyServer(config, dependencies = {}) {
         log(config, level, event, { requestId, ...fields });
         if (event === 'final_language_repair_failed' && fields.backend === 'external' && fields.fallback === 'base') {
           externalLanguageRepairFailed = true;
+        }
+        if (event === 'final_language_repair_started') {
+          runtimeTelemetry.updateRequest(requestId, {
+            phase: 'language',
+            detail: fields.backend ? `${fields.backend}:${config.responseLanguage}` : config.responseLanguage,
+          });
         }
         if (event === 'final_language_repair_started' && progress) {
           const statusKey = fields.backend === 'base' && externalLanguageRepairFailed
@@ -878,6 +887,44 @@ export function createProxyServer(config, dependencies = {}) {
         });
       }
 
+      if (req.method === 'GET' && url.pathname.startsWith('/cc-tool-proxy/status/')) {
+        const encodedSessionId = url.pathname.slice('/cc-tool-proxy/status/'.length);
+        let sessionId = '';
+        try { sessionId = decodeURIComponent(encodedSessionId); } catch {}
+        const snapshot = runtimeTelemetry.snapshotSession(sessionId);
+        if (!sessionId || !snapshot.known) {
+          completed = true;
+          return sendJson(res, 404, { service: 'cc-tool-proxy', version: VERSION, status: 'unknown_session' });
+        }
+        const display = formatRuntimeStatusLine(config.responseLanguage, { version: VERSION, ...snapshot });
+        completed = true;
+        log(config, 'debug', 'runtime_status_read', {
+          requestId,
+          session_id: sessionId,
+          phase: snapshot.phase,
+          active: snapshot.active,
+        });
+        return sendJson(res, 200, {
+          service: 'cc-tool-proxy',
+          version: VERSION,
+          session_id: sessionId,
+          locale: config.responseLanguage,
+          active: snapshot.active,
+          phase: snapshot.phase,
+          underlying_phase: snapshot.underlyingPhase || snapshot.lastPhase || snapshot.phase,
+          elapsed_ms: snapshot.elapsedMs || 0,
+          phase_elapsed_ms: snapshot.phaseElapsedMs || 0,
+          received_bytes: snapshot.receivedBytes || 0,
+          throughput_bps: snapshot.throughputBps || 0,
+          idle_ms: snapshot.idleMs || 0,
+          busy_attempt: snapshot.busyAttempt || 0,
+          tool_name: snapshot.toolName || '',
+          detail: snapshot.detail || '',
+          pulse_index: snapshot.pulseIndex || 0,
+          display,
+        });
+      }
+
       const messagesPath = req.method === 'POST' ? canonicalMessagesPath(url.pathname) : '';
       const isMessagesPath = Boolean(messagesPath);
       if (!isMessagesPath) {
@@ -922,6 +969,9 @@ export function createProxyServer(config, dependencies = {}) {
         { headers: req.headers, body: original },
       );
       const clientSessionId = claudeCodeSessionId(req.headers, original);
+      if (messagesPath === '/v1/messages') {
+        releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
+      }
       const webFetchProcessorChild = messagesPath === '/v1/messages'
         ? parseClaudeCodeWebFetchProcessorChild(original)
         : null;
@@ -1065,6 +1115,10 @@ export function createProxyServer(config, dependencies = {}) {
         ? classifyClaudeCodeCompactRequest(original)
         : { compact: false, family: null, anchor: null };
       if (compactClassification.compact) {
+        runtimeTelemetry.updateRequest(requestId, {
+          phase: 'compact',
+          detail: config.contextCompact?.model || original.model || '',
+        });
         const compactRequest = prepareClaudeCodeCompactRequest(original);
         const removedToolCount = Array.isArray(original.tools) ? original.tools.length : 0;
         const externalCompactEnabled = Boolean(config.contextCompact?.enabled);
@@ -1128,9 +1182,6 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
-      if (messagesPath === '/v1/messages') {
-        releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
-      }
       const maybeShowStartupBanner = async (stream) => {
         if (!stream || original?.stream !== true || !clientSessionId) return false;
         if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
@@ -1225,6 +1276,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.startBytes = baseResponseBytes;
           modelRoundProgress.firstByteNotified = false;
           modelRoundProgress.phase = 'waiting';
+          runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
             details: { phase: 'managed_model_round_start', round: 1 },
           });
@@ -1393,12 +1445,20 @@ export function createProxyServer(config, dependencies = {}) {
         ...(dependencies.mediaAdapterDependencies || {}),
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
         onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
-        onVisionEvent: (event, fields) => log(
-          config,
-          event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info',
-          event,
-          { requestId, ...fields },
-        ),
+        onVisionEvent: (event, fields) => {
+          if (event === 'vision_upstream_request') {
+            runtimeTelemetry.updateRequest(requestId, {
+              phase: 'vision',
+              detail: config.vllmVisionModel || '',
+            });
+          }
+          log(
+            config,
+            event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info',
+            event,
+            { requestId, ...fields },
+          );
+        },
         mediaProgress,
       };
 
@@ -1633,6 +1693,7 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.startBytes = startBytes;
               modelRoundProgress.firstByteNotified = false;
               modelRoundProgress.phase = 'waiting';
+              runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
               modelRoundProgress.active = false;
@@ -1720,6 +1781,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.startBytes = baseResponseBytes;
           modelRoundProgress.firstByteNotified = false;
           modelRoundProgress.phase = 'waiting';
+          runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
           let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,

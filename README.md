@@ -1,6 +1,44 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.15 adds a carriage-return Progress Live-Line Renderer on top of V0.2.28.14 multilingual runtime telemetry while preserving V0.2.28.13 language-shift validation, the independent Language Processor, and independent Base connections.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.16 adds optional Claude Code native `statusLine` telemetry while restoring the reliable append-only 30-second SSE heartbeat used as the primary liveness channel.
+
+## V0.2.28.16 Claude Code Native StatusLine + SSE Liveness
+
+V0.2.28.16 uses two independent progress channels. The existing `PROGRESS_HEARTBEAT_MS` semantic heartbeat remains enabled (default 30000 ms) and continues to append visible progress lines inside the Claude response stream. This preserves the existing long-request liveness behavior even if the native status line is disabled, unavailable, or blocked by Claude Code trust settings.
+
+The optional native status line reads per-session, content-free telemetry from `GET /cc-tool-proxy/status/<session-id>`. The endpoint exposes only phase, elapsed time, byte/rate counters, busy attempt, short processor/tool labels, locale, and Proxy version. It never exposes prompts, model response text, tool arguments, API keys, or Processor source content, and polling the endpoint never calls Base vLLM or any auxiliary model.
+
+Install the bundled client on the Claude Code host:
+
+```bash
+cp scripts/cc-tool-proxy-statusline.js ~/.claude/cc-tool-proxy-statusline.js
+chmod +x ~/.claude/cc-tool-proxy-statusline.js
+```
+
+Then add this to `~/.claude/settings.json` (merge with existing settings rather than replacing unrelated keys):
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node ~/.claude/cc-tool-proxy-statusline.js",
+    "refreshInterval": 1,
+    "padding": 0
+  }
+}
+```
+
+The client uses `CC_TOOL_PROXY_URL` when set, otherwise it reuses `ANTHROPIC_BASE_URL`. A `/v1` or `/v1/messages` suffix is safe because the client normalizes the telemetry request back to the Proxy root. If Claude Code does not pass `ANTHROPIC_BASE_URL` into the status-line command environment, set `CC_TOOL_PROXY_URL` in the command explicitly.
+
+Example native status line:
+
+```text
+◆ CC TOOL PROXY 0.2.28.16 │ ◓ 思考中 │ 59s │ 44.83 KB │ 760 B/s
+```
+
+The thinking glyph rotates once per Claude Code status-line refresh (`◐ ◓ ◑ ◒`) without injecting extra Messages API traffic. Runtime phases include idle, waiting, thinking, response, tool, explicit VLLM busy, compact, language repair, vision, and observational stall. The display is localized for `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP`; unknown locales fall back to `en-US`.
+
+V0.2.28.15 carriage-return rendering is retired because Claude Code's TUI treats streamed text as UI content rather than direct terminal output. V0.2.28.16 therefore restores append-only heartbeat lines and delegates true redraw/animation to Claude Code's native `statusLine` renderer.
 
 ## V0.2.28.15 Progress Live-Line Renderer
 
