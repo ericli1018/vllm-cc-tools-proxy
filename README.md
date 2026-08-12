@@ -1,6 +1,26 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.1 hardens Vision quality recovery so a weak image result cannot silently switch the configured thinking mode or stall one multi-image request for the HTTP client's five-minute default timeout, while retaining V0.29.0 progressive PDF reading and the V0.2.28.20 large-media safety boundary.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.2 replaces heuristic short-text Vision quality guessing with an explicit machine-checkable output contract, while retaining V0.29.1 bounded recovery/timeout isolation, V0.29.0 progressive PDF reading, and the V0.2.28.20 large-media safety boundary.
+
+## V0.29.2 Vision Output Contract
+
+V0.29.2 removes output length as the primary Vision quality signal. Final evidence-producing Vision responses now use a machine-checkable first-line contract:
+
+```text
+VISUAL_STATUS: CONTENT
+VISUAL_STATUS: BLANK
+VISUAL_STATUS: UNREADABLE
+```
+
+For `CONTENT`, the model must also emit the exact marker `VISUAL_EVIDENCE:` followed by one or more Markdown evidence bullets beginning with `- `. The Proxy validates this structure rather than trying to infer answer quality from character count or broad natural-language keywords. A concise response such as `- LED.` is valid when the explicit `CONTENT` contract is satisfied; the old `too_short` rule is removed from the evidence-quality decision.
+
+`BLANK` is an explicit successful result. `VISUAL_STATUS: BLANK` is classified as **GOOD**, is cacheable, does not trigger quality recovery, and does not require the model to pad a genuinely empty page with invented detail. This is the expected result for a true blank PDF page or image with no meaningful visual content.
+
+`UNREADABLE` is an explicit non-usable observation. `VISUAL_STATUS: UNREADABLE` is classified as weak and receives the existing one bounded strict recovery attempt without changing `VLLM_VISION_THINK`. A final response with missing `VISUAL_STATUS`, an invalid status value, or `CONTENT` without `VISUAL_EVIDENCE:` plus at least one evidence bullet is also contract-invalid and receives the same bounded retry. Persistent invalid/unreadable output continues through the V0.29.1 unavailable-evidence path rather than being cached as successful evidence.
+
+The contract applies only to evidence-producing image/PDF Vision analysis. Internal PDF page routing keeps its separate exact `ROUTE: TEXT|DIAGRAM|SCHEMATIC|DENSE_PAGE` protocol through `outputContract=raw`, so the page classifier is not forced to emit `VISUAL_STATUS`.
+
+Diagnostics now include `output_contract`, `visual_status`, and `contract_valid` on Vision output-quality observations. Because the prompt and accepted evidence format changed, cache generations advance to `visual-v12` and `evidence-v8`; V0.29.2 therefore does not reuse successful Vision evidence cached under the older heuristic contract. No new ENV variable is added.
 
 ## V0.29.1 Vision Recovery Safety
 

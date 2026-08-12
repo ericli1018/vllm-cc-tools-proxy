@@ -20,35 +20,88 @@ const CROP_TOOL = Object.freeze({
   },
 });
 
-const SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Return Markdown only. Do not emit XML, HTML, reasoning delimiters, tool-call wrappers, function-result wrappers, chat-template tokens, or meta closing tags. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with evidence-focused Markdown.';
+const BASE_SYSTEM_PROMPT = 'You are a bounded document and image analysis worker. Return Markdown only. Do not emit XML, HTML, reasoning delimiters, tool-call wrappers, function-result wrappers, chat-template tokens, or meta closing tags. Do not invent unreadable content. Use request_image_crop only for a precise region, then finish with evidence-focused Markdown.';
 
+const EVIDENCE_OUTPUT_CONTRACT = `For every final non-tool visual response, the first non-empty line MUST be exactly one of:
+VISUAL_STATUS: CONTENT
+VISUAL_STATUS: BLANK
+VISUAL_STATUS: UNREADABLE
 
+If status is CONTENT, immediately include the exact line VISUAL_EVIDENCE: followed by one or more Markdown bullet lines beginning with "- " that state concrete visible evidence. Concise evidence is valid; do not pad the answer to satisfy a length target.
+If status is BLANK, do not invent content. The status line alone is valid, or it may be followed by a brief factual note.
+If status is UNREADABLE, do not guess. You may add VISUAL_REASON: followed by a brief reason.
+Do not return file metadata, image dimensions, or access-limit disclaimers as visual evidence.`;
 
-const VISION_RECOVERY_PROMPT = 'The previous visual response did not contain sufficient observable evidence. Inspect the supplied image directly and return concrete visible objects, text, colors, layout, spatial relationships, diagram elements, and uncertainty. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.';
+const SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${EVIDENCE_OUTPUT_CONTRACT}`;
+const RAW_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
 
-const REFUSAL_LIKE_PATTERNS = [
-  /\b(?:unable|cannot|can't|could not|couldn't|do not have access|don't have access|cannot access|can't access|unable to access|cannot view|can't view|unable to view|cannot see|can't see|unable to see|no image|image unavailable|image is unavailable|image was not provided|image not provided)\b/i,
-  /(?:無法|不能|看不到|未提供|沒有提供|無法存取|無法查看|無法辨識).{0,18}(?:圖片|圖像|影像|視覺|內容|檔案|畫面)?/u,
-];
+const VISION_RECOVERY_PROMPT = `The previous final visual response was empty, unreadable, or violated the required output contract. Inspect the supplied image directly and follow this contract exactly:
+VISUAL_STATUS: CONTENT | BLANK | UNREADABLE
+For CONTENT, include the exact line VISUAL_EVIDENCE: followed by one or more "- " evidence bullets.
+For BLANK, do not invent content; the status line alone is valid.
+For UNREADABLE, do not guess; you may add VISUAL_REASON:.
+Concise valid evidence is acceptable. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.`;
 
-const OBSERVABLE_SIGNAL_PATTERN = /\b(?:shows?|contains?|depicts?|features?|visible|appears?|see|left|right|background|foreground|upper|lower|center|red|blue|green|black|white|yellow|purple|orange|person|people|character|woman|man|girl|boy|cat|dog|chair|table|diagram|chart|schematic|text|logo|button|screen|building|car|tree|line|arrow|label)\b/i;
-const OBSERVABLE_CJK_PATTERN = /(?:顯示|可見|畫面|人物|角色|女性|男性|女孩|男孩|左側|右側|上方|下方|中央|背景|前景|紅色|藍色|綠色|黑色|白色|黃色|紫色|橘色|文字|標籤|圖表|示意圖|電路|箭頭|線條|按鈕|螢幕|建築|車輛|樹木)/u;
-const METADATA_SIGNAL_PATTERN = /\b(?:resolution|dimensions?|pixels?|px|file(?:name| size)?|image size|display size|aspect ratio)\b/i;
+const RAW_RECOVERY_PROMPT = 'The previous response was empty or invalid. Inspect the supplied image directly and follow the requested output format exactly. Do not add unrelated commentary.';
 
-function classifyVisionOutputQuality(content, { toolCallCount = 0 } = {}) {
+const VISUAL_STATUS_LINE_PATTERN = /^VISUAL_STATUS:\s*(CONTENT|BLANK|UNREADABLE)\s*$/i;
+const VISUAL_STATUS_PREFIX_PATTERN = /^VISUAL_STATUS:/i;
+const VISUAL_EVIDENCE_LINE_PATTERN = /^VISUAL_EVIDENCE:\s*$/i;
+const EVIDENCE_BULLET_PATTERN = /^\s*-\s+\S/;
+
+function parseVisionEvidenceContract(content) {
   const text = String(content || '').trim();
-  if (toolCallCount > 0) return { quality: 'tool_call', reasons: [], cacheable: false };
-  if (!text) return { quality: 'empty', reasons: ['empty'], cacheable: false };
+  const lines = text.split(/\r?\n/);
+  const firstIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstIndex < 0) return { visualStatus: null, contractValid: false, reasons: ['empty'] };
 
-  const reasons = [];
-  if (REFUSAL_LIKE_PATTERNS.some((pattern) => pattern.test(text))) reasons.push('refusal_like');
-  const observableSignal = OBSERVABLE_SIGNAL_PATTERN.test(text) || OBSERVABLE_CJK_PATTERN.test(text);
-  if (METADATA_SIGNAL_PATTERN.test(text) && !observableSignal && text.length < 180) reasons.push('metadata_only');
-  if (text.length < 24 && !observableSignal) reasons.push('too_short');
+  const firstLine = lines[firstIndex].trim();
+  const statusMatch = firstLine.match(VISUAL_STATUS_LINE_PATTERN);
+  if (!statusMatch) {
+    return {
+      visualStatus: null,
+      contractValid: false,
+      reasons: [VISUAL_STATUS_PREFIX_PATTERN.test(firstLine) ? 'visual_status_invalid' : 'visual_status_missing'],
+    };
+  }
 
-  return reasons.length > 0
-    ? { quality: 'weak', reasons, cacheable: false }
-    : { quality: 'good', reasons: [], cacheable: true };
+  const visualStatus = statusMatch[1].toLowerCase();
+  if (visualStatus === 'blank') return { visualStatus, contractValid: true, reasons: [] };
+  if (visualStatus === 'unreadable') {
+    return { visualStatus, contractValid: true, reasons: ['visual_status_unreadable'] };
+  }
+
+  const evidenceMarkerIndex = lines.findIndex((line, index) => index > firstIndex && VISUAL_EVIDENCE_LINE_PATTERN.test(line.trim()));
+  if (evidenceMarkerIndex < 0) {
+    return { visualStatus, contractValid: false, reasons: ['content_evidence_missing'] };
+  }
+  const hasEvidenceBullet = lines.slice(evidenceMarkerIndex + 1).some((line) => EVIDENCE_BULLET_PATTERN.test(line));
+  if (!hasEvidenceBullet) {
+    return { visualStatus, contractValid: false, reasons: ['content_evidence_missing'] };
+  }
+  return { visualStatus, contractValid: true, reasons: [] };
+}
+
+function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence' } = {}) {
+  const text = String(content || '').trim();
+  if (toolCallCount > 0) {
+    return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, contractValid: true };
+  }
+  if (!text) {
+    return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, contractValid: false };
+  }
+  if (outputContract === 'raw') {
+    return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, contractValid: true };
+  }
+
+  const contract = parseVisionEvidenceContract(text);
+  if (contract.visualStatus === 'blank' && contract.contractValid) {
+    return { quality: 'good', reasons: [], cacheable: true, ...contract };
+  }
+  if (contract.visualStatus === 'content' && contract.contractValid) {
+    return { quality: 'good', reasons: [], cacheable: true, ...contract };
+  }
+  return { quality: 'weak', cacheable: false, ...contract };
 }
 
 
@@ -191,6 +244,7 @@ export async function analyzeVisualAssets(assets, {
   onEvent = () => {},
   maxCropRounds = 3,
   allowCrops = true,
+  outputContract = 'evidence',
   timeoutMs = 120000,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
@@ -198,7 +252,7 @@ export async function analyzeVisualAssets(assets, {
   if (!['vllm', 'ollama'].includes(provider)) throw new HttpError(500, 'Unsupported visual provider.', { code: 'vision_provider_invalid' });
   const endpoint = endpointFor(baseUrl, provider);
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: outputContract === 'raw' ? RAW_SYSTEM_PROMPT : SYSTEM_PROMPT },
     userMessageForAssets(provider, assets, prompt),
   ];
   let cropCount = 0;
@@ -269,18 +323,24 @@ export async function analyzeVisualAssets(assets, {
       });
     }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    const quality = classifyVisionOutputQuality(sanitized.content, { toolCallCount: calls.length });
+    const quality = classifyVisionOutputQuality(sanitized.content, { toolCallCount: calls.length, outputContract });
     await onDiagnostic('vision_output_observed', {
       content_chars: sanitized.content.length,
       thinking_chars: typeof message?.thinking === 'string' ? message.thinking.length : 0,
       tool_call_count: calls.length,
       control_tag_count: controlTags.length,
       usable_content: quality.quality === 'good',
+      output_contract: outputContract,
+      visual_status: quality.visualStatus,
+      contract_valid: quality.contractValid,
     });
     await onDiagnostic('vision_output_quality', {
       quality: quality.quality,
       reasons: quality.reasons,
       cacheable: quality.cacheable,
+      output_contract: outputContract,
+      visual_status: quality.visualStatus,
+      contract_valid: quality.contractValid,
     });
 
     if (calls.length === 0 || !toolsEnabled) {
@@ -316,7 +376,7 @@ export async function analyzeVisualAssets(assets, {
           max_retries: 1,
           reason: quality.reasons[0] || quality.quality,
         });
-        messages.push({ role: 'user', content: VISION_RECOVERY_PROMPT });
+        messages.push({ role: 'user', content: outputContract === 'raw' ? RAW_RECOVERY_PROMPT : VISION_RECOVERY_PROMPT });
         continue;
       }
       if (quality.quality === 'empty') {

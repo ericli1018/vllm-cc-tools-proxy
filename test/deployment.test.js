@@ -307,3 +307,16 @@ test('V0.2.28.12 deployment exposes independent Language Processor settings and 
   assert.match(readme, /SESSIONS.*ACTIVE.*WAIT/is);
   assert.match(readme, /session.*once/i);
 });
+
+test('README documents V0.29.2 Vision Output Contract', () => {
+  assert.match(readme, /V0\.29\.2 Vision Output Contract/i);
+  assert.match(readme, /VISUAL_STATUS:\s*CONTENT/i);
+  assert.match(readme, /VISUAL_STATUS:\s*BLANK/i);
+  assert.match(readme, /VISUAL_STATUS:\s*UNREADABLE/i);
+  assert.match(readme, /VISUAL_EVIDENCE:/i);
+  assert.match(readme, /BLANK.*GOOD.*cache/is);
+  assert.match(readme, /missing.*VISUAL_STATUS.*retry/is);
+  assert.match(readme, /too_short.*removed|removed.*too_short/is);
+  assert.match(readme, /visual-v12/);
+  assert.match(readme, /evidence-v8/);
+});

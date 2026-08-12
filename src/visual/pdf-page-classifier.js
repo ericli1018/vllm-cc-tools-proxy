@@ -26,6 +26,7 @@ export async function classifyPdfPage(asset, {
     const result = await analyzeVisualAssets([asset], {
       ...visionOptions,
       allowCrops: false,
+      outputContract: 'raw',
       prompt: CLASSIFIER_PROMPT,
     });
     return parsePageClassification(result?.markdown);

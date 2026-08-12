@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.29.2 - 2026-08-12
+
+- Replaced heuristic short-text Vision quality classification with the explicit `VISUAL_STATUS: CONTENT|BLANK|UNREADABLE` final-response contract.
+- Required `VISUAL_EVIDENCE:` plus at least one Markdown evidence bullet for `CONTENT`; removed `too_short` from the evidence-quality decision.
+- Treated explicit `BLANK` as GOOD/cacheable without retry, while `UNREADABLE`, missing/invalid status, and `CONTENT` without evidence remain bounded recovery cases.
+- Added raw-output mode for the internal PDF page router so its `ROUTE:` protocol remains independent from the evidence contract.
+- Added `output_contract`, `visual_status`, and `contract_valid` Vision quality diagnostics.
+- Advanced cache generations to `visual-v12` / `evidence-v8` to isolate pre-contract Vision evidence.
+- Preserved V0.29.1 strict THINK preservation, 120-second Vision deadline, per-image failure isolation, and V0.29.0 progressive PDF reading.
+
 ## 0.29.1 - 2026-08-12
 
 - Preserved `VLLM_VISION_THINK` across the one bounded Vision quality-recovery retry instead of forcing `think=true` after a weak/empty first response.
