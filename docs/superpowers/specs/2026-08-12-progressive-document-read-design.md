@@ -1,0 +1,3 @@
+# V0.29.0 Progressive Document Read Design
+
+Large unscoped PDFs must not be expanded into Base-model context in one pass. PDFs above 20 pages produce a bounded local Document Map; detailed evidence is retrieved with native Claude Code `Read.pages`. Original PDFs from Read tool results are persisted under the existing cache root using opaque source-reference SHA-256 and content SHA-256 so later focused reads can use the original physical page source. Small PDFs and focused pages retain the existing parser/Vision pipeline. Document-map evidence is explicitly non-exhaustive and requires follow-up page reads for unsupported details. No new ENV, vector retrieval, Office bridge, or new Claude Code tool is introduced.

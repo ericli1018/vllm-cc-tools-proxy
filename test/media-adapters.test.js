@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { decodeBase64Media, detectMediaType } from '../src/lib/media.js';
 import { createMediaAdapters } from '../src/proxy/media-adapters.js';
 import { MediaAnalysisRegistry } from '../src/media/analysis-registry.js';
+import { scopePdfDocumentCacheKey } from '../src/cache/cache-key.js';
 
 test('decodeBase64Media strictly validates size and PDF magic', () => {
   const pdf = Buffer.from('%PDF-1.7\n');
@@ -64,7 +65,7 @@ test('document adapter returns cached normalized block without reading or parsin
     limits: { maxDecodedBytes: 1024, maxOutputChars: 1000 },
     vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
   }, undefined, () => assert.fail('cache hit must not emit progress'), {
-    mediaCache: { get: async (key) => key === 'a'.repeat(64) ? { block: cachedBlock } : null, set: async () => true },
+    mediaCache: { get: async (key) => key === scopePdfDocumentCacheKey('a'.repeat(64), null) ? { block: cachedBlock } : null, set: async () => true },
     parsePdf: async () => { parses += 1; throw new Error('must not parse'); },
   });
   const output = await adapters.adaptDocument({
@@ -99,7 +100,7 @@ test('concurrent identical document misses share one parser analysis and cache r
   const [first, second] = await Promise.all([adapters.adaptDocument(structuredClone(block)), adapters.adaptDocument(structuredClone(block))]);
   assert.equal(parses, 1);
   assert.deepEqual(first, second);
-  assert.deepEqual((await mediaCache.get('b'.repeat(64))).block, first);
+  assert.deepEqual((await mediaCache.get(scopePdfDocumentCacheKey('b'.repeat(64), null))).block, first);
 });
 
 test('cache write failure does not discard the current document analysis result', async () => {
@@ -297,4 +298,69 @@ test('V0.2.28.20 rejects oversized Base64 before validating the full payload', (
     () => decodeBase64Media(oversizedInvalid, 1024, 'application/pdf'),
     (error) => error?.code === 'media_too_large' && error?.status === 413,
   );
+});
+
+test('V0.29.0 large unscoped document is formatted as document_map evidence and uses progressive cache namespace', async () => {
+  const pdf = Buffer.from('%PDF-1.7\nlarge-map');
+  const baseKey = '1'.repeat(64);
+  const legacy = { block: { type: 'text', text: 'LEGACY WHOLE DOCUMENT' } };
+  const seenKeys = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 1024, maxPdfPages: 20, maxOutputChars: 5000, nativeTextMinCharsPerPage: 80 },
+    cache: { pipelineVersion: 'media-v8', visualPromptVersion: 'visual-v10', evidenceContractVersion: 'evidence-v7' },
+    resourceProfile: 'default', vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '',
+  }, undefined, undefined, {
+    mediaProgress: { contextForPath: () => ({ filename: 'manual.pdf', readSourceRef: 'a'.repeat(64) }) },
+    mediaCache: {
+      get: async (key) => { seenKeys.push(key); return key === baseKey ? legacy : null; },
+      set: async () => true,
+    },
+    parsePdf: async () => ({
+      parser: 'poppler-document-map', document_mode: 'map', page_count: 80, processed_pages: 10,
+      sampled_pages: [1, 2, 10, 40, 80], visual_used: false, visual_batch_count: 0,
+      markdown: '# Document Map\n- p.1: Cover', warnings: ['document_map_progressive_disclosure'], truncated: false,
+    }),
+  });
+  const output = await adapters.adaptDocument({
+    type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64'), cache_key: baseKey, media_sha256: 'c'.repeat(64) },
+  }, { path: ['messages', 0, 'content', 0] });
+  assert.match(output.text, /kind=document_map/);
+  assert.match(output.text, /document_mode: "map"/);
+  assert.doesNotMatch(output.text, /LEGACY WHOLE DOCUMENT/);
+  assert.equal(seenKeys.includes(baseKey), false, 'v0.29 unscoped PDF must not query the legacy base cache key');
+});
+
+test('V0.29.0 unscoped Read persists original PDF and later Read.pages prefers cached original source', async () => {
+  const original = Buffer.from('%PDF-1.7\nORIGINAL-FULL-PDF');
+  const subset = Buffer.from('%PDF-1.7\nCLAUDE-SUBSET-PDF');
+  const sourceRef = 'd'.repeat(64);
+  let stored = null;
+  const sourceCache = {
+    resolve: async (ref) => ref === sourceRef && stored ? { ...stored, buffer: Buffer.from(stored.buffer) } : null,
+    put: async (value) => { stored = { ...value, buffer: Buffer.from(value.buffer) }; return true; },
+  };
+  const parsedBuffers = [];
+  const pageScopes = [];
+  let tracked = { filename: 'manual.pdf', readSourceRef: sourceRef, pageScope: null };
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 4096, maxPdfPages: 20, maxOutputChars: 5000, nativeTextMinCharsPerPage: 80 },
+    cache: { pipelineVersion: 'media-v8', visualPromptVersion: 'visual-v10', evidenceContractVersion: 'evidence-v7' },
+    resourceProfile: 'default', vllmVisionUrl: '', vllmVisionModel: '', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionApiProtocol: 'openai-chat', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaProgress: { contextForPath: () => tracked },
+    documentSourceCache: sourceCache,
+    parsePdf: async (buffer, options) => {
+      parsedBuffers.push(Buffer.from(buffer)); pageScopes.push(options.pageScope);
+      if (options.pageScope) return { parser:'poppler',document_mode:'focused',page_count:100,processed_pages:1,requested_pages:[42],page_scope_mode:'full_source',visual_used:false,visual_batch_count:0,markdown:'PAGE 42 FROM ORIGINAL',warnings:[],truncated:false };
+      return { parser:'poppler-document-map',document_mode:'map',page_count:100,processed_pages:10,sampled_pages:[1,10,100],visual_used:false,visual_batch_count:0,markdown:'MAP',warnings:[],truncated:false };
+    },
+  });
+  await adapters.adaptDocument({ type:'document', source:{ type:'base64', media_type:'application/pdf', data:original.toString('base64'), media_sha256:'e'.repeat(64) } }, { path:['messages',0,'content',0] });
+  assert.deepEqual(stored.buffer, original);
+  tracked = { filename:'manual.pdf', readSourceRef:sourceRef, pageScope:{ pages:[42], canonical:'42' } };
+  const focused = await adapters.adaptDocument({ type:'document', source:{ type:'base64', media_type:'application/pdf', data:subset.toString('base64'), media_sha256:'f'.repeat(64) } }, { path:['messages',0,'content',0] });
+  assert.deepEqual(parsedBuffers[1], original, 'focused Read.pages must parse the persisted full original PDF when available');
+  assert.deepEqual(pageScopes[1], { pages:[42], canonical:'42' });
+  assert.match(focused.text, /PAGE 42 FROM ORIGINAL/);
+  assert.match(focused.text, /requested_pages: \[42\]/);
 });

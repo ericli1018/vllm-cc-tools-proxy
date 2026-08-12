@@ -179,11 +179,13 @@ export function loadConfig(env = process.env) {
   if (vllmVisionUrl && !vllmVisionModel) throw new Error('VLLM_VISION_MODEL is required when VLLM_VISION_URL is set');
   if (vllmVisionModel && !vllmVisionUrl) throw new Error('VLLM_VISION_URL is required when VLLM_VISION_MODEL is set');
 
+  const configuredMaxPdfPages = intValue(env.MAX_PDF_PAGES, profile.maxPdfPages, 'MAX_PDF_PAGES', { min: 1, max: 5000 });
   const limits = Object.freeze({
     ...profile,
     maxRequestBytes: intValue(env.MAX_REQUEST_BYTES, profile.maxRequestBytes, 'MAX_REQUEST_BYTES', { min: 1024 }),
     maxDecodedBytes: intValue(env.MAX_DECODED_BYTES, profile.maxDecodedBytes, 'MAX_DECODED_BYTES', { min: 1024 }),
-    maxPdfPages: intValue(env.MAX_PDF_PAGES, profile.maxPdfPages, 'MAX_PDF_PAGES', { min: 1, max: 5000 }),
+    maxPdfPages: configuredMaxPdfPages,
+    documentMapPageThreshold: Math.min(20, configuredMaxPdfPages),
     maxImagePixels: intValue(env.MAX_IMAGE_PIXELS, profile.maxImagePixels, 'MAX_IMAGE_PIXELS', { min: 1 }),
     maxOutputChars: intValue(env.MAX_OUTPUT_CHARS, profile.maxOutputChars, 'MAX_OUTPUT_CHARS', { min: 1024 }),
     processTimeoutMs: intValue(env.PROCESS_TIMEOUT_MS, profile.processTimeoutMs, 'PROCESS_TIMEOUT_MS', { min: 1000 }),
@@ -205,9 +207,9 @@ export function loadConfig(env = process.env) {
     maxBytes: explicitCacheMb * MiB,
     retentionMs: cacheProfile.retentionDays * 24 * 60 * 60 * 1000,
     limitMode: explicitCacheMb === 0 ? 'filesystem' : 'bounded',
-    pipelineVersion: 'media-v7',
+    pipelineVersion: 'media-v8',
     visualPromptVersion: 'visual-v10',
-    evidenceContractVersion: 'evidence-v6',
+    evidenceContractVersion: 'evidence-v7',
   });
 
   return Object.freeze({

@@ -1,6 +1,34 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.20 hardens Claude Code Read/media requests against large Base64 and pathological content structures while preserving the V0.2.28.19 unified progress/statusLine telemetry contract.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.0 adds progressive PDF document reading so large manuals and schematics no longer need to be expanded into the Base model context in one pass, while retaining the V0.2.28.20 large-media safety boundary and V0.2.28.19 unified progress/statusLine telemetry.
+
+## V0.29.0 Progressive Document Read + Persistent Source Cache
+
+V0.29.0 changes unscoped Claude Code `Read` behavior for large PDFs into **progressive disclosure**. PDFs of up to 20 source pages keep the existing full text/Vision pipeline. An unscoped PDF above 20 pages is inspected locally with Poppler and returns a bounded `kind=document_map` evidence block instead of parsing every page into the Base-model request. The map samples at most 24 physical pages, includes document metadata and page landmarks, and explicitly states that it is an index rather than complete source evidence.
+
+The evidence contract now tells the Base model that `kind=document_map` is **not full source evidence**. If the requested answer depends on details that are not explicitly present in the map, the model must use Claude Code `Read` again with `Read.pages` for the same file. Focused `Read.pages` keeps the existing `TEXT` / `DIAGRAM` / `SCHEMATIC` / `DENSE_PAGE` routing, high-resolution PDF crop path, and page-scoped normalized evidence.
+
+For normal Claude Code `Read` tool results, the Proxy records only an opaque SHA-256 `readSourceRef` derived from the source reference and persists the original PDF under the existing `MEDIA_CACHE_DIR` storage tree. The stored blob is named by content SHA-256, not by the user's local path. A later `Read.pages` for the same source reference first resolves that persistent original PDF and reads the requested physical page from it; if the source cache is unavailable, the Proxy safely falls back to the PDF payload returned by Claude Code and retains the existing subset-page mapping behavior.
+
+The unscoped PDF normalized-evidence cache now uses a dedicated progressive-document namespace, so V0.29.0 cannot accidentally reuse a V0.2.28.20 whole-document cache entry. The media pipeline generation is `media-v8` and the evidence contract generation is `evidence-v7`; focused page scopes remain independently keyed. No new ENV variable is added: the progressive map threshold is an internal 20-page policy, while existing `MAX_PDF_PAGES` continues to bound detailed focused processing.
+
+The first large scanned-PDF `Read` does not require a Vision endpoint merely to build the document map. Vision is invoked only when the model subsequently requests detailed pages that need visual interpretation. V0.29.0 intentionally does not add embeddings, BM25, a vector database, Office-document routing, or a new Claude Code tool; those remain separate future retrieval layers.
+
+Runtime flow:
+
+```text
+Claude Code Read(large PDF)
+  -> Proxy media safety / SHA-256
+  -> persistent original PDF source cache
+  -> local Document Map (<=24 sampled landmarks)
+  -> Base model receives map only
+  -> model needs detail
+  -> Claude Code Read(..., pages="N-M")
+  -> Proxy resolves original source cache when available
+  -> existing detailed text / table / Vision / schematic pipeline
+  -> page-scoped evidence cache
+  -> Base model receives only requested evidence
+```
 
 ## V0.2.28.20 Large Payload & Media Safety
 

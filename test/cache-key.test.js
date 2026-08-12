@@ -45,3 +45,15 @@ test('V0.2.27.2 page-scoped cache key is isolated and canonical', () => {
   assert.notEqual(page42, page43);
   assert.equal(scopeMediaCacheKey(baseKey, null), baseKey);
 });
+
+import { scopePdfDocumentCacheKey } from '../src/cache/cache-key.js';
+
+test('V0.29.0 unscoped PDF cache uses a progressive-document namespace distinct from legacy whole-document cache', () => {
+  const baseKey = 'b'.repeat(64);
+  const progressive = scopePdfDocumentCacheKey(baseKey, null);
+  const page42 = scopePdfDocumentCacheKey(baseKey, { pages: [42], canonical: '42' });
+  assert.match(progressive, /^[a-f0-9]{64}$/);
+  assert.notEqual(progressive, baseKey);
+  assert.equal(page42, scopeMediaCacheKey(baseKey, { pages: [42], canonical: '42' }));
+  assert.notEqual(progressive, page42);
+});

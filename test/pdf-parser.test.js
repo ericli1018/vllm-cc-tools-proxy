@@ -416,3 +416,53 @@ test('V0.2.27.2 rejects a focused scope that the received PDF cannot represent',
     (error) => error?.code === 'pdf_page_scope_unavailable',
   );
 });
+
+test('V0.29.0 unscoped large PDF returns a bounded document map without Vision or whole-document extraction', async () => {
+  const calls = [];
+  const fakeRunner = async (command, args) => {
+    calls.push({ command, args: [...args] });
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Title: Large Manual\nPages: 50\nEncrypted: no\nPage size: 595 x 842 pts\n') };
+    if (command === 'pdftotext') {
+      const page = Number(args[args.indexOf('-f') + 1]);
+      const text = page <= 4
+        ? `Section ${page} Overview\nTopic for page ${page}\n`
+        : `Chapter ${Math.ceil(page / 10)} Details\nPage ${page} material\n`;
+      return { stdout: Buffer.from(text) };
+    }
+    throw new Error(`unexpected command in document-map path: ${command}`);
+  };
+  const result = await parsePdf(Buffer.from('%PDF-1.7\nlarge'), {
+    limits: { ...limits, maxPdfPages: 20, maxOutputChars: 100000 },
+    runner: fakeRunner,
+    documentMapPageThreshold: 20,
+    vllmVisionUrl: '', vllmVisionModel: '',
+  });
+  assert.equal(result.document_mode, 'map');
+  assert.equal(result.page_count, 50);
+  assert.ok(result.processed_pages > 0 && result.processed_pages <= 24);
+  assert.equal(result.visual_used, false);
+  assert.match(result.markdown, /Document Map/);
+  assert.match(result.markdown, /Read\.pages/);
+  assert.match(result.markdown, /p\.1:/);
+  assert.match(result.markdown, /p\.50:/);
+  assert.equal(calls.some((entry) => ['pdftoppm', 'pdfimages'].includes(entry.command)), false);
+  assert.equal(calls.filter((entry) => entry.command === 'pdftotext').length, result.processed_pages);
+});
+
+test('V0.29.0 unscoped large scanned PDF can return a map without a configured Vision endpoint', async () => {
+  const fakeRunner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 200\nEncrypted: no\nPage size: 595 x 842 pts\n') };
+    if (command === 'pdftotext') return { stdout: Buffer.from('') };
+    throw new Error(`unexpected command: ${command} ${args.join(' ')}`);
+  };
+  const result = await parsePdf(Buffer.from('%PDF-1.7\nscan'), {
+    limits: { ...limits, maxPdfPages: 20, maxOutputChars: 100000 },
+    runner: fakeRunner,
+    documentMapPageThreshold: 20,
+    vllmVisionUrl: '', vllmVisionModel: '',
+  });
+  assert.equal(result.document_mode, 'map');
+  assert.equal(result.page_count, 200);
+  assert.match(result.markdown, /no native text detected/i);
+  assert.match(result.warnings.join(','), /document_map_low_text/);
+});

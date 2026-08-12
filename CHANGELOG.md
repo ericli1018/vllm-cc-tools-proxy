@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.0 - 2026-08-12
+
+- Added progressive PDF disclosure: unscoped PDFs above 20 pages return a bounded Document Map instead of full-document evidence.
+- Added persistent original-PDF source cache keyed by opaque Read source reference and content SHA-256; focused `Read.pages` reuses the cached original when available.
+- Added `kind=document_map` evidence semantics requiring a follow-up `Read.pages` before evidence-dependent claims beyond the map.
+- Added a dedicated unscoped progressive PDF cache namespace; bumped media cache generation to `media-v8` and evidence generation to `evidence-v7`.
+- Large scanned PDFs can build the initial map without Vision; detailed requested pages retain the existing text/diagram/schematic Vision routing.
+- No new ENV variables. Embedding/BM25/vector retrieval and Office documents remain out of scope for this release.
+
 ## 0.2.28.20 - 2026-08-12
 
 - Replaced the large whole-string Base64 regex with size-first iterative Base64 validation, preventing V8 `Maximum call stack size exceeded` failures on multi-MiB PDF and image payloads.

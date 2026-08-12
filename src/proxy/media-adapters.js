@@ -1,12 +1,12 @@
 import fs from 'node:fs/promises';
 import { HttpError } from '../lib/http.js';
-import { scopeMediaCacheKey } from '../cache/cache-key.js';
+import { buildMediaCacheKey, scopeMediaCacheKey, scopePdfDocumentCacheKey } from '../cache/cache-key.js';
 import { boundedText, decodeBase64Media, detectMediaType } from '../lib/media.js';
 import { parsePdf as defaultParsePdf } from '../parsers/pdf.js';
 import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage } from '../parsers/image.js';
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
-import { formatDocumentEvidence, formatImageEvidence } from './evidence-contract.js';
+import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
 export function createMediaAdapters(config, signal, onProgress = () => {}, dependencies = {}) {
@@ -17,6 +17,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const acquireVision = dependencies.acquireVision || (async () => () => {});
   const allowedMediaPaths = dependencies.allowedMediaPaths || new Set();
   const mediaCache = dependencies.mediaCache || null;
+  const documentSourceCache = dependencies.documentSourceCache || null;
   const analysisRegistry = dependencies.analysisRegistry || null;
   const preloadedCache = dependencies.preloadedCache || new Map();
   const onCacheEvent = dependencies.onCacheEvent || (() => {});
@@ -46,6 +47,19 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
     }
     return buffer;
   };
+
+  const mediaFingerprint = (buffer, mediaType = 'application/pdf') => buildMediaCacheKey({
+    buffer,
+    mediaType,
+    pipelineVersion: config.cache?.pipelineVersion || 'media-v8',
+    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v10',
+    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v7',
+    visionModel: config.vllmVisionModel || '',
+    visionProvider: config.vllmVisionProvider || 'vllm',
+    visionApiProtocol: config.vllmVisionApiProtocol || 'openai-chat',
+    visionThink: Boolean(config.vllmVisionThink),
+    resourceProfile: config.resourceProfile || 'default',
+  });
 
   const analyzeWithAdmission = async (assets, options) => {
     const release = await acquireVision({ signal: options?.signal || signal });
@@ -99,13 +113,36 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         throw new HttpError(422, tracked.pageScopeError.message || 'Invalid PDF page scope.', { code: tracked.pageScopeError.code || 'invalid_pdf_page_scope' });
       }
       const pageScope = tracked?.pageScope || null;
-      const key = scopeMediaCacheKey(block.source.cache_key || '', pageScope);
-      const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'document.pdf';
+      const readSourceRef = tracked?.readSourceRef || '';
+      let cachedOriginal = null;
+      if (pageScope && readSourceRef && documentSourceCache) {
+        try { cachedOriginal = await documentSourceCache.resolve(readSourceRef); }
+        catch (error) { onDiagnostic('document_source_cache_read_failed', { code: error?.code || error?.name || 'error' }); }
+      }
+      let baseKey = block.source.cache_key || '';
+      let effectiveSourceSha256 = block.source.media_sha256 || '';
+      if (cachedOriginal?.buffer) {
+        const fingerprint = mediaFingerprint(cachedOriginal.buffer, 'application/pdf');
+        baseKey = fingerprint.key;
+        effectiveSourceSha256 = cachedOriginal.sourceSha256 || fingerprint.mediaSha256;
+      }
+      const key = scopePdfDocumentCacheKey(baseKey, pageScope);
+      const filename = tracked?.filename || block.source.filename || block.title || context.filename || cachedOriginal?.filename || 'document.pdf';
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
-      return cachedAnalysis(key, () => readSource(block.source, 'application/pdf'), async (analysisSignal, buffer) => {
+      return cachedAnalysis(key, () => cachedOriginal?.buffer ? Buffer.from(cachedOriginal.buffer) : readSource(block.source, 'application/pdf'), async (analysisSignal, buffer) => {
+        const fingerprint = mediaFingerprint(buffer, 'application/pdf');
+        if (!effectiveSourceSha256) effectiveSourceSha256 = fingerprint.mediaSha256;
+        if (!pageScope && readSourceRef && documentSourceCache) {
+          try {
+            await documentSourceCache.put({ readSourceRef, sourceSha256: fingerprint.mediaSha256, buffer, filename });
+          } catch (error) {
+            onDiagnostic('document_source_cache_write_failed', { code: error?.code || error?.name || 'error' });
+          }
+        }
         await reportProgress('正在解析 PDF…', { phase: 'pdf_start' });
         const result = await parsePdf(buffer, {
           limits: config.limits, signal: analysisSignal, onProgress: reportProgress, pageScope,
+          documentMapPageThreshold: config.limits?.documentMapPageThreshold ?? 20,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
           vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
@@ -113,27 +150,39 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         const bounded = boundedText(result.markdown || '', maxOutputChars);
         const warnings = [...(result.warnings || []), ...(bounded.truncated ? ['proxy_output_char_limit'] : [])];
         diagnoseSourceControlTags(bounded.text);
+        const isDocumentMap = result.document_mode === 'map';
         const normalizedBlock = {
           type: 'text',
-          text: formatDocumentEvidence({
-            filename,
-            sourceSha256: block.source.media_sha256 || '',
-            parser: result.parser || 'unknown',
-            pages: result.page_count ?? null,
-            processedPages: result.processed_pages ?? result.page_count ?? null,
-            requestedPages: result.requested_pages || null,
-            pageScopeMode: result.page_scope_mode || '',
-            visualBatchCount: result.visual_batch_count ?? 0,
-            visualUsed: Boolean(result.visual_used),
-            truncated: Boolean(result.truncated || bounded.truncated),
-            content: bounded.text,
-            warnings,
-          }),
+          text: isDocumentMap
+            ? formatDocumentMapEvidence({
+              filename,
+              sourceSha256: effectiveSourceSha256,
+              parser: result.parser || 'poppler-document-map',
+              pages: result.page_count ?? null,
+              sampledPages: result.sampled_pages || [],
+              content: bounded.text,
+              warnings,
+            })
+            : formatDocumentEvidence({
+              filename,
+              sourceSha256: effectiveSourceSha256,
+              parser: result.parser || 'unknown',
+              pages: result.page_count ?? null,
+              processedPages: result.processed_pages ?? result.page_count ?? null,
+              requestedPages: result.requested_pages || null,
+              pageScopeMode: result.page_scope_mode || '',
+              visualBatchCount: result.visual_batch_count ?? 0,
+              visualUsed: Boolean(result.visual_used),
+              truncated: Boolean(result.truncated || bounded.truncated),
+              content: bounded.text,
+              warnings,
+            }),
         };
         return {
           block: normalizedBlock,
           metadata: {
-            mediaType: 'application/pdf', pages: result.page_count ?? null, processedPages: result.processed_pages ?? result.page_count ?? null,
+            mediaType: 'application/pdf', documentMode: result.document_mode || 'full', pages: result.page_count ?? null,
+            processedPages: result.processed_pages ?? result.page_count ?? null, sampledPages: result.sampled_pages || [],
             requestedPages: result.requested_pages || null, pageScopeMode: result.page_scope_mode || '',
             visualBatchCount: result.visual_batch_count ?? 0, parser: result.parser || 'unknown',
             visualUsed: Boolean(result.visual_used), warnings, truncated: Boolean(result.truncated || bounded.truncated),

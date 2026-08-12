@@ -34,6 +34,115 @@ function parsePdfInfo(text) {
   };
 }
 
+
+function documentMapSamplePages(pageCount, maxSamples = 24) {
+  const total = Math.max(1, Number(pageCount) || 1);
+  const limit = Math.max(1, Math.min(maxSamples, total));
+  const selected = new Set();
+  for (let page = 1; page <= Math.min(8, total, limit); page += 1) selected.add(page);
+  if (selected.size < limit) selected.add(total);
+  if (selected.size < limit && total > 1) selected.add(Math.max(1, total - 1));
+  if (selected.size < limit) {
+    const slots = limit - selected.size;
+    for (let index = 1; index <= slots * 2 && selected.size < limit; index += 1) {
+      const page = Math.max(1, Math.min(total, Math.round(1 + ((total - 1) * index) / (slots * 2 + 1))));
+      selected.add(page);
+    }
+  }
+  for (let page = 1; selected.size < limit && page <= total; page += 1) selected.add(page);
+  return [...selected].sort((a, b) => a - b);
+}
+
+function documentMapHeading(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    .filter((line) => line.length >= 3 && line.length <= 180 && !/^[-–—_\d\s.]+$/.test(line));
+  if (lines.length === 0) return '(no native text detected; use Read.pages for this page)';
+  return lines.slice(0, 2).join(' — ').slice(0, 260);
+}
+
+function documentMapTocEntries(samples) {
+  const entries = [];
+  const seen = new Set();
+  for (const sample of samples.filter((entry) => entry.page <= 12)) {
+    for (const raw of String(sample.text || '').split(/\r?\n/)) {
+      const line = raw.replace(/\s+/g, ' ').trim();
+      const match = line.match(/^(.{3,140}?)(?:\s+\.{2,}\s*|\s{2,})(\d{1,6})$/);
+      if (!match) continue;
+      const label = match[1].trim();
+      const page = Number(match[2]);
+      if (!label || !Number.isInteger(page) || page < 1) continue;
+      const key = `${label.toLowerCase()}|${page}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      entries.push({ label, page });
+      if (entries.length >= 40) return entries;
+    }
+  }
+  return entries;
+}
+
+async function buildPdfDocumentMap(inputPath, info, { limits, signal, runner, onProgress }) {
+  const sampledPages = documentMapSamplePages(info.pages, 24);
+  const samples = [];
+  let nativeTextPages = 0;
+  for (let index = 0; index < sampledPages.length; index += 1) {
+    const page = sampledPages[index];
+    const textResult = await runner('pdftotext', ['-f', String(page), '-l', String(page), '-layout', '-nopgbrk', inputPath, '-'], {
+      timeoutMs: limits.processTimeoutMs, signal, maxOutputBytes: Math.min(256 * 1024, limits.maxOutputChars * 2),
+    });
+    const text = textResult.stdout.toString('utf8').replace(/\f/g, '').trim();
+    if (text.length >= limits.nativeTextMinCharsPerPage) nativeTextPages += 1;
+    samples.push({ page, text, heading: documentMapHeading(text) });
+    await onProgress(`正在建立 PDF 文件地圖 ${index + 1}/${sampledPages.length}…`, {
+      phase: 'pdf_document_map', completed: index + 1, total: sampledPages.length,
+      received_pdf_pages: info.pages, processed_pdf_pages: index + 1, page,
+    });
+  }
+  const toc = documentMapTocEntries(samples);
+  const parts = [
+    '# Document Map',
+    `- Source pages: ${info.pages}`,
+    ...(info.title ? [`- Title: ${info.title}`] : []),
+    '- Mode: progressive disclosure',
+    '- This map is a navigation/index view, not the complete document.',
+  ];
+  if (toc.length) {
+    parts.push('', '## Detected contents / section hints');
+    for (const entry of toc) parts.push(`- ${entry.label} — listed page ${entry.page}`);
+  }
+  parts.push('', '## Page landmarks');
+  for (const sample of samples) parts.push(`- p.${sample.page}: ${sample.heading}`);
+  parts.push(
+    '',
+    '## Continue reading',
+    '- Use Claude Code Read on the same file with Read.pages (for example pages="42" or pages="40-45") when detailed source evidence is required.',
+    '- Do not infer unsampled page details from this map. Read the relevant page range before making evidence-dependent claims.',
+  );
+  const bounded = boundedText(parts.join('\n'), Math.min(limits.maxOutputChars, 120_000));
+  const warnings = ['document_map_progressive_disclosure'];
+  if (nativeTextPages === 0) warnings.push('document_map_low_text');
+  if (bounded.truncated) warnings.push('proxy_output_char_limit');
+  return {
+    parser: 'poppler-document-map',
+    document_mode: 'map',
+    visual_used: false,
+    page_count: info.pages,
+    processed_pages: sampledPages.length,
+    requested_pages: null,
+    page_scope_mode: 'document_map',
+    visual_batch_count: 0,
+    classification_count: 0,
+    sampled_pages: sampledPages,
+    markdown: bounded.text,
+    warnings,
+    truncated: bounded.truncated,
+    original_chars: bounded.originalChars,
+    returned_chars: bounded.text.length,
+  };
+}
+
 function parsePdfImagePages(text) {
   const pages = new Set();
   for (const line of String(text || '').split(/\r?\n/)) {
@@ -199,6 +308,7 @@ export async function parsePdf(buffer, options) {
     vllmVisionProvider = 'vllm', vllmVisionThink = false,
     analyzeVisualAssets = defaultAnalyzeVisualAssets, cropImage = defaultCropImage,
     classifyPage = defaultClassifyPdfPage, pageScope = null,
+    documentMapPageThreshold = 20,
   } = options;
   if (!Buffer.isBuffer(buffer) || detectMediaType(buffer) !== 'application/pdf') throw new HttpError(422, 'Input is not a valid PDF.', { code: 'invalid_pdf' });
   if (buffer.length > limits.maxDecodedBytes) throw new HttpError(413, 'PDF exceeds the configured byte limit.', { code: 'media_too_large' });
@@ -211,6 +321,13 @@ export async function parsePdf(buffer, options) {
     const info = parsePdfInfo(infoResult.stdout.toString('utf8'));
     if (info.encrypted) throw new HttpError(422, 'PDF is encrypted or requires a password.', { code: 'encrypted_pdf' });
     if (!Number.isInteger(info.pages) || info.pages < 1) throw new HttpError(422, 'PDF contains no readable pages.', { code: 'empty_pdf' });
+    const mapThreshold = Math.max(1, Math.min(Number(documentMapPageThreshold) || 20, limits.maxPdfPages));
+    if (!pageScope && info.pages > mapThreshold) {
+      await onProgress(`已確認來源 PDF ${info.pages} 頁；大型文件將先建立文件地圖…`, {
+        phase: 'pdf_document_map_start', total: info.pages, received_pdf_pages: info.pages, processed_pdf_pages: 0,
+      });
+      return await buildPdfDocumentMap(inputPath, info, { limits, signal, runner, onProgress });
+    }
     const pagePlan = resolvePdfPagePlan(info.pages, pageScope, limits.maxPdfPages);
     const selectedTotal = pagePlan.pages.length;
     const scopeLabel = pagePlan.focused ? `；指定頁面 ${pageScope.canonical}` : '';
@@ -450,6 +567,7 @@ export async function parsePdf(buffer, options) {
     await onProgress('PDF 內容已完成合併。', { phase: 'pdf_complete', completed: pages.length, total: pages.length, ...(pagePlan.focused ? { requested_pages: pagePlan.requestedPages, page_scope: pageScope.canonical } : {}) });
     return {
       parser: visualUsed ? 'poppler+visual-vllm' : 'poppler',
+      document_mode: pagePlan.focused ? 'focused' : 'full',
       visual_used: visualUsed,
       page_count: info.pages,
       processed_pages: pages.length,

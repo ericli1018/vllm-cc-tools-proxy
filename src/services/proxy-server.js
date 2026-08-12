@@ -22,7 +22,8 @@ import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '..
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
-import { scopeMediaCacheKey } from '../cache/cache-key.js';
+import { DocumentSourceCache } from '../cache/document-source-cache.js';
+import { scopeMediaCacheKey, scopePdfDocumentCacheKey } from '../cache/cache-key.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { observeImagePayloads } from '../proxy/image-payload-observer.js';
@@ -480,8 +481,15 @@ export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
+  const documentSourceCache = dependencies.documentSourceCache || new DocumentSourceCache({
+    rootDir: config.cache?.rootDir || '',
+    retentionMs: config.cache?.retentionMs,
+  });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
-  const cacheReady = mediaCache.initialize();
+  const cacheReady = Promise.all([
+    mediaCache.initialize(),
+    typeof documentSourceCache.initialize === 'function' ? documentSourceCache.initialize() : Promise.resolve(documentSourceCache),
+  ]);
   const protocolDiagnosticStore = config.logProtocolSnippets
     ? (dependencies.protocolDiagnosticStore || new ProtocolDiagnosticStore({
       rootDir: config.protocolDiagnosticsDir,
@@ -1458,7 +1466,9 @@ export function createProxyServer(config, dependencies = {}) {
         for (const occurrence of mediaOccurrences) {
           const tracked = mediaProgress.contextForPath(occurrence.path);
           const pageScope = occurrence.mediaType === 'application/pdf' ? tracked?.pageScope : null;
-          const effectiveKey = scopeMediaCacheKey(occurrence.key, pageScope);
+          const effectiveKey = occurrence.mediaType === 'application/pdf'
+            ? scopePdfDocumentCacheKey(occurrence.key, pageScope)
+            : scopeMediaCacheKey(occurrence.key, pageScope);
           const invalidScope = occurrence.mediaType === 'application/pdf' && Boolean(tracked?.pageScopeError);
           const cached = invalidScope ? null : await mediaCache.get(effectiveKey);
           if (cached?.block) {
@@ -1487,6 +1497,7 @@ export function createProxyServer(config, dependencies = {}) {
         allowedMediaPaths: preparedMedia?.allowedPaths,
         acquireVision: (options) => admission.acquireVision(options),
         mediaCache,
+        documentSourceCache,
         analysisRegistry,
         preloadedCache,
         ...(dependencies.mediaAdapterDependencies || {}),

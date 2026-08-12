@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.20', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.0', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -3088,7 +3088,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.20/);
+  assert.match(first, /VERSION\s+0\.29\.0/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3118,10 +3118,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.2.28.20');
+  assert.equal(payload.version, '0.29.0');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.20/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.0/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3276,4 +3276,61 @@ test('V0.2.28.20 request_failed identifies media preflight stage and keeps a bou
   assert.equal(failed.error_name, 'HttpError');
   assert.match(failed.error_stack, /decodeBase64Media|media-preflight/);
   assert.equal(failed.error_stack.length <= 4000, true);
+});
+
+test('V0.29.0 Read.pages reuses the persistent original PDF source cache across Claude Code turns', async (t) => {
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-proxy-v029-doc-cache-'));
+  t.after(() => fs.rm(cacheRoot, { recursive: true, force: true }));
+  const original = Buffer.from('%PDF-1.7\nORIGINAL FULL PDF WITH MANY PAGES');
+  const subset = Buffer.from('%PDF-1.7\nSUBSET PAGE FROM CLAUDE CODE');
+  const parsedBuffers = [];
+  const parsedScopes = [];
+  const upstreamPayloads = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    upstreamPayloads.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'v029',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    cache: { rootDir: cacheRoot, maxBytes: 0, retentionMs: 60_000, pipelineVersion:'media-v8', visualPromptVersion:'visual-v10', evidenceContractVersion:'evidence-v7' },
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async (buffer, options) => {
+        parsedBuffers.push(Buffer.from(buffer));
+        parsedScopes.push(options.pageScope);
+        if (options.pageScope) return { parser:'test',document_mode:'focused',page_count:80,processed_pages:1,requested_pages:[42],page_scope_mode:'full_source',visual_used:false,visual_batch_count:0,markdown:'FOCUSED ORIGINAL PAGE 42',warnings:[],truncated:false };
+        return { parser:'test-map',document_mode:'map',page_count:80,processed_pages:5,sampled_pages:[1,10,40,60,80],visual_used:false,visual_batch_count:0,markdown:'DOCUMENT MAP',warnings:[],truncated:false };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const wholeMessages = [
+    { role:'user', content:'inspect manual' },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-v029-whole', name:'Read', input:{ file_path:'/work/manual.pdf' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-v029-whole', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:original.toString('base64') } }] }] },
+  ];
+  const focusedMessages = [
+    { role:'user', content:'inspect page 42' },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-v029-focus', name:'Read', input:{ file_path:'/work/manual.pdf', pages:'42' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-v029-focus', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:subset.toString('base64') } }] }] },
+  ];
+  for (const messages of [wholeMessages, focusedMessages]) {
+    const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ model:'m',stream:false,messages }) });
+    assert.equal(response.status, 200);
+    await response.json();
+  }
+  assert.equal(parsedBuffers.length, 2);
+  assert.deepEqual(parsedBuffers[0], original);
+  assert.deepEqual(parsedBuffers[1], original, 'focused turn must use cached original source rather than Claude Code subset payload');
+  assert.equal(parsedScopes[0], null);
+  assert.deepEqual(parsedScopes[1], { pages:[42], canonical:'42' });
+  assert.match(JSON.stringify(upstreamPayloads[0]), /kind=document_map/);
+  assert.match(JSON.stringify(upstreamPayloads[1]), /FOCUSED ORIGINAL PAGE 42/);
+  assert.equal(JSON.stringify(upstreamPayloads).includes(original.toString('base64')), false);
+  assert.equal(JSON.stringify(upstreamPayloads).includes(subset.toString('base64')), false);
 });

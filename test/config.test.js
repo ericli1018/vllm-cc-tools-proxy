@@ -18,9 +18,9 @@ test('loadConfig exposes the five vLLM settings and one proxy mode', () => {
   assert.equal(config.vllmVisionProvider, 'vllm');
   assert.equal(config.vllmVisionThink, false);
   assert.equal(config.vllmVisionApiProtocol, 'openai-chat');
-  assert.equal(config.cache.pipelineVersion, 'media-v7');
+  assert.equal(config.cache.pipelineVersion, 'media-v8');
   assert.equal(config.cache.visualPromptVersion, 'visual-v10');
-  assert.equal(config.cache.evidenceContractVersion, 'evidence-v6');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v7');
   assert.equal(config.port, 8080);
   assert.equal(config.usagePreflightEnabled, true);
 });
@@ -323,9 +323,9 @@ test('V0.2.23 response language defaults to en-US and canonicalizes supported lo
 
 test('V0.2.28.4 bumps visual and evidence cache generations after schematic isolation', () => {
   const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
-  assert.equal(config.cache.pipelineVersion, 'media-v7');
+  assert.equal(config.cache.pipelineVersion, 'media-v8');
   assert.equal(config.cache.visualPromptVersion, 'visual-v10');
-  assert.equal(config.cache.evidenceContractVersion, 'evidence-v6');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v7');
 });
 
 test('V0.2.28.10 Context Compact Model ENV supports independent vLLM and Ollama providers', () => {
@@ -400,4 +400,12 @@ test('V0.2.28.12 Language Processor is independent from WebFetch Processor and u
   assert.throws(() => loadConfig({
     VLLM_BASE_URL: 'http://base:8000', LANG_PROCESSOR_THINK: 'yes',
   }), /LANG_PROCESSOR_THINK/);
+});
+
+test('V0.29.0 enables progressive PDF document maps without adding a new ENV knob', () => {
+  const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(config.limits.documentMapPageThreshold, 20);
+  assert.equal(config.cache.pipelineVersion, 'media-v8');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v10');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v7');
 });

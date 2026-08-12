@@ -37,3 +37,9 @@ export function scopeMediaCacheKey(baseKey, pageScope) {
   if (!pageScope?.canonical) return baseKey || '';
   return sha256(JSON.stringify({ baseKey: String(baseKey || ''), kind: 'pdf-pages', pages: pageScope.canonical }));
 }
+
+export function scopePdfDocumentCacheKey(baseKey, pageScope) {
+  if (pageScope?.canonical) return scopeMediaCacheKey(baseKey, pageScope);
+  if (!baseKey) return '';
+  return sha256(JSON.stringify({ baseKey: String(baseKey), kind: 'pdf-progressive-document', version: 1 }));
+}

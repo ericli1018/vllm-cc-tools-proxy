@@ -197,3 +197,19 @@ test('V0.2.28.20 protocol neutralization preserves raw Base64 data without scann
   assert.equal(neutral.data, raw);
   assert.match(neutral.note, /&lt;\/thinking&gt;/);
 });
+
+test('V0.29.0 document-map evidence is explicitly non-exhaustive and directs the model to Read.pages for source evidence', async () => {
+  const module = await import('../src/proxy/evidence-contract.js');
+  const text = module.formatDocumentMapEvidence({
+    filename: 'manual.pdf', sourceSha256: 'abc', parser: 'poppler-document-map', pages: 80,
+    sampledPages: [1, 2, 10, 40, 80], content: '# Document Map\n- p.1: Cover', warnings: [],
+  });
+  assert.match(text, /kind=document_map/);
+  assert.match(text, /document_mode: "map"/);
+  assert.match(text, /source_pages: 80/);
+  assert.match(text, /sampled_pages: \[1,2,10,40,80\]/);
+  const injected = injectEvidenceContract({ model: 'm', messages: [] });
+  assert.match(String(injected.system), /document_map/);
+  assert.match(String(injected.system), /Read\.pages/);
+  assert.match(String(injected.system), /not full source evidence/i);
+});
