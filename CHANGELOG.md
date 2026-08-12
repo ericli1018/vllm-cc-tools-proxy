@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.3 - 2026-08-12
+
+- Added `VISUAL_STATUS: NEEDS_ZOOM` as an actionable non-cacheable Vision state rather than treating dense whole-page content as WEAK/UNREADABLE.
+- Reused the existing `request_image_crop` tool for precise ROI enlargement and added a 12% outer context margin to model-requested crops.
+- Capped default recursive crop depth at 2 while preserving bounded crop-round/tool validation behavior.
+- Added deterministic PDF `DIAGRAM`/`DENSE_PAGE` fallback tiling when NEEDS_ZOOM is returned without a usable crop call; tiles use 15% overlap, sequential Vision isolation, and page-evidence merge.
+- Increased deterministic electronic `SCHEMATIC` tile overlap from 15% to 20% to preserve cross-boundary net/component continuity.
+- Added localized `vision_needs_zoom` and `pdf_zoom_tile*` progress phases across all five supported locales.
+- Advanced Vision/evidence cache generations to `visual-v13` / `evidence-v9`.
+- Preserved V0.29.2 explicit BLANK/CONTENT contract, V0.29.1 Vision timeout/THINK/failure isolation, and V0.29.0 progressive PDF source cache behavior.
+
 ## 0.29.2 - 2026-08-12
 
 - Replaced heuristic short-text Vision quality classification with the explicit `VISUAL_STATUS: CONTENT|BLANK|UNREADABLE` final-response contract.

@@ -320,3 +320,16 @@ test('README documents V0.29.2 Vision Output Contract', () => {
   assert.match(readme, /visual-v12/);
   assert.match(readme, /evidence-v8/);
 });
+
+
+test('README documents V0.29.3 Recursive Vision Zoom and overlapping PDF tiles', () => {
+  assert.match(readme, /V0\.29\.3.*Recursive Vision Zoom/i);
+  assert.match(readme, /VISUAL_STATUS:\s*NEEDS_ZOOM/i);
+  assert.match(readme, /request_image_crop/i);
+  assert.match(readme, /12%|12 percent/i);
+  assert.match(readme, /15%.*DIAGRAM|DIAGRAM.*15%/is);
+  assert.match(readme, /20%.*SCHEMATIC|SCHEMATIC.*20%/is);
+  assert.match(readme, /zoom depth.*2|max.*zoom.*2/is);
+  assert.match(readme, /visual-v13/);
+  assert.match(readme, /evidence-v9/);
+});

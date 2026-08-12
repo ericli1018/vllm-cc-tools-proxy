@@ -107,8 +107,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.2'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.2'
+test "$(node -p "require('./package.json').version")" = '0.29.3'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.3'
 
 
 test -f src/i18n/response-language.js
@@ -157,8 +157,8 @@ test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v8'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
 grep -Fq 'incoming_protocol_inventory' src/services/proxy-server.js
@@ -344,8 +344,8 @@ grep -Fq 'managed_model_stream_phase_changed' src/services/proxy-server.js
 grep -Fq "'modelHeartbeat'" test/response-language.test.js
 grep -Fq "modelRoundProgress.phase = 'waiting'" src/services/proxy-server.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 
 # V0.2.28.6 Final Language direct-segment repair
 grep -Fq 'V0.2.28.6 Final Language direct-segment repair' README.md
@@ -357,8 +357,8 @@ grep -Fq 'segment_count' src/services/final-language-repair.js
 ! grep -Fq 'parseLanguageRepairSegments' src/services/final-language-repair.js
 ! grep -Fq 'encodeLanguageRepairSegments' src/services/final-language-repair.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 
 
 # V0.2.28.5 recovery-only managed continuation state compression
@@ -375,8 +375,8 @@ grep -Fq 'CONTINUATION_WINDOW_CHARS = 24_000' src/proxy/continuation-state.js
 grep -Fq 'CONTINUATION_OVERLAP_CHARS = 4_000' src/proxy/continuation-state.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
 ! grep -Eq 'CONTINUATION_[A-Z0-9_]+:' compose.yaml
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 
 
 # V0.2.28.4 schematic tile isolation + Vision transport diagnostics
@@ -385,8 +385,8 @@ test -f V0.2.28.4-更新說明.md
 grep -Fq 'pdf_schematic_tile_failed' src/parsers/pdf.js
 grep -Fq 'transport_code' src/lib/media.js
 grep -Fq 'UND_ERR_HEADERS_TIMEOUT' src/lib/media.js
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 grep -Fq 'visual-v10' README.md
 grep -Fq 'evidence-v6' README.md
 
@@ -451,10 +451,29 @@ grep -Fq 'kind=document_map' src/proxy/evidence-contract.js
 grep -Fq 'Read.pages' src/proxy/evidence-contract.js
 grep -Fq 'DocumentSourceCache' src/services/proxy-server.js
 grep -Fq 'media-v8' src/config.js
-grep -Fq 'evidence-v8' src/config.js
+grep -Fq 'evidence-v9' src/config.js
 grep -Fq 'V0.29.0 Read.pages reuses the persistent original PDF source cache' test/proxy-server.test.js
 grep -Fq 'V0.29.0 unscoped large PDF returns a bounded document map' test/pdf-parser.test.js
 
+
+
+# V0.29.3 Recursive Vision Zoom & Overlapping Tiles
+test -f V0.29.3-更新說明.md
+grep -Fq 'V0.29.3 Recursive Vision Zoom & Overlapping Tiles' README.md
+grep -Fq 'VISUAL_STATUS: NEEDS_ZOOM' src/visual/vision-client.js
+grep -Fq "allowNeedsZoomFallback = false" src/visual/vision-client.js
+grep -Fq "marginRatio: 0.12" src/visual/vision-client.js
+grep -Fq "maxDepth = 2" src/visual/asset-registry.js
+grep -Fq "phase: 'vision_needs_zoom'" src/visual/vision-client.js
+grep -Fq "phase: 'pdf_zoom_tile'" src/parsers/pdf.js
+grep -Fq "phase: 'pdf_zoom_tile_analyze'" src/parsers/pdf.js
+grep -Fq "overlap: 0.15" src/parsers/pdf.js
+grep -Fq "overlap: 0.20" src/parsers/pdf.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
+grep -Fq 'V0.29.3 returns actionable NEEDS_ZOOM' test/vision-client.test.js
+grep -Fq 'V0.29.3 DIAGRAM NEEDS_ZOOM falls back' test/pdf-parser.test.js
+grep -Fq 'README documents V0.29.3 Recursive Vision Zoom' test/deployment.test.js
 
 # V0.29.2 Vision Output Contract
 test -f V0.29.2-更新說明.md
@@ -465,8 +484,8 @@ grep -Fq 'VISUAL_STATUS: UNREADABLE' src/visual/vision-client.js
 grep -Fq 'VISUAL_EVIDENCE:' src/visual/vision-client.js
 ! grep -Fq "reasons.push('too_short')" src/visual/vision-client.js
 grep -Fq "outputContract: 'raw'" src/visual/pdf-page-classifier.js
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
-grep -Fq "evidenceContractVersion: 'evidence-v8'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
+grep -Fq "evidenceContractVersion: 'evidence-v9'" src/config.js
 grep -Fq 'V0.29.2 accepts explicit BLANK Vision status' test/vision-client.test.js
 grep -Fq 'V0.29.2 retries a final Vision response that omits VISUAL_STATUS' test/vision-client.test.js
 grep -Fq 'README documents V0.29.2 Vision Output Contract' test/deployment.test.js
@@ -479,7 +498,7 @@ grep -Fq "code: 'vision_service_timeout'" src/visual/vision-client.js
 grep -Fq "phase: 'vision_quality_retry'" src/visual/vision-client.js
 grep -Fq "phase: 'image_vision_unavailable'" src/proxy/media-adapters.js
 grep -Fq 'evidence_available: false' src/proxy/evidence-contract.js
-grep -Fq "visualPromptVersion: 'visual-v12'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v13'" src/config.js
 grep -Fq 'V0.29.1 one recoverable image failure does not stop later images' test/media-adapters.test.js
 grep -Fq 'V0.29.1 Vision timeout uses explicit deadline' test/vision-client.test.js
 
@@ -518,7 +537,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.2'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.3'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md

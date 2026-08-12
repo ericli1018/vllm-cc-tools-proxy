@@ -25,10 +25,12 @@ const BASE_SYSTEM_PROMPT = 'You are a bounded document and image analysis worker
 const EVIDENCE_OUTPUT_CONTRACT = `For every final non-tool visual response, the first non-empty line MUST be exactly one of:
 VISUAL_STATUS: CONTENT
 VISUAL_STATUS: BLANK
+VISUAL_STATUS: NEEDS_ZOOM
 VISUAL_STATUS: UNREADABLE
 
 If status is CONTENT, immediately include the exact line VISUAL_EVIDENCE: followed by one or more Markdown bullet lines beginning with "- " that state concrete visible evidence. Concise evidence is valid; do not pad the answer to satisfy a length target.
 If status is BLANK, do not invent content. The status line alone is valid, or it may be followed by a brief factual note.
+If status is NEEDS_ZOOM, the page/image contains real content but whole-frame scale is insufficient for reliable detail. Prefer request_image_crop when a precise region can be identified. If no reliable region can be selected, return NEEDS_ZOOM with VISUAL_REASON so the caller can use deterministic overlapping tiles.
 If status is UNREADABLE, do not guess. You may add VISUAL_REASON: followed by a brief reason.
 Do not return file metadata, image dimensions, or access-limit disclaimers as visual evidence.`;
 
@@ -36,15 +38,16 @@ const SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${EVIDENCE_OUTPUT_CONTRACT}`;
 const RAW_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
 
 const VISION_RECOVERY_PROMPT = `The previous final visual response was empty, unreadable, or violated the required output contract. Inspect the supplied image directly and follow this contract exactly:
-VISUAL_STATUS: CONTENT | BLANK | UNREADABLE
+VISUAL_STATUS: CONTENT | BLANK | NEEDS_ZOOM | UNREADABLE
 For CONTENT, include the exact line VISUAL_EVIDENCE: followed by one or more "- " evidence bullets.
 For BLANK, do not invent content; the status line alone is valid.
+For NEEDS_ZOOM, use request_image_crop if a precise region is identifiable; otherwise keep NEEDS_ZOOM and explain why whole-frame scale is insufficient.
 For UNREADABLE, do not guess; you may add VISUAL_REASON:.
 Concise valid evidence is acceptable. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.`;
 
 const RAW_RECOVERY_PROMPT = 'The previous response was empty or invalid. Inspect the supplied image directly and follow the requested output format exactly. Do not add unrelated commentary.';
 
-const VISUAL_STATUS_LINE_PATTERN = /^VISUAL_STATUS:\s*(CONTENT|BLANK|UNREADABLE)\s*$/i;
+const VISUAL_STATUS_LINE_PATTERN = /^VISUAL_STATUS:\s*(CONTENT|BLANK|NEEDS_ZOOM|UNREADABLE)\s*$/i;
 const VISUAL_STATUS_PREFIX_PATTERN = /^VISUAL_STATUS:/i;
 const VISUAL_EVIDENCE_LINE_PATTERN = /^VISUAL_EVIDENCE:\s*$/i;
 const EVIDENCE_BULLET_PATTERN = /^\s*-\s+\S/;
@@ -67,6 +70,7 @@ function parseVisionEvidenceContract(content) {
 
   const visualStatus = statusMatch[1].toLowerCase();
   if (visualStatus === 'blank') return { visualStatus, contractValid: true, reasons: [] };
+  if (visualStatus === 'needs_zoom') return { visualStatus, contractValid: true, reasons: ['visual_status_needs_zoom'] };
   if (visualStatus === 'unreadable') {
     return { visualStatus, contractValid: true, reasons: ['visual_status_unreadable'] };
   }
@@ -100,6 +104,9 @@ function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContrac
   }
   if (contract.visualStatus === 'content' && contract.contractValid) {
     return { quality: 'good', reasons: [], cacheable: true, ...contract };
+  }
+  if (contract.visualStatus === 'needs_zoom' && contract.contractValid) {
+    return { quality: 'needs_zoom', cacheable: false, ...contract };
   }
   return { quality: 'weak', cacheable: false, ...contract };
 }
@@ -244,6 +251,7 @@ export async function analyzeVisualAssets(assets, {
   onEvent = () => {},
   maxCropRounds = 3,
   allowCrops = true,
+  allowNeedsZoomFallback = false,
   outputContract = 'evidence',
   timeoutMs = 120000,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
@@ -349,7 +357,38 @@ export async function analyzeVisualAssets(assets, {
           markdown: sanitized.content,
           warnings: [],
           cropCount,
+          needsZoom: false,
+          visualStatus: quality.visualStatus,
         };
+      }
+      if (quality.quality === 'needs_zoom') {
+        await onDiagnostic('vision_needs_zoom', {
+          visual_status: quality.visualStatus,
+          crop_count: cropCount,
+          fallback_allowed: Boolean(allowNeedsZoomFallback),
+        });
+        await onProgress('整頁內容過於密集，需要放大局部區域…', {
+          phase: 'vision_needs_zoom',
+          crop_count: cropCount,
+          fallback_allowed: Boolean(allowNeedsZoomFallback),
+        });
+        if (allowNeedsZoomFallback) {
+          return {
+            markdown: sanitized.content,
+            warnings: ['vision_needs_zoom'],
+            cropCount,
+            needsZoom: true,
+            visualStatus: quality.visualStatus,
+          };
+        }
+        if (toolsEnabled && qualityRecoveryRetries < 1) {
+          qualityRecoveryRetries += 1;
+          messages.push({
+            role: 'user',
+            content: 'You declared VISUAL_STATUS: NEEDS_ZOOM. If a precise region can resolve the missing detail, call request_image_crop now using normalized 0-1000 coordinates. Otherwise return UNREADABLE without guessing.',
+          });
+          continue;
+        }
       }
       if (qualityRecoveryRetries < 1) {
         qualityRecoveryRetries += 1;
@@ -408,7 +447,7 @@ export async function analyzeVisualAssets(assets, {
         let processing = false;
         try {
           const args = parseArguments(call);
-          const authorization = registry.authorizeCrop(args.source_id, args.bbox, cropRound);
+          const authorization = registry.authorizeCrop(args.source_id, args.bbox, cropRound, { marginRatio: 0.12 });
           authorization.purpose = String(args.purpose || '').slice(0, 200);
           const original = registry.get(args.source_id);
           processing = true;

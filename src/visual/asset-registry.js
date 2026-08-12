@@ -4,6 +4,16 @@ function clampBox(box) {
   return box.map((value) => Math.max(0, Math.min(1000, Math.round(value))));
 }
 
+
+function expandBox(box, marginRatio = 0) {
+  const safe = Math.max(0, Math.min(0.25, Number(marginRatio) || 0));
+  if (safe <= 0) return [...box];
+  const [left, top, right, bottom] = box;
+  const xPad = (right - left) * safe;
+  const yPad = (bottom - top) * safe;
+  return clampBox([left - xPad, top - yPad, right + xPad, bottom + yPad]);
+}
+
 function composeRootBox(parentBox, bbox) {
   const [pl, pt, pr, pb] = parentBox;
   const [l, t, r, b] = bbox;
@@ -27,7 +37,7 @@ function pixelBox(box, width, height) {
 }
 
 export class VisualAssetRegistry {
-  constructor({ maxCropRounds = 3, maxCropsPerAsset = 8, maxCropsPerRoot = maxCropsPerAsset, maxDepth = 3 } = {}) {
+  constructor({ maxCropRounds = 3, maxCropsPerAsset = 8, maxCropsPerRoot = maxCropsPerAsset, maxDepth = 2 } = {}) {
     this.maxCropRounds = maxCropRounds;
     this.maxCropsPerRoot = maxCropsPerRoot;
     this.maxDepth = maxDepth;
@@ -112,7 +122,7 @@ export class VisualAssetRegistry {
     return asset;
   }
 
-  authorizeCrop(sourceId, bbox, round) {
+  authorizeCrop(sourceId, bbox, round, { marginRatio = 0 } = {}) {
     const asset = this.get(sourceId);
     if (!Number.isInteger(round) || round < 1 || round > this.maxCropRounds) {
       throw new HttpError(422, 'Visual crop round limit exceeded.', { code: 'visual_crop_round_limit' });
@@ -137,15 +147,18 @@ export class VisualAssetRegistry {
       throw new HttpError(422, 'Visual crop count limit exceeded.', { code: 'visual_crop_count_limit' });
     }
     this.rootCropCounts.set(asset.rootSourceId, rootCount + 1);
-    const rootBox = composeRootBox(asset.rootBox, bbox);
+    const requestedBbox = [...bbox];
+    const authorizedBbox = expandBox(bbox, marginRatio);
+    const rootBox = composeRootBox(asset.rootBox, authorizedBbox);
     return {
       sourceId,
       rootSourceId: asset.rootSourceId,
-      bbox,
+      requestedBbox,
+      bbox: authorizedBbox,
       purpose: '',
       depth,
       rootBox,
-      pixelBox: pixelBox(bbox, asset.width, asset.height),
+      pixelBox: pixelBox(authorizedBbox, asset.width, asset.height),
       rootPixelBox: pixelBox(rootBox, asset.rootWidth, asset.rootHeight),
     };
   }

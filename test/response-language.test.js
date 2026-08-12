@@ -286,3 +286,13 @@ test('V0.2.28.19 status line puts Proxy counters after title and renders whole s
   );
   assert.doesNotMatch(line, /59\.\d+s/);
 });
+
+
+test('V0.29.3 localizes NEEDS_ZOOM and PDF zoom-tile progress phases', () => {
+  const tw = language.localizeProgressMessage('zh-TW', 'fallback', { phase: 'vision_needs_zoom', page: 9 });
+  const en = language.localizeProgressMessage('en-US', 'fallback', { phase: 'pdf_zoom_tile_analyze', page: 9, completed: 2, total: 4, tile: 2 });
+  const ja = language.localizeProgressMessage('ja-JP', 'fallback', { phase: 'pdf_zoom_tile', page: 9, count: 4 });
+  assert.match(tw, /放大|密集/);
+  assert.match(en, /zoom tile/i);
+  assert.match(ja, /ズーム|タイル/);
+});

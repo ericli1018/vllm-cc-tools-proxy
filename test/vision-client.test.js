@@ -632,7 +632,7 @@ test('V0.29.2 retries a final Vision response that omits VISUAL_STATUS and recov
     && entry.details.reasons.includes('visual_status_missing')
     && entry.details.contract_valid === false));
   const retryUserMessage = requests[1].messages.at(-1)?.content || '';
-  assert.match(retryUserMessage, /VISUAL_STATUS: CONTENT \| BLANK \| UNREADABLE/);
+  assert.match(retryUserMessage, /VISUAL_STATUS: CONTENT \| BLANK \| NEEDS_ZOOM \| UNREADABLE/);
   assert.match(retryUserMessage, /VISUAL_EVIDENCE:/);
   assert.match(result.markdown, /VISUAL_STATUS: CONTENT/);
 });
@@ -694,4 +694,55 @@ test('V0.29.2 raw Vision mode bypasses VISUAL_STATUS contract for routing classi
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
     && entry.details.output_contract === 'raw'
     && entry.details.quality === 'good'));
+});
+
+test('V0.29.3 returns actionable NEEDS_ZOOM without quality retry when PDF fallback is enabled', async (t) => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: NEEDS_ZOOM\nVISUAL_REASON: Dense labels require local enlargement.', tool_calls: [] } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1600, height: 1200, label: 'dense PDF page', sourceKind: 'pdf_page' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    allowNeedsZoomFallback: true,
+    cropImage: async () => { throw new Error('automatic PDF tiling is owned by the PDF parser'); },
+  });
+  assert.equal(requests.length, 1);
+  assert.equal(result.needsZoom, true);
+  assert.equal(result.visualStatus, 'needs_zoom');
+  assert.equal(result.cropCount, 0);
+  assert.match(result.markdown, /VISUAL_STATUS: NEEDS_ZOOM/);
+});
+
+test('V0.29.3 declarative crop tool requests receive a 12 percent outer context margin', async (t) => {
+  const requests = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'crop-margin', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,500,500], purpose: 'read dense labels' }) } }] }
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Enlarged labels are now readable.', tool_calls: [] };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1000, height: 1000 });
+  const auth = [];
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    cropImage: async (_asset, authorization) => {
+      auth.push(authorization);
+      return { buffer: Buffer.from('crop'), mediaType: 'image/png', width: 496, height: 496 };
+    },
+  });
+  assert.equal(auth.length, 1);
+  assert.deepEqual(auth[0].requestedBbox, [100,100,500,500]);
+  assert.deepEqual(auth[0].bbox, [52,52,548,548]);
+  assert.match(result.markdown, /Enlarged labels are now readable/);
 });

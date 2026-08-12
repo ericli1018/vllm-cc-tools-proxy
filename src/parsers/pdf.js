@@ -429,8 +429,62 @@ export async function parsePdf(buffer, options) {
           pageWidthPoints: size.width, pageHeightPoints: size.height, overviewDpi: standardDpi,
         },
       });
-      genericEntries.get(page.route)?.push({ ...page, asset });
+      genericEntries.get(page.route)?.push({ ...page, asset, size });
     }
+
+    const analyzeZoomFallback = async (entry, overviewMarkdown, route) => {
+      const tiles = buildPdfTiles(entry.size, { overlap: 0.15, targetLongEdgePx: 2300, dpi: 360, maxTiles: 12 });
+      await onProgress(`第 ${entry.page} 頁內容過於密集；將切成 ${tiles.length} 個 overlapping zoom tiles…`, {
+        phase: 'pdf_zoom_tile', page: entry.page, route, count: tiles.length, overlap: 0.15,
+      });
+      const commonOptions = visionCallOptions({
+        vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
+        registry: analysisRegistry, signal, onProgress, cropImage, limits, runner,
+      });
+      const regionEvidence = [];
+      for (let index = 0; index < tiles.length; index += 1) {
+        const tile = tiles[index];
+        await onProgress(`正在建立第 ${entry.page} 頁 zoom tile ${index + 1}/${tiles.length}…`, {
+          phase: 'pdf_zoom_tile_render', page: entry.page, route, completed: index + 1, total: tiles.length, tile: tile.index,
+        });
+        const image = await renderPdfRegion(entry.asset, tile.bbox, 360, limits, signal, runner, `zoom-${tile.index}`);
+        const asset = analysisRegistry.registerRegion(entry.asset.sourceId, image, {
+          rootBox: tile.bbox,
+          label: `PDF page ${entry.page} ${route} zoom tile ${tile.index}/${tiles.length}`,
+          regionKind: 'zoom_tile',
+          sourceMetadata: { tileIndex: tile.index, tileCount: tiles.length, tileBbox: tile.bbox, overlap: 0.15 },
+        });
+        await onProgress(`正在分析第 ${entry.page} 頁 zoom tile ${index + 1}/${tiles.length}…`, {
+          phase: 'pdf_zoom_tile_analyze', page: entry.page, route, completed: index + 1, total: tiles.length, tile: tile.index,
+        });
+        try {
+          const result = await analyzeVisualAssets([asset], {
+            ...commonOptions,
+            prompt: `Analyze zoom tile ${tile.index}/${tiles.length} for PDF page ${entry.page} (${route}). Extract only observable text, labels, arrows, table cells, nodes and relationships. This tile overlaps neighboring regions by 15 percent; use repeated labels and structures as continuity anchors. Preserve source_id and uncertainty. If an essential smaller region remains unreadable, use request_image_crop. Do not answer the final user task.`,
+          });
+          visualBatchCount += 1;
+          warnings.push(...(result.warnings || []));
+          regionEvidence.push({ sourceId: asset.sourceId, markdown: result.markdown });
+        } catch (error) {
+          const expectedVisionFailure = error instanceof HttpError && Boolean(error.retryable) && Number(error.status) >= 500;
+          if (!expectedVisionFailure) throw error;
+          visualBatchCount += 1;
+          const code = String(error.code || 'vision_service_error').slice(0, 80);
+          warnings.push(`pdf_zoom_tile_${code}`);
+          regionEvidence.push({ sourceId: asset.sourceId, markdown: `Uncertain: zoom tile ${tile.index}/${tiles.length} evidence unavailable due to ${code}.` });
+          await onProgress(`第 ${entry.page} 頁 zoom tile ${tile.index}/${tiles.length} 分析失敗；保留缺口並繼續。`, {
+            phase: 'pdf_zoom_tile_failed', page: entry.page, route, tile: tile.index, code, retryable: Boolean(error.retryable),
+          });
+        }
+      }
+      return mergePageEvidence({
+        page: entry.page,
+        route,
+        nativeText: entry.nativeText,
+        overview: overviewMarkdown,
+        regions: regionEvidence,
+      });
+    };
 
     for (const [route, entries] of genericEntries) {
       if (entries.length === 0) continue;
@@ -448,12 +502,20 @@ export async function parsePdf(buffer, options) {
             vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
             registry: analysisRegistry, signal, onProgress, cropImage, limits, runner,
           }),
+          allowNeedsZoomFallback: route === 'DIAGRAM' || route === 'DENSE_PAGE',
           prompt,
         });
         visualUsed = true;
         visualBatchCount += 1;
-        visualBatches.push({ pages: batch.map((entry) => entry.page), route, markdown: result.markdown, cropCount: result.cropCount });
         warnings.push(...(result.warnings || []));
+        if (result.needsZoom && (route === 'DIAGRAM' || route === 'DENSE_PAGE')) {
+          for (const entry of batch) {
+            const merged = await analyzeZoomFallback(entry, result.markdown, route);
+            visualBatches.push({ pages: [entry.page], route, markdown: merged, cropCount: Number(result.cropCount || 0) });
+          }
+        } else {
+          visualBatches.push({ pages: batch.map((entry) => entry.page), route, markdown: result.markdown, cropCount: result.cropCount });
+        }
       }
     }
 
@@ -483,7 +545,7 @@ export async function parsePdf(buffer, options) {
       visualUsed = true;
       warnings.push(...(overviewResult.warnings || []));
 
-      const tiles = buildPdfTiles(size, { overlap: 0.15, targetLongEdgePx: 2300, dpi: 360, maxTiles: 12 });
+      const tiles = buildPdfTiles(size, { overlap: 0.20, targetLongEdgePx: 2300, dpi: 360, maxTiles: 12 });
       await onProgress(`第 ${page.page} 頁 schematic 將切成 ${tiles.length} 個 overlapping tiles…`, {
         phase: 'pdf_schematic_tile', page: page.page, count: tiles.length,
       });
@@ -497,7 +559,7 @@ export async function parsePdf(buffer, options) {
           rootBox: tile.bbox,
           label: `PDF page ${page.page} schematic tile ${tile.index}/${tiles.length}`,
           regionKind: 'schematic_tile',
-          sourceMetadata: { tileIndex: tile.index, tileCount: tiles.length, tileBbox: tile.bbox },
+          sourceMetadata: { tileIndex: tile.index, tileCount: tiles.length, tileBbox: tile.bbox, overlap: 0.20 },
         });
         tileEntries.push({ page: page.page, tile, asset });
       }

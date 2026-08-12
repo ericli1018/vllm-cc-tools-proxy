@@ -196,6 +196,11 @@ const PROFILES = Object.freeze({
       imageComplete: () => '圖片分析已完成。',
       visionCropRejected: () => '視覺模型正在重新定位局部區域…',
       visionCrop: ({ count = 0 }) => `視覺模型要求檢視 ${count} 個局部區域…`,
+      visionNeedsZoom: () => '整頁內容過於密集，需要放大局部區域…',
+      pdfZoomTile: ({ page = 0, count = 0 }) => `第 ${page} 頁將切成 ${count} 個重疊 zoom tiles…`,
+      pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 頁 zoom tile ${completed}/${total}…`,
+      pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 頁 zoom tile ${completed}/${total}…`,
+      pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `第 ${page} 頁 zoom tile ${tile} 分析失敗；保留缺口並繼續…`,
       currentStepWaiting: ({ seconds = 0 }) => `目前處理步驟仍在進行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -268,6 +273,11 @@ const PROFILES = Object.freeze({
       imageComplete: () => '图片分析已完成。',
       visionCropRejected: () => '视觉模型正在重新定位局部区域…',
       visionCrop: ({ count = 0 }) => `视觉模型要求查看 ${count} 个局部区域…`,
+      visionNeedsZoom: () => '整页内容过于密集，需要放大局部区域…',
+      pdfZoomTile: ({ page = 0, count = 0 }) => `第 ${page} 页将切成 ${count} 个重叠 zoom tiles…`,
+      pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 页 zoom tile ${completed}/${total}…`,
+      pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 页 zoom tile ${completed}/${total}…`,
+      pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `第 ${page} 页 zoom tile ${tile} 分析失败；保留缺口并继续…`,
       currentStepWaiting: ({ seconds = 0 }) => `当前处理步骤仍在进行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -340,6 +350,11 @@ const PROFILES = Object.freeze({
       imageComplete: () => 'Image analysis completed.',
       visionCropRejected: () => 'The visual model is repositioning the local region…',
       visionCrop: ({ count = 0 }) => `The visual model requested ${count} local crop(s)…`,
+      visionNeedsZoom: () => 'The page is too dense at whole-frame scale; enlarging local regions…',
+      pdfZoomTile: ({ page = 0, count = 0 }) => `PDF page ${page} will be split into ${count} overlapping zoom tiles…`,
+      pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `Preparing PDF page ${page} zoom tile ${completed}/${total}…`,
+      pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `Analyzing PDF page ${page} zoom tile ${completed}/${total}…`,
+      pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF page ${page} zoom tile ${tile} failed; preserving the evidence gap and continuing…`,
       currentStepWaiting: ({ seconds = 0 }) => `The current processing step is still running. Waiting for ${seconds}s…`,
     }),
     media: Object.freeze({
@@ -412,6 +427,11 @@ const PROFILES = Object.freeze({
       imageComplete: () => '画像分析が完了しました。',
       visionCropRejected: () => '視覚モデルが局所領域を再調整しています…',
       visionCrop: ({ count = 0 }) => `視覚モデルが ${count} 個の局所領域の確認を要求しました…`,
+      visionNeedsZoom: () => 'ページ全体では情報が密集しすぎているため、局所領域を拡大します…',
+      pdfZoomTile: ({ page = 0, count = 0 }) => `PDF ${page} ページを ${count} 個の重複ズームタイルに分割します…`,
+      pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page} ページのズームタイル ${completed}/${total} を作成中…`,
+      pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page} ページのズームタイル ${completed}/${total} を解析中…`,
+      pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF ${page} ページのズームタイル ${tile} の解析に失敗しました。欠落を保持して続行します…`,
       currentStepWaiting: ({ seconds = 0 }) => `現在の処理手順は継続中です。${seconds}秒経過しました…`,
     }),
     media: Object.freeze({
@@ -484,6 +504,11 @@ const PROFILES = Object.freeze({
       imageComplete: () => '그림 분석이 완료되었습니다.',
       visionCropRejected: () => '시각 모델이 국부 영역을 다시 맞추고 있습니다…',
       visionCrop: ({ count = 0 }) => `시각 모델이 ${count}개 국부 영역 확인을 요청했습니다…`,
+      visionNeedsZoom: () => '전체 화면에서 정보가 너무 밀집되어 있어 국부 영역을 확대합니다…',
+      pdfZoomTile: ({ page = 0, count = 0 }) => `PDF ${page}페이지를 ${count}개의 겹침 줌 타일로 나눕니다…`,
+      pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page}페이지 줌 타일 ${completed}/${total} 생성 중…`,
+      pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page}페이지 줌 타일 ${completed}/${total} 분석 중…`,
+      pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF ${page}페이지 줌 타일 ${tile} 분석 실패; 증거 공백을 유지하고 계속합니다…`,
       currentStepWaiting: ({ seconds = 0 }) => `현재 처리 단계가 계속 진행 중입니다. ${seconds}초 경과…`,
     }),
     media: Object.freeze({
@@ -545,6 +570,9 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
     batches: details.batches ?? details.visual_batch_count,
     batch: details.batch,
     count: details.count,
+    page: details.page,
+    tile: details.tile,
+    route: details.route,
     attempt: details.attempt,
   };
   const phaseToKey = {
@@ -568,6 +596,11 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
     image_complete: 'imageComplete',
     vision_crop_rejected: 'visionCropRejected',
     vision_crop: 'visionCrop',
+    vision_needs_zoom: 'visionNeedsZoom',
+    pdf_zoom_tile: 'pdfZoomTile',
+    pdf_zoom_tile_render: 'pdfZoomTileRender',
+    pdf_zoom_tile_analyze: 'pdfZoomTileAnalyze',
+    pdf_zoom_tile_failed: 'pdfZoomTileFailed',
   };
   if (phase === 'queue_wait') return statusText(locale, 'queueWait', { position: details.position ?? 0 });
   const key = phaseToKey[phase];

@@ -1,6 +1,38 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.2 replaces heuristic short-text Vision quality guessing with an explicit machine-checkable output contract, while retaining V0.29.1 bounded recovery/timeout isolation, V0.29.0 progressive PDF reading, and the V0.2.28.20 large-media safety boundary.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.3 adds bounded recursive Vision zoom and overlapping PDF tiles for dense visual pages, while retaining the V0.29.2 machine-checkable Vision contract, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+
+
+## V0.29.3 Recursive Vision Zoom & Overlapping Tiles
+
+V0.29.3 extends the evidence-producing Vision contract with a fourth actionable state:
+
+```text
+VISUAL_STATUS: CONTENT
+VISUAL_STATUS: BLANK
+VISUAL_STATUS: NEEDS_ZOOM
+VISUAL_STATUS: UNREADABLE
+```
+
+`NEEDS_ZOOM` means that real visual content is present but the whole-frame scale is too dense for reliable detail. It is **not** classified as WEAK or as a successful cacheable final result. When the visual model can identify a precise region, the existing `request_image_crop` tool remains the preferred path. Tool-requested normalized `[0,1000]` ROI coordinates receive a **12% outer context margin** before rendering so labels, nets, arrows, table rows, and relationships that cross the requested boundary are less likely to be cut off. Crop depth is bounded to a maximum zoom depth of **2**.
+
+For PDF `DIAGRAM` and `DENSE_PAGE` evidence, if the model declares `NEEDS_ZOOM` without issuing a usable crop tool call, the PDF parser deterministically falls back to overlapping region coverage from the original PDF page. These fallback tiles use **15% overlap**, are analyzed sequentially, preserve `source_id`/bbox provenance, and are merged with the whole-page overview. A failed retryable tile preserves an explicit evidence gap and later tiles continue.
+
+Electronic `SCHEMATIC` pages continue to use the existing whole-page overview plus deterministic tile workflow, but the schematic overlap is raised to **20%**. The extra shared region provides spatial continuity anchors for reference designators, net labels, wires, buses, and connectors that cross tile boundaries. Both fallback and schematic tilers remain bounded to at most 12 automatic tiles per page.
+
+The recursive behavior is deliberately bounded:
+
+```text
+whole page
+  -> CONTENT / BLANK: done
+  -> precise region available: request_image_crop (+12% context margin)
+  -> NEEDS_ZOOM without precise ROI: overlapping PDF tiles
+       -> tile can request one more precise crop
+       -> maximum zoom depth: 2
+  -> UNREADABLE: bounded recovery / unavailable evidence
+```
+
+New progress phases include `vision_needs_zoom`, `pdf_zoom_tile`, `pdf_zoom_tile_render`, `pdf_zoom_tile_analyze`, and `pdf_zoom_tile_failed`; they are localized for zh-TW, zh-CN, en-US, ja-JP, and ko-KP. Because both the Vision prompt semantics and page-evidence contract changed, cache generations advance to `visual-v13` and `evidence-v9`. No new required ENV variable is added.
 
 ## V0.29.2 Vision Output Contract
 

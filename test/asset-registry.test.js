@@ -70,3 +70,13 @@ test('V0.2.27 deterministic region preserves root lineage without consuming crop
   assert.equal(auth.depth, 1);
   assert.deepEqual(auth.rootBox, [250, 350, 550, 650]);
 });
+
+test('V0.29.3 default crop depth is capped at two', () => {
+  const registry = new VisualAssetRegistry();
+  const root = registry.add({ buffer: Buffer.from('root'), mediaType: 'image/png', width: 1000, height: 1000 });
+  const first = registry.authorizeCrop(root.sourceId, [100, 100, 500, 500], 1);
+  const crop1 = registry.registerCrop(root.sourceId, { buffer: Buffer.from('c1'), mediaType: 'image/png', width: 400, height: 400 }, first);
+  const second = registry.authorizeCrop(crop1.sourceId, [200, 200, 800, 800], 2);
+  const crop2 = registry.registerCrop(crop1.sourceId, { buffer: Buffer.from('c2'), mediaType: 'image/png', width: 240, height: 240 }, second);
+  assert.throws(() => registry.authorizeCrop(crop2.sourceId, [200, 200, 800, 800], 3), (error) => error?.code === 'visual_crop_depth_limit');
+});

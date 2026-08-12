@@ -260,6 +260,7 @@ test('V0.2.28.4 isolates every schematic tile into one sequential Vision request
   const tileCalls = calls.filter((assets) => assets[0]?.regionKind === 'schematic_tile');
   assert.ok(tileCalls.length >= 2);
   assert.equal(tileCalls.every((assets) => assets.length === 1), true);
+  assert.equal(tileCalls.every((assets) => assets[0].sourceMetadata?.overlap === 0.20), true);
 });
 
 test('V0.2.28.4 contains an expected schematic tile Vision failure and continues later tiles', async () => {
@@ -465,4 +466,44 @@ test('V0.29.0 unscoped large scanned PDF can return a map without a configured V
   assert.equal(result.page_count, 200);
   assert.match(result.markdown, /no native text detected/i);
   assert.match(result.warnings.join(','), /document_map_low_text/);
+});
+
+test('V0.29.3 DIAGRAM NEEDS_ZOOM falls back to sequential overlapping PDF tiles and merges evidence', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const calls = [];
+  const renders = [];
+  const progress = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('Dense block diagram '.repeat(20)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { renders.push([...args]); await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  const result = await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    onProgress: async (message, details) => progress.push({ message, details }),
+    classifyPage: async () => ({ route: 'DIAGRAM', confidence: 0.9, reason: 'dense block diagram' }),
+    analyzeVisualAssets: async (assets, options) => {
+      calls.push({ assets, options });
+      if (!assets[0]?.regionKind) {
+        assert.equal(options.allowNeedsZoomFallback, true);
+        return { markdown: 'VISUAL_STATUS: NEEDS_ZOOM\nVISUAL_REASON: labels are too dense at whole-page scale', warnings: [], cropCount: 0, needsZoom: true, visualStatus: 'needs_zoom' };
+      }
+      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- ${assets[0].sourceId} preserves local arrows and labels.`, warnings: [], cropCount: 0 };
+    },
+  });
+  const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'zoom_tile');
+  assert.ok(tileCalls.length >= 2 && tileCalls.length <= 12);
+  assert.ok(renders.some((args) => args.includes('-x')), 'fallback tiles must render PDF regions from the original page');
+  const boxes = tileCalls.map((entry) => entry.assets[0].rootBox);
+  const hasOverlap = boxes.some((a, i) => boxes.some((b, j) => i !== j
+    && a[1] === b[1] && a[0] < b[0] && a[2] > b[0]));
+  assert.equal(hasOverlap, true);
+  assert.match(result.markdown, /Region evidence/);
+  assert.match(result.markdown, /preserves local arrows and labels/);
+  assert.equal(progress.some((item) => item.details?.phase === 'pdf_zoom_tile_analyze'), true);
 });
