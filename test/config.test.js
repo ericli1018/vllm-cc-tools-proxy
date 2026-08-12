@@ -19,8 +19,8 @@ test('loadConfig exposes the five vLLM settings and one proxy mode', () => {
   assert.equal(config.vllmVisionThink, false);
   assert.equal(config.vllmVisionApiProtocol, 'openai-chat');
   assert.equal(config.cache.pipelineVersion, 'media-v8');
-  assert.equal(config.cache.visualPromptVersion, 'visual-v14');
-  assert.equal(config.cache.evidenceContractVersion, 'evidence-v10');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v15');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v11');
   assert.equal(config.port, 8080);
   assert.equal(config.usagePreflightEnabled, true);
 });
@@ -329,11 +329,11 @@ test('V0.2.23 response language defaults to en-US and canonicalizes supported lo
   }
 });
 
-test('V0.2.28.4 bumps visual and evidence cache generations after schematic isolation', () => {
+test('V0.29.5 bumps visual and evidence cache generations for VISUAL_DETAIL contract', () => {
   const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
   assert.equal(config.cache.pipelineVersion, 'media-v8');
-  assert.equal(config.cache.visualPromptVersion, 'visual-v14');
-  assert.equal(config.cache.evidenceContractVersion, 'evidence-v10');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v15');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v11');
 });
 
 test('V0.2.28.10 Context Compact Model ENV supports independent vLLM and Ollama providers', () => {
@@ -414,6 +414,6 @@ test('V0.29.0 enables progressive PDF document maps without adding a new ENV kno
   const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
   assert.equal(config.limits.documentMapPageThreshold, 20);
   assert.equal(config.cache.pipelineVersion, 'media-v8');
-  assert.equal(config.cache.visualPromptVersion, 'visual-v14');
-  assert.equal(config.cache.evidenceContractVersion, 'evidence-v10');
+  assert.equal(config.cache.visualPromptVersion, 'visual-v15');
+  assert.equal(config.cache.evidenceContractVersion, 'evidence-v11');
 });

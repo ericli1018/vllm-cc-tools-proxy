@@ -16,7 +16,7 @@ test('vision client uses separate auth and executes a bounded crop request', asy
     const payload = await read(req); requests.push(payload);
     const message = requests.length === 1
       ? { content: '', tool_calls: [{ id: 'crop-1', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,800,800], purpose: 'read labels' }) } }] }
-      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Labels are readable.', tool_calls: [] };
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Labels are readable.', tool_calls: [] };
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices: [{ message }] }));
   });
@@ -44,7 +44,7 @@ test('Ollama native vision requests carry think=false and native image messages'
     assert.equal(req.url, '/api/chat');
     const payload = await read(req); requests.push(payload);
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red object is visible.', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red object is visible.', tool_calls: [] } }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
@@ -53,7 +53,7 @@ test('Ollama native vision requests carry think=false and native image messages'
     baseUrl: url, model: 'hf.co/unsloth/GLM-4.6V-Flash-GGUF:UD-Q8_K_XL', provider: 'ollama', think: false, registry,
     cropImage: async () => { throw new Error('not expected'); },
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red object is visible.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red object is visible.');
   assert.equal(requests[0].think, false);
   assert.doesNotMatch(requests[0].messages[0].content, /^\/nothink\b/);
   assert.equal(requests[0].messages[1].images.length, 1);
@@ -67,7 +67,7 @@ test('invalid crop is returned to the visual model as a recoverable tool result'
     const payload = await read(req); requests.push(payload);
     const message = requests.length === 1
       ? { content: '', tool_calls: [{ id: 'bad-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,105,105], purpose: 'tiny' }) } }] }
-      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Completed without the invalid crop.', tool_calls: [] };
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Completed without the invalid crop.', tool_calls: [] };
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices: [{ message }] }));
   });
@@ -80,7 +80,7 @@ test('invalid crop is returned to the visual model as a recoverable tool result'
     onProgress: async (message, details) => progress.push({ message, details }),
     cropImage: async () => { throw new Error('invalid crop must not reach image processor'); },
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Completed without the invalid crop.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Completed without the invalid crop.');
   assert.equal(requests.length, 2);
   const toolResult = requests[1].messages.find((message) => message.role === 'tool');
   const content = JSON.parse(toolResult.content);
@@ -97,7 +97,7 @@ test('crop recovery is bounded and finishes with tools disabled', async (t) => {
     const payload = await read(req); requests.push(payload);
     const message = requests.length <= 2
       ? { content: '', tool_calls: [{ id: `bad-${requests.length}`, type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [0,0,1,1], purpose: 'tiny' }) } }] }
-      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Final answer from available evidence.', tool_calls: [] };
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Final answer from available evidence.', tool_calls: [] };
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices: [{ message }] }));
   });
@@ -108,7 +108,7 @@ test('crop recovery is bounded and finishes with tools disabled', async (t) => {
     baseUrl: url, model: 'vision-model', provider: 'vllm', think: true, registry, maxCropRounds: 2,
     cropImage: async () => { throw new Error('not expected'); },
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Final answer from available evidence.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Final answer from available evidence.');
   assert.equal(requests.length, 3);
   assert.equal(requests[0].chat_template_kwargs.enable_thinking, true);
   assert.equal(requests[2].tools, undefined);
@@ -121,7 +121,7 @@ test('Ollama crop tool arguments may be native objects and thinking remains inte
     const payload = await read(req); requests.push(payload);
     const message = requests.length === 1
       ? { thinking: 'private reasoning', content: '', tool_calls: [{ function: { name: 'request_image_crop', arguments: { source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'native object' } } }] }
-      : { thinking: 'more private reasoning', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Native Ollama crop completed.', tool_calls: [] };
+      : { thinking: 'more private reasoning', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Native Ollama crop completed.', tool_calls: [] };
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ message }));
   });
@@ -132,7 +132,7 @@ test('Ollama crop tool arguments may be native objects and thinking remains inte
     baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: true, registry,
     cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 800, height: 800 }),
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Native Ollama crop completed.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Native Ollama crop completed.');
   assert.equal(requests[0].think, true);
   assert.equal(requests[1].messages.some((message) => message.role === 'assistant' && message.thinking === 'private reasoning'), true);
   assert.equal(requests[1].messages.some((message) => message.role === 'tool' && message.tool_name === 'request_image_crop'), true);
@@ -148,7 +148,7 @@ test('mixed valid and invalid crop calls continue without a top-level error', as
           { id: 'good', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'good' }) } },
           { id: 'bad', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,101,101], purpose: 'bad' }) } },
         ] }
-      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Completed with the valid crop.', tool_calls: [] };
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Completed with the valid crop.', tool_calls: [] };
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices: [{ message }] }));
   });
@@ -159,7 +159,7 @@ test('mixed valid and invalid crop calls continue without a top-level error', as
     baseUrl: url, model: 'vision', provider: 'vllm', think: false, registry,
     cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 800, height: 800 }),
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Completed with the valid crop.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Completed with the valid crop.');
   assert.equal(result.cropCount, 1);
   const toolMessages = requests[1].messages.filter((message) => message.role === 'tool').map((message) => JSON.parse(message.content));
   assert.deepEqual(toolMessages.map((item) => item.ok), [true, false]);
@@ -186,7 +186,7 @@ test('visual worker prompt forbids protocol markup and reports control tags with
   const server = http.createServer(async (req, res) => {
     observed = await read(req);
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>', tool_calls: [] } }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
@@ -198,7 +198,7 @@ test('visual worker prompt forbids protocol markup and reports control tags with
   });
   assert.match(observed.messages[0].content, /Return Markdown only/i);
   assert.match(observed.messages[0].content, /Do not emit.*tool-call/i);
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>');
   assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
     && entry.details.tagCount === 2
     && entry.details.tags.includes('function_result')
@@ -219,7 +219,7 @@ test('V0.2.26 Vision worker can crop a crop using the registered derived source 
       message = { content: '', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-2', bbox: [250,250,750,750], purpose: 'second zoom' }) } }] };
     } else {
       assert.match(JSON.stringify(payload.messages), /source_id=asset-3/);
-      message = { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Nested crop analysis complete.', tool_calls: [] };
+      message = { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Nested crop analysis complete.', tool_calls: [] };
     }
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices: [{ message }] }));
@@ -237,7 +237,7 @@ test('V0.2.26 Vision worker can crop a crop using the registered derived source 
       width: authorization.rootPixelBox.width, height: authorization.rootPixelBox.height,
     }),
   });
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Nested crop analysis complete.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Nested crop analysis complete.');
   assert.equal(result.cropCount, 2);
   assert.equal(requests.length, 3);
   assert.equal(registry.get('asset-3').depth, 2);
@@ -248,7 +248,7 @@ test('V0.2.26 Vision diagnostics expose safe Ollama backend routing and timing w
   const server = http.createServer(async (req, res) => {
     await read(req);
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A blue square is visible.', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A blue square is visible.', tool_calls: [] } }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
@@ -301,7 +301,7 @@ test('V0.2.28.1 strips native and inline Vision reasoning before producing evide
     message: {
       role: 'assistant',
       thinking: 'native private reasoning',
-      content: '<think>inline private reasoning</think>\nVISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Two characters are visible.',
+      content: '<think>inline private reasoning</think>\nVISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Two characters are visible.',
       tool_calls: [],
     },
   }), { status: 200, headers: { 'content-type': 'application/json' } });
@@ -330,7 +330,7 @@ test('V0.2.28.2 retries one empty Vision output and accepts the next visible res
   const diagnostics = [];
   globalThis.fetch = async () => {
     calls += 1;
-    return new Response(JSON.stringify({ message: { role: 'assistant', content: calls === 1 ? '' : 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Visible evidence after retry.', tool_calls: [] } }), {
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: calls === 1 ? '' : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Visible evidence after retry.', tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   };
@@ -343,7 +343,7 @@ test('V0.2.28.2 retries one empty Vision output and accepts the next visible res
     cropImage: async () => { throw new Error('not expected'); },
   });
   assert.equal(calls, 2);
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Visible evidence after retry.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Visible evidence after retry.');
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed' && entry.details.usable_content === false));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_empty_output_retry'));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed' && entry.details.usable_content === true));
@@ -375,7 +375,7 @@ test('V0.29.1 retries weak short Vision evidence without changing configured thi
     requests.push(body);
     const content = requests.length === 1
       ? 'Unable to view image.'
-      : 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Two anime-style characters are visible against a dark red and purple background with bright effects and title text near the upper-left area.';
+      : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Two anime-style characters are visible against a dark red and purple background with bright effects and title text near the upper-left area.';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, thinking: requests.length === 2 ? 'private visual reasoning' : '', tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
@@ -438,7 +438,7 @@ test('V0.29.1 quality recovery preserves configured think=false and reports stri
   const diagnostics = [];
   globalThis.fetch = async (_url, options) => {
     requests.push(JSON.parse(options.body));
-    const content = requests.length === 1 ? 'No useful details.' : 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A blue rectangular control panel is visible on the right side.';
+    const content = requests.length === 1 ? 'No useful details.' : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A blue rectangular control panel is visible on the right side.';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
@@ -454,7 +454,7 @@ test('V0.29.1 quality recovery preserves configured think=false and reports stri
     cropImage: async () => { throw new Error('not expected'); },
   });
 
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A blue rectangular control panel is visible on the right side.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A blue rectangular control panel is visible on the right side.');
   assert.equal(requests.length, 2);
   assert.equal(requests[0].think, false);
   assert.equal(requests[1].think, false);
@@ -489,7 +489,7 @@ test('V0.2.28.3 accepts concise concrete observable Vision evidence without adap
   const requests = [];
   globalThis.fetch = async (_url, options) => {
     requests.push(JSON.parse(options.body));
-    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red cat sits on a chair.', tool_calls: [] } }), {
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red cat sits on a chair.', tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   };
@@ -501,14 +501,14 @@ test('V0.2.28.3 accepts concise concrete observable Vision evidence without adap
     cropImage: async () => { throw new Error('not expected'); },
   });
   assert.equal(requests.length, 1);
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red cat sits on a chair.');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red cat sits on a chair.');
 });
 
 test('V0.2.28.3 accepts concise Traditional Chinese observable evidence without recovery', async (t) => {
   const requests = [];
   globalThis.fetch = async (_url, options) => {
     requests.push(JSON.parse(options.body));
-    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- 紅色人物位於畫面左側。', tool_calls: [] } }), {
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- 紅色人物位於畫面左側。', tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   };
@@ -520,7 +520,7 @@ test('V0.2.28.3 accepts concise Traditional Chinese observable evidence without 
     cropImage: async () => { throw new Error('not expected'); },
   });
   assert.equal(requests.length, 1);
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- 紅色人物位於畫面左側。');
+  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- 紅色人物位於畫面左側。');
 });
 
 test('V0.2.28.4 Vision failure diagnostic exposes safe transport cause without payload content', async (t) => {
@@ -580,7 +580,7 @@ test('V0.29.2 accepts concise CONTENT when explicit evidence contract is present
   const diagnostics = [];
   globalThis.fetch = async (_url, options) => {
     requests.push(JSON.parse(options.body));
-    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- LED.', tool_calls: [] } }), {
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- LED.', tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   };
@@ -611,7 +611,7 @@ test('V0.29.2 retries a final Vision response that omits VISUAL_STATUS and recov
     requests.push(body);
     const content = requests.length === 1
       ? 'A red LED is visible.'
-      : 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red LED is visible.';
+      : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red LED is visible.';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
@@ -644,7 +644,7 @@ test('V0.29.2 treats UNREADABLE as explicit weak evidence and CONTENT without ev
     requests.push(JSON.parse(options.body));
     const content = requests.length === 1
       ? 'VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: Labels are too small.'
-      : 'VISUAL_STATUS: CONTENT';
+      : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT';
     return new Response(JSON.stringify({ message: { role: 'assistant', content, tool_calls: [] } }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
@@ -727,7 +727,7 @@ test('V0.29.3 declarative crop tool requests receive a 12 percent outer context 
     requests.push(JSON.parse(options.body));
     const message = requests.length === 1
       ? { content: '', tool_calls: [{ id: 'crop-margin', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,500,500], purpose: 'read dense labels' }) } }] }
-      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Enlarged labels are now readable.', tool_calls: [] };
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Enlarged labels are now readable.', tool_calls: [] };
     return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
   };
   t.after(() => { globalThis.fetch = originalFetch; });
@@ -753,7 +753,7 @@ test('V0.29.4 locally repairs CONTENT evidence marker formatting without a secon
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (_url, options) => {
     requests.push(JSON.parse(options.body));
-    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nThe MCU is visible on the left.\nI3C2_SDA connects toward R102.', tool_calls: [] } }] }), {
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nThe MCU is visible on the left.\nI3C2_SDA connects toward R102.', tool_calls: [] } }] }), {
       status: 200, headers: { 'content-type': 'application/json' },
     });
   };
@@ -766,10 +766,106 @@ test('V0.29.4 locally repairs CONTENT evidence marker formatting without a secon
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
   });
   assert.equal(requests.length, 1);
-  assert.match(result.markdown, /^VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:/);
+  assert.match(result.markdown, /^VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:/);
   assert.match(result.markdown, /- The MCU is visible on the left\./);
   assert.match(result.markdown, /- I3C2_SDA connects toward R102\./);
   assert.ok(result.warnings.includes('vision_contract_repaired'));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_contract_repaired'
     && entry.details.reason === 'content_evidence_marker_missing'));
+});
+
+test('V0.29.5 CONTENT with SUFFICIENT detail is cacheable final evidence', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- LED D1 is readable.', tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'detail-sufficient' });
+
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(result.needsZoom, false);
+  assert.equal(result.visualStatus, 'content');
+  assert.equal(result.visualDetail, 'sufficient');
+  const quality = diagnostics.find((entry) => entry.event === 'vision_output_quality')?.details;
+  assert.equal(quality?.quality, 'good');
+  assert.equal(quality?.cacheable, true);
+  assert.equal(quality?.visual_status, 'content');
+  assert.equal(quality?.visual_detail, 'sufficient');
+});
+
+test('V0.29.5 CONTENT with NEEDS_ZOOM detail is actionable and non-cacheable', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: NEEDS_ZOOM\nVISUAL_EVIDENCE:\n- The frame is a dense schematic.\nVISUAL_REASON: Net labels are too small for reliable reading.', tool_calls: [] } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1600, height: 1200, label: 'dense-schematic' });
+
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    allowNeedsZoomFallback: true,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('deterministic zoom belongs to caller'); },
+  });
+
+  assert.equal(requests.length, 1);
+  assert.equal(result.needsZoom, true);
+  assert.equal(result.visualStatus, 'content');
+  assert.equal(result.visualDetail, 'needs_zoom');
+  const quality = diagnostics.find((entry) => entry.event === 'vision_output_quality')?.details;
+  assert.equal(quality?.quality, 'needs_zoom');
+  assert.equal(quality?.cacheable, false);
+  assert.equal(quality?.visual_detail, 'needs_zoom');
+});
+
+test('V0.29.5 CONTENT missing VISUAL_DETAIL is contract-invalid and recovery never infers SUFFICIENT', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body);
+    requests.push(body);
+    const content = requests.length === 1
+      ? 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- A red LED is visible.'
+      : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- A red LED is visible.';
+    return new Response(JSON.stringify({ message: { role: 'assistant', content, tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'missing-detail' });
+
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
+    && entry.details.quality === 'weak'
+    && entry.details.reasons.includes('visual_detail_missing')
+    && entry.details.cacheable === false));
+  const recovery = requests[1].messages.at(-1)?.content || '';
+  assert.match(recovery, /VISUAL_DETAIL: SUFFICIENT \| NEEDS_ZOOM/);
+  assert.equal(result.visualDetail, 'sufficient');
 });

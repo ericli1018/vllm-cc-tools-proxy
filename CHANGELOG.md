@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.29.5 - 2026-08-12
+
+- Split evidence-mode Vision output into `VISUAL_STATUS` and `VISUAL_DETAIL`, so real content can be present while current scale still requires zoom.
+- Required `VISUAL_DETAIL: SUFFICIENT|NEEDS_ZOOM` for `VISUAL_STATUS: CONTENT`; missing detail is contract-invalid and never inferred as sufficient.
+- Routed `CONTENT + VISUAL_DETAIL: NEEDS_ZOOM` through the existing non-cacheable `needsZoom` dispatcher, preserving precise `request_image_crop`, 15% overlapping generic image tiles, and PDF DIAGRAM/DENSE_PAGE fallback tiling.
+- Preserved legacy `VISUAL_STATUS: NEEDS_ZOOM` as an accepted actionable compatibility state.
+- Restricted local CONTENT evidence-marker repair so it preserves an explicit detail state and never invents `VISUAL_DETAIL`.
+- Added `visual_detail` to Vision quality/observation diagnostics and result propagation.
+- Advanced cache generations to `visual-v15` / `evidence-v11`; media pipeline remains `media-v8`.
+- Added regression coverage for sufficient-detail caching, detail-driven zoom, missing-detail recovery, generic overlapping zoom dispatch, and cache generation changes.
+
 ## 0.29.4 - 2026-08-12
 
 - Made generic image `VISUAL_STATUS: NEEDS_ZOOM` deterministic: no-crop results now use aspect-aware 15% overlapping zoom tiles instead of resending the unchanged whole image.

@@ -422,7 +422,7 @@ test('V0.29.0 unscoped Read persists original PDF and later Read.pages prefers c
   assert.match(focused.text, /requested_pages: \[42\]/);
 });
 
-test('V0.29.4 generic image NEEDS_ZOOM uses distinct overlapping crops instead of resending the whole frame', async () => {
+test('V0.29.5 CONTENT plus NEEDS_ZOOM detail uses distinct overlapping crops instead of resending the whole frame', async () => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const calls = [];
   const crops = [];
@@ -438,9 +438,9 @@ test('V0.29.4 generic image NEEDS_ZOOM uses distinct overlapping crops instead o
     analyzeVisualAssets: async (assets, options) => {
       calls.push({ ids: assets.map((asset) => asset.sourceId), allowNeedsZoomFallback: options.allowNeedsZoomFallback, prompt: options.prompt });
       if (calls.length === 1) {
-        return { markdown: 'VISUAL_STATUS: NEEDS_ZOOM\nVISUAL_REASON: dense labels', warnings: ['vision_needs_zoom'], cropCount: 0, needsZoom: true, visualStatus: 'needs_zoom' };
+        return { markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: NEEDS_ZOOM\nVISUAL_EVIDENCE:\n- Dense schematic content is visible.\nVISUAL_REASON: dense labels', warnings: ['vision_needs_zoom'], cropCount: 0, needsZoom: true, visualStatus: 'content', visualDetail: 'needs_zoom' };
       }
-      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Tile ${calls.length - 1} is readable.`, warnings: [], cropCount: 0, needsZoom: false, visualStatus: 'content' };
+      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Tile ${calls.length - 1} is readable.`, warnings: [], cropCount: 0, needsZoom: false, visualStatus: 'content', visualDetail: 'sufficient' };
     },
   });
   const output = await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } });
@@ -463,7 +463,7 @@ test('V0.29.4 image evidence and diagnostics carry safe provenance without raw p
     mediaProgress: { contextForPath: () => ({ filename: 'board.pdf', origin: 'read', originTool: 'Read', sourceKind: 'read_pdf_image', readSourceRef: 'a'.repeat(64), pageScope: { pages: [6], canonical: '6' } }) },
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
     normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 1170, height: 827, originalWidth: 1170, originalHeight: 827 }),
-    analyzeVisualAssets: async () => ({ markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Read-derived image evidence.', warnings: [], cropCount: 0 }),
+    analyzeVisualAssets: async () => ({ markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- Read-derived image evidence.', warnings: [], cropCount: 0 }),
   });
   const output = await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }, { path: ['messages', 1, 'content', 0] });
   const normalized = diagnostics.find((entry) => entry.event === 'image_payload_normalized')?.details;

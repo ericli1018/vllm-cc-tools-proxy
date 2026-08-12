@@ -343,3 +343,16 @@ test('README documents V0.29.4 generic zoom fallback, provenance and local contr
   assert.match(readme, /visual-v14/);
   assert.match(readme, /evidence-v10/);
 });
+
+
+test('README documents V0.29.5 two-dimensional Visual Detail contract', () => {
+  assert.match(readme, /V0\.29\.5.*Visual Detail/i);
+  assert.match(readme, /VISUAL_STATUS:\s*CONTENT/i);
+  assert.match(readme, /VISUAL_DETAIL:\s*SUFFICIENT/i);
+  assert.match(readme, /VISUAL_DETAIL:\s*NEEDS_ZOOM/i);
+  assert.match(readme, /missing.*VISUAL_DETAIL.*contract-invalid|VISUAL_DETAIL.*must not.*infer/is);
+  assert.match(readme, /legacy.*VISUAL_STATUS:\s*NEEDS_ZOOM/is);
+  assert.match(readme, /15% overlap/i);
+  assert.match(readme, /visual-v15/);
+  assert.match(readme, /evidence-v11/);
+});

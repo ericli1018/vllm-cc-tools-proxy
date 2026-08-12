@@ -28,9 +28,15 @@ VISUAL_STATUS: BLANK
 VISUAL_STATUS: NEEDS_ZOOM
 VISUAL_STATUS: UNREADABLE
 
-If status is CONTENT, immediately include the exact line VISUAL_EVIDENCE: followed by one or more Markdown bullet lines beginning with "- " that state concrete visible evidence. Concise evidence is valid; do not pad the answer to satisfy a length target.
+If status is CONTENT, the next required contract line MUST be exactly one of:
+VISUAL_DETAIL: SUFFICIENT
+VISUAL_DETAIL: NEEDS_ZOOM
+Then include the exact line VISUAL_EVIDENCE: followed by one or more Markdown bullet lines beginning with "- " that state concrete visible evidence.
+Use VISUAL_DETAIL: SUFFICIENT only when the current image scale is sufficient to read the details needed for reliable evidence.
+Use VISUAL_DETAIL: NEEDS_ZOOM when real content is visible but labels, values, relationships, table cells, nets, pins, or other required details are too small or dense to read reliably. Prefer request_image_crop when a precise region can be identified. If no reliable region can be selected, keep CONTENT + NEEDS_ZOOM so the caller can use deterministic overlapping tiles.
+Concise evidence is valid; do not pad the answer to satisfy a length target.
 If status is BLANK, do not invent content. The status line alone is valid, or it may be followed by a brief factual note.
-If status is NEEDS_ZOOM, the page/image contains real content but whole-frame scale is insufficient for reliable detail. Prefer request_image_crop when a precise region can be identified. If no reliable region can be selected, return NEEDS_ZOOM with VISUAL_REASON so the caller can use deterministic overlapping tiles.
+Legacy VISUAL_STATUS: NEEDS_ZOOM remains accepted for compatibility and means that real content exists but whole-frame scale is insufficient.
 If status is UNREADABLE, do not guess. You may add VISUAL_REASON: followed by a brief reason.
 Do not return file metadata, image dimensions, or access-limit disclaimers as visual evidence.`;
 
@@ -39,9 +45,10 @@ const RAW_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
 
 const VISION_RECOVERY_PROMPT = `The previous final visual response was empty, unreadable, or violated the required output contract. Inspect the supplied image directly and follow this contract exactly:
 VISUAL_STATUS: CONTENT | BLANK | NEEDS_ZOOM | UNREADABLE
-For CONTENT, include the exact line VISUAL_EVIDENCE: followed by one or more "- " evidence bullets.
+For CONTENT, immediately include VISUAL_DETAIL: SUFFICIENT | NEEDS_ZOOM, then the exact line VISUAL_EVIDENCE: followed by one or more "- " evidence bullets.
+Never infer or omit VISUAL_DETAIL for CONTENT. Use SUFFICIENT only when the current scale supports reliable detail reading; use NEEDS_ZOOM when visible content exists but required details remain too small or dense.
 For BLANK, do not invent content; the status line alone is valid.
-For NEEDS_ZOOM, use request_image_crop if a precise region is identifiable; otherwise keep NEEDS_ZOOM and explain why whole-frame scale is insufficient.
+Legacy VISUAL_STATUS: NEEDS_ZOOM is accepted. Use request_image_crop if a precise region is identifiable; otherwise keep the zoom-needed state and explain why whole-frame scale is insufficient.
 For UNREADABLE, do not guess; you may add VISUAL_REASON:.
 Concise valid evidence is acceptable. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.`;
 
@@ -49,6 +56,8 @@ const RAW_RECOVERY_PROMPT = 'The previous response was empty or invalid. Inspect
 
 const VISUAL_STATUS_LINE_PATTERN = /^VISUAL_STATUS:\s*(CONTENT|BLANK|NEEDS_ZOOM|UNREADABLE)\s*$/i;
 const VISUAL_STATUS_PREFIX_PATTERN = /^VISUAL_STATUS:/i;
+const VISUAL_DETAIL_LINE_PATTERN = /^VISUAL_DETAIL:\s*(SUFFICIENT|NEEDS_ZOOM)\s*$/i;
+const VISUAL_DETAIL_PREFIX_PATTERN = /^VISUAL_DETAIL:/i;
 const VISUAL_EVIDENCE_LINE_PATTERN = /^VISUAL_EVIDENCE:\s*$/i;
 const EVIDENCE_BULLET_PATTERN = /^\s*-\s+\S/;
 
@@ -56,34 +65,50 @@ function parseVisionEvidenceContract(content) {
   const text = String(content || '').trim();
   const lines = text.split(/\r?\n/);
   const firstIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstIndex < 0) return { visualStatus: null, contractValid: false, reasons: ['empty'] };
+  if (firstIndex < 0) return { visualStatus: null, visualDetail: null, contractValid: false, reasons: ['empty'] };
 
   const firstLine = lines[firstIndex].trim();
   const statusMatch = firstLine.match(VISUAL_STATUS_LINE_PATTERN);
   if (!statusMatch) {
     return {
       visualStatus: null,
+      visualDetail: null,
       contractValid: false,
       reasons: [VISUAL_STATUS_PREFIX_PATTERN.test(firstLine) ? 'visual_status_invalid' : 'visual_status_missing'],
     };
   }
 
   const visualStatus = statusMatch[1].toLowerCase();
-  if (visualStatus === 'blank') return { visualStatus, contractValid: true, reasons: [] };
-  if (visualStatus === 'needs_zoom') return { visualStatus, contractValid: true, reasons: ['visual_status_needs_zoom'] };
+  if (visualStatus === 'blank') return { visualStatus, visualDetail: null, contractValid: true, reasons: [] };
+  if (visualStatus === 'needs_zoom') {
+    return { visualStatus, visualDetail: 'needs_zoom', contractValid: true, reasons: ['visual_status_needs_zoom'] };
+  }
   if (visualStatus === 'unreadable') {
-    return { visualStatus, contractValid: true, reasons: ['visual_status_unreadable'] };
+    return { visualStatus, visualDetail: null, contractValid: true, reasons: ['visual_status_unreadable'] };
   }
 
-  const evidenceMarkerIndex = lines.findIndex((line, index) => index > firstIndex && VISUAL_EVIDENCE_LINE_PATTERN.test(line.trim()));
+  const detailIndex = lines.findIndex((line, index) => index > firstIndex && VISUAL_DETAIL_PREFIX_PATTERN.test(line.trim()));
+  if (detailIndex < 0) {
+    return { visualStatus, visualDetail: null, contractValid: false, reasons: ['visual_detail_missing'] };
+  }
+  const detailMatch = lines[detailIndex].trim().match(VISUAL_DETAIL_LINE_PATTERN);
+  if (!detailMatch) {
+    return { visualStatus, visualDetail: null, contractValid: false, reasons: ['visual_detail_invalid'] };
+  }
+  const visualDetail = detailMatch[1].toLowerCase();
+
+  const evidenceMarkerIndex = lines.findIndex((line, index) => index > detailIndex && VISUAL_EVIDENCE_LINE_PATTERN.test(line.trim()));
   if (evidenceMarkerIndex < 0) {
-    return { visualStatus, contractValid: false, reasons: ['content_evidence_missing'] };
+    return { visualStatus, visualDetail, contractValid: false, reasons: ['content_evidence_missing'] };
   }
   const hasEvidenceBullet = lines.slice(evidenceMarkerIndex + 1).some((line) => EVIDENCE_BULLET_PATTERN.test(line));
   if (!hasEvidenceBullet) {
-    return { visualStatus, contractValid: false, reasons: ['content_evidence_missing'] };
+    return { visualStatus, visualDetail, contractValid: false, reasons: ['content_evidence_missing'] };
   }
-  return { visualStatus, contractValid: true, reasons: [] };
+  if (visualDetail === 'needs_zoom') {
+    return { visualStatus, visualDetail, contractValid: true, reasons: ['visual_detail_needs_zoom'] };
+  }
+  return { visualStatus, visualDetail, contractValid: true, reasons: [] };
 }
 
 function repairVisionEvidenceContract(content) {
@@ -97,16 +122,30 @@ function repairVisionEvidenceContract(content) {
     return { content: text, repaired: false, reason: '' };
   }
   const parsed = parseVisionEvidenceContract(text);
-  if (parsed.contractValid || !parsed.reasons.includes('content_evidence_missing')) {
+  if (parsed.contractValid || !parsed.reasons.includes('content_evidence_missing') || !parsed.visualDetail) {
     return { content: text, repaired: false, reason: '' };
   }
+  const detailIndex = lines.findIndex((line, index) => index > firstIndex && VISUAL_DETAIL_LINE_PATTERN.test(line.trim()));
+  if (detailIndex < 0) return { content: text, repaired: false, reason: '' };
+  const reasonLines = lines.slice(firstIndex + 1)
+    .map((line) => line.trim())
+    .filter((line) => /^VISUAL_REASON:/i.test(line));
   const body = lines.slice(firstIndex + 1)
     .map((line) => line.trim())
-    .filter((line) => line && !VISUAL_EVIDENCE_LINE_PATTERN.test(line) && !/^VISUAL_REASON:/i.test(line));
+    .filter((line) => line
+      && !VISUAL_DETAIL_PREFIX_PATTERN.test(line)
+      && !VISUAL_EVIDENCE_LINE_PATTERN.test(line)
+      && !/^VISUAL_REASON:/i.test(line));
   if (body.length === 0) return { content: text, repaired: false, reason: '' };
   const bullets = body.map((line) => EVIDENCE_BULLET_PATTERN.test(line) ? line : `- ${line.replace(/^#+\s*/, '')}`);
   return {
-    content: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n${bullets.join('\n')}`,
+    content: [
+      'VISUAL_STATUS: CONTENT',
+      lines[detailIndex].trim(),
+      'VISUAL_EVIDENCE:',
+      ...bullets,
+      ...reasonLines,
+    ].join('\n'),
     repaired: true,
     reason: 'content_evidence_marker_missing',
   };
@@ -115,28 +154,30 @@ function repairVisionEvidenceContract(content) {
 function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence' } = {}) {
   const text = String(content || '').trim();
   if (toolCallCount > 0) {
-    return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, contractValid: true };
+    return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, visualDetail: null, contractValid: true };
   }
   if (!text) {
-    return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, contractValid: false };
+    return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, visualDetail: null, contractValid: false };
   }
   if (outputContract === 'raw') {
-    return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, contractValid: true };
+    return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, visualDetail: null, contractValid: true };
   }
 
   const contract = parseVisionEvidenceContract(text);
   if (contract.visualStatus === 'blank' && contract.contractValid) {
     return { quality: 'good', reasons: [], cacheable: true, ...contract };
   }
-  if (contract.visualStatus === 'content' && contract.contractValid) {
+  if (contract.visualStatus === 'content' && contract.visualDetail === 'sufficient' && contract.contractValid) {
     return { quality: 'good', reasons: [], cacheable: true, ...contract };
   }
-  if (contract.visualStatus === 'needs_zoom' && contract.contractValid) {
+  if (contract.contractValid && (
+    contract.visualStatus === 'needs_zoom'
+    || (contract.visualStatus === 'content' && contract.visualDetail === 'needs_zoom')
+  )) {
     return { quality: 'needs_zoom', cacheable: false, ...contract };
   }
   return { quality: 'weak', cacheable: false, ...contract };
 }
-
 
 function dataUrl(asset) { return `data:${asset.mediaType};base64,${asset.buffer.toString('base64')}`; }
 
@@ -373,6 +414,7 @@ export async function analyzeVisualAssets(assets, {
       usable_content: quality.quality === 'good',
       output_contract: outputContract,
       visual_status: quality.visualStatus,
+      visual_detail: quality.visualDetail,
       contract_valid: quality.contractValid,
     });
     await onDiagnostic('vision_output_quality', {
@@ -381,6 +423,7 @@ export async function analyzeVisualAssets(assets, {
       cacheable: quality.cacheable,
       output_contract: outputContract,
       visual_status: quality.visualStatus,
+      visual_detail: quality.visualDetail,
       contract_valid: quality.contractValid,
     });
 
@@ -392,11 +435,13 @@ export async function analyzeVisualAssets(assets, {
           cropCount,
           needsZoom: false,
           visualStatus: quality.visualStatus,
+          visualDetail: quality.visualDetail,
         };
       }
       if (quality.quality === 'needs_zoom') {
         await onDiagnostic('vision_needs_zoom', {
           visual_status: quality.visualStatus,
+          visual_detail: quality.visualDetail,
           crop_count: cropCount,
           fallback_allowed: Boolean(allowNeedsZoomFallback),
         });
@@ -412,13 +457,14 @@ export async function analyzeVisualAssets(assets, {
             cropCount,
             needsZoom: true,
             visualStatus: quality.visualStatus,
+            visualDetail: quality.visualDetail,
           };
         }
         if (toolsEnabled && qualityRecoveryRetries < 1) {
           qualityRecoveryRetries += 1;
           messages.push({
             role: 'user',
-            content: 'You declared VISUAL_STATUS: NEEDS_ZOOM. If a precise region can resolve the missing detail, call request_image_crop now using normalized 0-1000 coordinates. Otherwise return UNREADABLE without guessing.',
+            content: 'You declared that the current visual detail NEEDS_ZOOM. If a precise region can resolve the missing detail, call request_image_crop now using normalized 0-1000 coordinates. Otherwise return UNREADABLE without guessing.',
           });
           continue;
         }

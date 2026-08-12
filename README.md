@@ -1,8 +1,31 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.4 closes the generic-image zoom execution gap, preserves safe media provenance, and locally repairs formatting-only Vision contract defects while retaining V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
+
+## V0.29.5 Visual Detail Contract
+
+V0.29.5 splits the evidence-producing Vision result into two independent questions: whether real visual content exists, and whether the current scale is sufficient to read the required details reliably. A `CONTENT` result is no longer automatically treated as detail-complete.
+
+The canonical `CONTENT` contract is now:
+
+```text
+VISUAL_STATUS: CONTENT
+VISUAL_DETAIL: SUFFICIENT | NEEDS_ZOOM
+VISUAL_EVIDENCE:
+- concrete visible evidence
+```
+
+`VISUAL_DETAIL: SUFFICIENT` means the current image scale is adequate for reliable evidence extraction. `CONTENT + SUFFICIENT` is classified as **GOOD**, is cacheable, and completes the current visual pass.
+
+`VISUAL_DETAIL: NEEDS_ZOOM` means real content is visible, but one or more required labels, values, pins, nets, table cells, arrows, or spatial relationships are too small or dense to read reliably. It is actionable and non-cacheable. The existing zoom dispatcher is reused unchanged: a precise `request_image_crop` remains preferred when the model can identify the region; otherwise ordinary images use the V0.29.4 deterministic generic fallback with **15% overlap** and at most 6 automatic tiles, while PDF `DIAGRAM` / `DENSE_PAGE` pages retain their V0.29.3 overlapping PDF-tile path.
+
+A `CONTENT` response with missing `VISUAL_DETAIL` is **contract-invalid** and receives the existing bounded recovery. The Proxy must not infer `SUFFICIENT` from `CONTENT`, evidence length, or the presence of a `VISUAL_EVIDENCE` block. Local V0.29.4 formatting repair remains allowed only when a valid `VISUAL_DETAIL` already exists; the repair path never invents the detail state.
+
+Legacy `VISUAL_STATUS: NEEDS_ZOOM` remains accepted for backward compatibility and is normalized internally to an actionable zoom-needed result. `BLANK` remains a successful cacheable empty-image state, and `UNREADABLE` remains non-usable evidence that must not be guessed from.
+
+Vision diagnostics now include `visual_detail` alongside `visual_status`, `output_contract`, and `contract_valid`. Because both the prompt semantics and accepted evidence contract changed, cache generations advance to `visual-v15` and `evidence-v11`; the media pipeline remains `media-v8`. No new required ENV variable is added.
 
 ## V0.29.4 Generic Zoom Fallback & Vision Contract Repair
 

@@ -493,7 +493,7 @@ test('V0.29.3 DIAGRAM NEEDS_ZOOM falls back to sequential overlapping PDF tiles 
         assert.equal(options.allowNeedsZoomFallback, true);
         return { markdown: 'VISUAL_STATUS: NEEDS_ZOOM\nVISUAL_REASON: labels are too dense at whole-page scale', warnings: [], cropCount: 0, needsZoom: true, visualStatus: 'needs_zoom' };
       }
-      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- ${assets[0].sourceId} preserves local arrows and labels.`, warnings: [], cropCount: 0 };
+      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- ${assets[0].sourceId} preserves local arrows and labels.`, warnings: [], cropCount: 0 };
     },
   });
   const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'zoom_tile');

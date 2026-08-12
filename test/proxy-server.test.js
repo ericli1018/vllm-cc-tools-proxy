@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.4', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.5', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -254,7 +254,7 @@ test('streamed media request preprocesses under managed slot then streams base v
     const payload = JSON.parse((await read(req)).toString());
     assert.equal(payload.model, 'vision-model');
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- The image shows readable text.' } }] }));
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- The image shows readable text.' } }] }));
   });
   const vllm = http.createServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
@@ -384,7 +384,7 @@ test('invalid visual crop is recovered internally and never becomes a Claude Cod
             },
           }],
         }
-      : { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- RECOVERED VISUAL ANALYSIS', tool_calls: [] };
+      : { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- RECOVERED VISUAL ANALYSIS', tool_calls: [] };
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message }] }));
   });
@@ -3088,7 +3088,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.4/);
+  assert.match(first, /VERSION\s+0\.29\.5/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3118,10 +3118,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.4');
+  assert.equal(payload.version, '0.29.5');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.4/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.5/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
