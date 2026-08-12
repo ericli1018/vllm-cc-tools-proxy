@@ -273,3 +273,16 @@ test('V0.2.28.16 native status line localizes runtime phases for every supported
     assert.match(line, /◓/);
   }
 });
+
+test('V0.2.28.19 status line puts Proxy counters after title and renders whole seconds only', () => {
+  const line = language.formatRuntimeStatusLine('zh-TW', {
+    version: '0.2.28.19', phase: 'thinking', elapsedMs: 59123,
+    receivedBytes: 45076, throughputBps: 790, pulseIndex: 1,
+    proxySessions: 3, proxyActive: 2, proxyWaiting: 1,
+  });
+  assert.equal(
+    line,
+    '◆ CC TOOL PROXY 0.2.28.19 │ ▦ 3   ▶ 2   ⋯ 1 │ ◓ 思考中 │ 59s │ 44.02 KB │ 790 B/s',
+  );
+  assert.doesNotMatch(line, /59\.\d+s/);
+});

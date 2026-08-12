@@ -685,40 +685,16 @@ export function createProxyServer(config, dependencies = {}) {
       }
     };
     const getBaseResponseBytes = () => baseResponseBytes;
-    const getCurrentRoundResponseBytes = () => (
-      modelRoundProgress.active
+    const getCurrentRoundResponseBytes = () => {
+      const snapshot = runtimeTelemetry.snapshotRequest(requestId);
+      if (snapshot?.known && snapshot.roundActive) return snapshot.receivedBytes || 0;
+      return modelRoundProgress.active
         ? Math.max(0, modelOutputBytes - modelRoundProgress.startModelBytes)
-        : 0
-    );
-    const modelHeartbeatSample = {
-      roundKey: '',
-      sampledAt: 0,
-      sampledBytes: 0,
-      pulseIndex: 0,
+        : 0;
     };
     const sampleModelHeartbeat = (now = Date.now()) => {
-      const roundBytes = getCurrentRoundResponseBytes();
-      const roundKey = `${modelRoundProgress.round}|${modelRoundProgress.startedAt}|${modelRoundProgress.startModelBytes}`;
-      if (modelHeartbeatSample.roundKey !== roundKey) {
-        modelHeartbeatSample.roundKey = roundKey;
-        modelHeartbeatSample.sampledAt = 0;
-        modelHeartbeatSample.sampledBytes = 0;
-        modelHeartbeatSample.pulseIndex = 0;
-      }
-
-      let recentBytesPerSecond;
-      if (modelHeartbeatSample.sampledAt > 0
-          && now > modelHeartbeatSample.sampledAt
-          && roundBytes >= modelHeartbeatSample.sampledBytes) {
-        recentBytesPerSecond = (roundBytes - modelHeartbeatSample.sampledBytes) * 1000
-          / (now - modelHeartbeatSample.sampledAt);
-      }
-
-      const pulseIndex = modelHeartbeatSample.pulseIndex;
-      modelHeartbeatSample.pulseIndex = (modelHeartbeatSample.pulseIndex + 1) % 4;
-      modelHeartbeatSample.sampledAt = now;
-      modelHeartbeatSample.sampledBytes = roundBytes;
-
+      const snapshot = runtimeTelemetry.snapshotRequest(requestId, now);
+      const roundBytes = snapshot?.known ? (snapshot.receivedBytes || 0) : getCurrentRoundResponseBytes();
       const idleMs = lastModelOutputDeltaAt > 0
         ? Math.max(0, now - lastModelOutputDeltaAt)
         : 0;
@@ -728,15 +704,15 @@ export function createProxyServer(config, dependencies = {}) {
         && idleMs >= Math.max(1, config.progressHeartbeatMs),
       );
       return {
-        seconds: modelRoundProgress.startedAt > 0
-          ? Math.floor(Math.max(0, now - modelRoundProgress.startedAt) / 1000)
-          : 0,
+        seconds: snapshot?.known
+          ? Math.floor(Math.max(0, snapshot.elapsedMs || 0) / 1000)
+          : (modelRoundProgress.startedAt > 0 ? Math.floor(Math.max(0, now - modelRoundProgress.startedAt) / 1000) : 0),
         receivedBytes: roundBytes,
-        modelPhase: modelRoundProgress.phase || 'waiting',
-        recentBytesPerSecond,
+        modelPhase: modelRoundProgress.phase || snapshot?.underlyingPhase || 'waiting',
+        recentBytesPerSecond: snapshot?.known ? snapshot.throughputBps : undefined,
         stalled,
         idleSeconds: Math.floor(idleMs / 1000),
-        pulseIndex,
+        pulseIndex: snapshot?.known ? snapshot.pulseIndex : 0,
       };
     };
     const baseBusyState = { waiting: false, acceptedAt: 0 };
@@ -926,11 +902,18 @@ export function createProxyServer(config, dependencies = {}) {
         let sessionId = '';
         try { sessionId = decodeURIComponent(encodedSessionId); } catch {}
         const snapshot = runtimeTelemetry.snapshotSession(sessionId);
+        const proxySnapshot = runtimeTelemetry.snapshot();
         if (!sessionId || !snapshot.known) {
           completed = true;
           return sendJson(res, 404, { service: 'cc-tool-proxy', version: VERSION, status: 'unknown_session' });
         }
-        const display = formatRuntimeStatusLine(config.responseLanguage, { version: VERSION, ...snapshot });
+        const display = formatRuntimeStatusLine(config.responseLanguage, {
+          version: VERSION,
+          ...snapshot,
+          proxySessions: proxySnapshot.sessions,
+          proxyActive: proxySnapshot.active,
+          proxyWaiting: proxySnapshot.waiting,
+        });
         completed = true;
         log(config, 'debug', 'runtime_status_read', {
           requestId,
@@ -945,6 +928,8 @@ export function createProxyServer(config, dependencies = {}) {
           locale: config.responseLanguage,
           active: snapshot.active,
           phase: snapshot.phase,
+          round: snapshot.round || 0,
+          round_active: Boolean(snapshot.roundActive),
           underlying_phase: snapshot.underlyingPhase || snapshot.lastPhase || snapshot.phase,
           elapsed_ms: snapshot.elapsedMs || 0,
           phase_elapsed_ms: snapshot.phaseElapsedMs || 0,
@@ -955,6 +940,11 @@ export function createProxyServer(config, dependencies = {}) {
           tool_name: snapshot.toolName || '',
           detail: snapshot.detail || '',
           pulse_index: snapshot.pulseIndex || 0,
+          proxy: {
+            sessions: proxySnapshot.sessions || 0,
+            active: proxySnapshot.active || 0,
+            waiting: proxySnapshot.waiting || 0,
+          },
           display,
         });
       }
@@ -1312,6 +1302,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.firstByteNotified = false;
           modelRoundProgress.firstSemanticDeltaNotified = false;
           modelRoundProgress.phase = 'waiting';
+          runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: directStartedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
             details: { phase: 'managed_model_round_start', round: 1 },
@@ -1329,6 +1320,7 @@ export function createProxyServer(config, dependencies = {}) {
               onBusyEvent: onBaseBusyEvent,
             },
           );
+          runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, original);
           progress.stopSemanticHeartbeat();
@@ -1733,10 +1725,12 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.firstByteNotified = false;
               modelRoundProgress.firstSemanticDeltaNotified = false;
               modelRoundProgress.phase = 'waiting';
+              runtimeTelemetry.beginModelRound(requestId, { round, startedAt });
               runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
               const completedModelOutputBytes = getCurrentRoundResponseBytes();
+              runtimeTelemetry.endModelRound(requestId, { endedAt: endedAt || Date.now() });
               modelRoundProgress.active = false;
               progressTiming.mode = 'step';
               progressTiming.startedAt = endedAt || Date.now();
@@ -1828,6 +1822,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.firstByteNotified = false;
           modelRoundProgress.firstSemanticDeltaNotified = false;
           modelRoundProgress.phase = 'waiting';
+          runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: progressTiming.startedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
           let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
@@ -1871,6 +1866,7 @@ export function createProxyServer(config, dependencies = {}) {
               }
             },
           });
+          runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, request);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });

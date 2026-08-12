@@ -1,6 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.18 hardens Final Language Repair against unchanged English echoes with a mandatory translation contract and one bounded strict retry per backend, while preserving V0.2.28.17 semantic model-output telemetry.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.19 unifies the 30-second Progress heartbeat and Claude Code native statusLine on one current-model-round telemetry source, adds Proxy-wide session/activity/wait counters to the statusLine, and renders elapsed seconds as whole integers.
+
+## V0.2.28.19 Unified Round-Scoped Telemetry
+
+V0.2.28.19 removes the remaining scope mismatch between the visible 30-second SSE Progress heartbeat and Claude Code native `statusLine`. Both now read the same current-model-round semantic telemetry snapshot for elapsed time, output bytes, and rolling throughput.
+
+Each Base-model round explicitly resets its visible telemetry state:
+
+```text
+round bytes       = 0
+rolling samples   = []
+round elapsed     = 0s
+```
+
+Decoded semantic deltas (`thinking_delta.thinking`, `text_delta.text`, and `input_json_delta.partial_json`) advance that current-round state. Raw Base-vLLM HTTP wire bytes remain separate and continue to serve first-byte, timeout, and connection-stall diagnostics only. Request-total semantic bytes remain internal diagnostics and are not shown in the statusLine.
+
+The 30-second Progress heartbeat is preserved for Claude Code liveness, but its displayed throughput now reads the same 5-second semantic rolling window used by statusLine. This prevents a new Managed Round from inheriting the prior round's bytes or B/s. Non-model processor phases such as Language, Compact, and Vision do not display stale Base-model bytes/rate.
+
+The Claude Code statusLine now places Proxy-wide counters immediately after the title:
+
+```text
+◆ CC TOOL PROXY 0.2.28.19 │ ▦ 3   ▶ 2   ⋯ 1 │ ◓ 思考中 │ 59s │ 44.02 KB │ 790 B/s
+```
+
+Counter semantics are unchanged from the runtime banner: `▦` is the number of currently active Claude Code sessions known to the Proxy, `▶` is active `/v1/messages` requests, and `⋯` is the subset currently waiting in explicit vLLM busy-retry state. `⋯` does not represent vLLM's internal scheduler queue.
+
+All statusLine elapsed values are rendered as whole seconds (`59s`, never `59.123s`). The existing `zh-TW`, `zh-CN`, `en-US`, `ja-JP`, and `ko-KP` runtime phase localization remains unchanged. No new ENV variables are added.
 
 ## V0.2.28.18 Strict Final Language Repair
 

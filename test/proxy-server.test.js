@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.18', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.19', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -3051,7 +3051,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.18/);
+  assert.match(first, /VERSION\s+0\.2\.28\.19/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3081,10 +3081,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.2.28.18');
+  assert.equal(payload.version, '0.2.28.19');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.18/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.19/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3186,4 +3186,34 @@ test('V0.2.28.18 managed_model_round_completed logs semantic model bytes before 
   const completed = logs.find((entry) => entry.event === 'managed_model_round_completed');
   assert.ok(completed, 'managed_model_round_completed log missing');
   assert.equal(completed.model_output_bytes, Buffer.byteLength('thinkFINAL'));
+});
+
+test('V0.2.28.19 status endpoint combines current-round semantic telemetry with Proxy-wide counters', async (t) => {
+  const RuntimeTelemetryClass = (await import('../src/proxy/runtime-telemetry.js')).RuntimeTelemetry;
+  const runtimeTelemetry = new RuntimeTelemetryClass();
+  const release1 = runtimeTelemetry.beginRequest({ requestId: 'global-r1', sessionId: 'global-s1' });
+  const release2 = runtimeTelemetry.beginRequest({ requestId: 'global-r2', sessionId: 'global-s2' });
+  const release3 = runtimeTelemetry.beginRequest({ requestId: 'global-r3', sessionId: 'global-s3' });
+  runtimeTelemetry.beginModelRound('global-r1', { round: 2, startedAt: Date.now() - 59_123 });
+  runtimeTelemetry.updateRequest('global-r1', { phase: 'thinking' });
+  runtimeTelemetry.observeModelDelta('global-r1', 45_076);
+  runtimeTelemetry.setBusy('global-r3', true, { attempt: 1 });
+
+  const upstream = http.createServer((_req, res) => { res.writeHead(500); res.end(); });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, responseLanguage: 'zh-TW' }), { runtimeTelemetry });
+  const proxyUrl = await listen(proxy);
+  t.after(() => { release1(); release2(); release3(); upstream.close(); proxy.close(); });
+
+  const response = await fetch(`${proxyUrl}/cc-tool-proxy/status/global-s1`);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.deepEqual(payload.proxy, { sessions: 3, active: 3, waiting: 1 });
+  assert.equal(payload.round, 2);
+  assert.equal(payload.received_bytes, 45_076);
+  assert.match(payload.display, /CC TOOL PROXY/);
+  assert.match(payload.display, /▦ 3\s+▶ 3\s+⋯ 1/);
+  assert.match(payload.display, /思考中/);
+  assert.match(payload.display, /59s/);
+  assert.doesNotMatch(payload.display, /59\.\d+s/);
 });

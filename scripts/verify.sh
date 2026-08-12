@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.18'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.18'
+test "$(node -p "require('./package.json').version")" = '0.2.28.19'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.19'
 
 
 test -f src/i18n/response-language.js
@@ -438,6 +438,20 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 
 
 
+
+# V0.2.28.19 unified round-scoped telemetry + Proxy-global status counters
+test -f V0.2.28.19-更新說明.md
+grep -Fq 'V0.2.28.19 Unified Round-Scoped Telemetry' README.md
+grep -Fq 'beginModelRound' src/proxy/runtime-telemetry.js
+grep -Fq 'endModelRound' src/proxy/runtime-telemetry.js
+grep -Fq 'snapshotRequest' src/proxy/runtime-telemetry.js
+grep -Fq '▦ ${Math.max' src/i18n/response-language.js
+grep -Fq 'proxySessions: proxySnapshot.sessions' src/services/proxy-server.js
+grep -Fq 'proxy: {' src/services/proxy-server.js
+grep -Fq 'runtimeTelemetry.beginModelRound' src/services/proxy-server.js
+grep -Fq 'runtimeTelemetry.endModelRound' src/services/proxy-server.js
+grep -Fq "Math.floor((Number(elapsedMs) || 0) / 1000)" src/i18n/response-language.js
+
 # V0.2.28.18 strict Final Language Repair + round semantic-byte completion
 test -f V0.2.28.18-更新說明.md
 grep -Fq 'V0.2.28.18 Strict Final Language Repair' README.md
@@ -445,7 +459,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.2.28.18'
+test "$(node -p "require('./package-lock.json').version")" = '0.2.28.19'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md

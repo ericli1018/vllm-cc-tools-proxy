@@ -84,15 +84,17 @@ function runtimeStatusGlyph(phase, pulseIndex = 0) {
 export function formatRuntimeStatusLine(locale, {
   version = '', phase = 'idle', elapsedMs = 0, receivedBytes = 0, throughputBps = 0,
   pulseIndex = 0, busyAttempt = 0, toolName = '', detail = '',
+  proxySessions = 0, proxyActive = 0, proxyWaiting = 0,
 } = {}) {
   const resolved = resolveResponseLanguage(locale);
   const labels = RUNTIME_STATUS_LINE_LABELS[resolved] || RUNTIME_STATUS_LINE_LABELS[DEFAULT_RESPONSE_LANGUAGE];
   const normalizedPhase = Object.hasOwn(labels, phase) ? phase : 'idle';
   const pieces = [
     `◆ CC TOOL PROXY${version ? ` ${version}` : ''}`,
+    `▦ ${Math.max(0, Math.trunc(Number(proxySessions) || 0))}   ▶ ${Math.max(0, Math.trunc(Number(proxyActive) || 0))}   ⋯ ${Math.max(0, Math.trunc(Number(proxyWaiting) || 0))}`,
     `${runtimeStatusGlyph(normalizedPhase, pulseIndex)} ${labels[normalizedPhase]}`,
   ];
-  if (!['idle'].includes(normalizedPhase)) pieces.push(`${Math.max(0, Math.floor(Number(elapsedMs) || 0) / 1000)}s`);
+  if (!['idle'].includes(normalizedPhase)) pieces.push(`${Math.max(0, Math.floor((Number(elapsedMs) || 0) / 1000))}s`);
   if (Number(receivedBytes) > 0) pieces.push(formatReceivedBytes(receivedBytes));
   const rate = formatByteRate(throughputBps);
   if (rate && Number(throughputBps) > 0) pieces.push(rate);

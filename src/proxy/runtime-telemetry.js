@@ -65,6 +65,13 @@ export class RuntimeTelemetry {
         lastByteAt: 0,
         throughputBps: 0,
         modelSamples: [],
+        round: 0,
+        roundActive: false,
+        roundStartedAt: 0,
+        roundEndedAt: 0,
+        roundReceivedBytes: 0,
+        roundLastByteAt: 0,
+        roundSamples: [],
         busyAttempt: 0,
         toolName: '',
         detail: '',
@@ -101,6 +108,39 @@ export class RuntimeTelemetry {
     };
   }
 
+  beginModelRound(requestId, { round = 1, startedAt = this.clock() } = {}) {
+    const id = String(requestId || '');
+    const state = this.requestStates.get(id);
+    if (!state) return false;
+    const now = Number.isFinite(Number(startedAt)) ? Number(startedAt) : this.clock();
+    state.round = Math.max(1, clampCount(round) || 1);
+    state.roundActive = true;
+    state.roundStartedAt = now;
+    state.roundEndedAt = 0;
+    state.roundReceivedBytes = 0;
+    state.roundLastByteAt = 0;
+    state.roundSamples = [];
+    state.phase = 'waiting';
+    state.phaseStartedAt = now;
+    state.busyAttempt = 0;
+    state.toolName = '';
+    state.detail = '';
+    state.updatedAt = now;
+    if (state.sessionId) this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
+    return true;
+  }
+
+  endModelRound(requestId, { endedAt = this.clock() } = {}) {
+    const id = String(requestId || '');
+    const state = this.requestStates.get(id);
+    if (!state) return false;
+    const now = Number.isFinite(Number(endedAt)) ? Number(endedAt) : this.clock();
+    state.roundActive = false;
+    state.roundEndedAt = now;
+    state.updatedAt = now;
+    return true;
+  }
+
   updateRequest(requestId, patch = {}) {
     const id = String(requestId || '');
     const state = this.requestStates.get(id);
@@ -128,6 +168,23 @@ export class RuntimeTelemetry {
     state.modelSamples.push({ at: now, bytes: delta });
     const cutoff = now - this.throughputWindowMs;
     while (state.modelSamples.length && state.modelSamples[0].at < cutoff) state.modelSamples.shift();
+
+    // Backward compatibility for callers/tests that have not explicitly opened a round.
+    if (!state.roundActive && state.round === 0) {
+      state.round = 1;
+      state.roundActive = true;
+      state.roundStartedAt = state.startedAt;
+      state.roundEndedAt = 0;
+      state.roundReceivedBytes = 0;
+      state.roundLastByteAt = 0;
+      state.roundSamples = [];
+    }
+    if (state.roundActive) {
+      state.roundReceivedBytes += delta;
+      state.roundLastByteAt = now;
+      state.roundSamples.push({ at: now, bytes: delta });
+      while (state.roundSamples.length && state.roundSamples[0].at < cutoff) state.roundSamples.shift();
+    }
     return true;
   }
 
@@ -142,14 +199,22 @@ export class RuntimeTelemetry {
     return this.observeModelDelta(id, delta, now);
   }
 
-  #rollingThroughput(state, now) {
+  #rollingThroughputFromSamples(samples, now) {
     const cutoff = now - this.throughputWindowMs;
-    const samples = state.modelSamples.filter((sample) => sample.at >= cutoff);
-    if (!samples.length) return 0;
-    const bytes = samples.reduce((sum, sample) => sum + sample.bytes, 0);
-    const oldestAt = samples[0].at;
+    const recent = samples.filter((sample) => sample.at >= cutoff);
+    if (!recent.length) return 0;
+    const bytes = recent.reduce((sum, sample) => sum + sample.bytes, 0);
+    const oldestAt = recent[0].at;
     const elapsedMs = Math.max(1000, Math.min(this.throughputWindowMs, now - oldestAt || 1000));
     return Math.max(0, bytes * 1000 / elapsedMs);
+  }
+
+  #rollingThroughput(state, now) {
+    return this.#rollingThroughputFromSamples(state.modelSamples, now);
+  }
+
+  #rollingRoundThroughput(state, now) {
+    return this.#rollingThroughputFromSamples(state.roundSamples, now);
   }
 
   setBusy(requestId, busy, { attempt = 0 } = {}) {
@@ -174,36 +239,50 @@ export class RuntimeTelemetry {
     return true;
   }
 
+  snapshotRequest(requestId, now = this.clock()) {
+    const id = String(requestId || '');
+    const state = this.requestStates.get(id);
+    if (!state) return { known: false, active: false, phase: 'idle' };
+
+    const roundVisible = Boolean(state.roundActive);
+    const visibleLastByteAt = roundVisible ? state.roundLastByteAt : 0;
+    const idleMs = visibleLastByteAt > 0 ? Math.max(0, now - visibleLastByteAt) : 0;
+    const basePhase = state.phase;
+    const phase = roundVisible && visibleLastByteAt > 0 && idleMs >= 30_000
+      && ['thinking', 'response', 'tool'].includes(basePhase)
+      ? 'stalled'
+      : basePhase;
+    const elapsedAnchor = roundVisible && state.roundStartedAt > 0 ? state.roundStartedAt : state.phaseStartedAt;
+
+    return {
+      known: true,
+      active: true,
+      requestId: state.requestId,
+      sessionId: state.sessionId,
+      phase,
+      underlyingPhase: basePhase,
+      round: state.round,
+      roundActive: state.roundActive,
+      elapsedMs: Math.max(0, now - elapsedAnchor),
+      phaseElapsedMs: Math.max(0, now - state.phaseStartedAt),
+      receivedBytes: roundVisible ? state.roundReceivedBytes : 0,
+      throughputBps: roundVisible ? this.#rollingRoundThroughput(state, now) : 0,
+      idleMs,
+      busyAttempt: state.busyAttempt,
+      toolName: state.toolName,
+      detail: state.detail,
+      pulseIndex: Math.floor(Math.max(0, now - state.phaseStartedAt) / 1000) % 4,
+      updatedAt: state.updatedAt,
+    };
+  }
+
   snapshotSession(sessionId, now = this.clock()) {
     const session = String(sessionId || '').trim();
     if (!session) return { known: false, active: false, phase: 'idle' };
     const active = [...this.requestStates.values()]
       .filter((state) => state.sessionId === session)
       .sort((a, b) => b.startedAt - a.startedAt)[0];
-    if (active) {
-      const elapsedMs = Math.max(0, now - active.startedAt);
-      const idleMs = active.lastByteAt > 0 ? Math.max(0, now - active.lastByteAt) : 0;
-      const phase = active.lastByteAt > 0 && idleMs >= 30_000 && ['thinking', 'response', 'tool'].includes(active.phase)
-        ? 'stalled'
-        : active.phase;
-      return {
-        known: true,
-        active: true,
-        requestId: active.requestId,
-        phase,
-        underlyingPhase: active.phase,
-        elapsedMs,
-        phaseElapsedMs: Math.max(0, now - active.phaseStartedAt),
-        receivedBytes: active.receivedBytes,
-        throughputBps: this.#rollingThroughput(active, now),
-        idleMs,
-        busyAttempt: active.busyAttempt,
-        toolName: active.toolName,
-        detail: active.detail,
-        pulseIndex: Math.floor(Math.max(0, now - active.phaseStartedAt) / 1000) % 4,
-        updatedAt: active.updatedAt,
-      };
-    }
+    if (active) return this.snapshotRequest(active.requestId, now);
     const remembered = this.lastSessionStates.get(session);
     if (!remembered && !this.bannerSessions.has(session)) return { known: false, active: false, phase: 'idle' };
     return {

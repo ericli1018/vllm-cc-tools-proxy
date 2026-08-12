@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.28.19 - 2026-08-12
+
+- Unified native Claude Code `statusLine` and the visible 30-second SSE model heartbeat on the same current-model-round semantic telemetry snapshot.
+- Added explicit RuntimeTelemetry model-round lifecycle so bytes, 5-second rolling throughput samples, and round elapsed time reset at every new round.
+- Prevented Language/Compact/Vision and other non-model phases from displaying stale previous-round model bytes or throughput.
+- Added Proxy-wide statusLine counters using terminal-safe monochrome glyphs: `▦` sessions, `▶` active requests, and `⋯` explicit busy-wait requests.
+- Added the same Proxy-global counters to the read-only `/cc-tool-proxy/status/<session-id>` response.
+- Fixed statusLine elapsed formatting so milliseconds are always displayed as whole integer seconds.
+- Preserved the 30-second SSE heartbeat, semantic-only model byte accounting, raw-wire timeout/stall diagnostics, independent Base scheduling, and V0.2.28.18 strict Final Language Repair.
+
 ## 0.2.28.18 - 2026-08-11
 
 - Strengthened the shared Final Language Repair prompt so target-language translation is mandatory for natural-language prose while technical tokens remain protected.
