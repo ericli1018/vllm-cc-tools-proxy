@@ -333,3 +333,13 @@ test('README documents V0.29.3 Recursive Vision Zoom and overlapping PDF tiles',
   assert.match(readme, /visual-v13/);
   assert.match(readme, /evidence-v9/);
 });
+
+test('README documents V0.29.4 generic zoom fallback, provenance and local contract repair', () => {
+  assert.match(readme, /V0\.29\.4 Generic Zoom Fallback/i);
+  assert.match(readme, /15% overlap/i);
+  assert.match(readme, /maximum of 6 automatic tiles/i);
+  assert.match(readme, /read_pdf_image/i);
+  assert.match(readme, /vision_contract_repaired/i);
+  assert.match(readme, /visual-v14/);
+  assert.match(readme, /evidence-v10/);
+});

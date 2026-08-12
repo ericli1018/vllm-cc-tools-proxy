@@ -33,17 +33,19 @@ function readToolContextMap(messages) {
         for (const item of value) walk(item, depth + 1);
         return;
       }
-      if (value.type === 'tool_use' && typeof value.id === 'string' && String(value.name || '').toLowerCase() === 'read') {
-        const rawPath = value.input?.file_path || value.input?.path || value.input?.filename || '';
+      if (value.type === 'tool_use' && typeof value.id === 'string') {
+        const toolName = String(value.name || '');
+        const isRead = toolName.toLowerCase() === 'read';
+        const rawPath = isRead ? (value.input?.file_path || value.input?.path || value.input?.filename || '') : '';
         const filename = safeBasename(rawPath);
         let pageScope = null;
         let pageScopeError = null;
-        try { pageScope = parsePdfPageScope(value.input?.pages); }
-        catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
+        if (isRead) {
+          try { pageScope = parsePdfPageScope(value.input?.pages); }
+          catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
+        }
         result.set(value.id, {
-          filename,
-          pageScope,
-          pageScopeError,
+          toolName, isRead, filename, pageScope, pageScopeError,
           readSourceRef: rawPath ? crypto.createHash('sha256').update(String(rawPath)).digest('hex') : '',
         });
       }
@@ -80,15 +82,23 @@ function collectDescriptors(messages, locale = 'zh-TW') {
           ? `PDF #${++documentFallback}`
           : mediaText(locale, 'imageFallback', { index: ++imageFallback });
       }
+      const origin = toolContext ? (toolContext.isRead ? 'read' : 'tool_result') : 'direct';
+      const originTool = toolContext?.toolName || '';
+      const sourceKind = kind === 'document'
+        ? 'pdf_document'
+        : origin === 'read'
+          ? (String(toolContext?.filename || '').toLowerCase().endsWith('.pdf') ? 'read_pdf_image' : 'read_image')
+          : origin === 'tool_result' ? 'tool_result_image' : 'direct_image';
       descriptors.push({
         path: [...currentPath],
         pathKey: pathKey(currentPath),
         kind,
         filename: resolved,
         groupKey: resolved.toLocaleLowerCase(),
-        ...(kind === 'document' && toolContext?.pageScope ? { pageScope: toolContext.pageScope } : {}),
+        origin, originTool, sourceKind,
+        ...(toolContext?.pageScope ? { pageScope: toolContext.pageScope } : {}),
         ...(kind === 'document' && toolContext?.pageScopeError ? { pageScopeError: toolContext.pageScopeError } : {}),
-        ...(kind === 'document' && toolContext?.readSourceRef ? { readSourceRef: toolContext.readSourceRef } : {}),
+        ...(toolContext?.readSourceRef ? { readSourceRef: toolContext.readSourceRef } : {}),
       });
     }
 

@@ -746,3 +746,30 @@ test('V0.29.3 declarative crop tool requests receive a 12 percent outer context 
   assert.deepEqual(auth[0].bbox, [52,52,548,548]);
   assert.match(result.markdown, /Enlarged labels are now readable/);
 });
+
+test('V0.29.4 locally repairs CONTENT evidence marker formatting without a second Vision request', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nThe MCU is visible on the left.\nI3C2_SDA connects toward R102.', tool_calls: [] } }] }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 1170, height: 827 });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    cropImage: async () => { throw new Error('not expected'); },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+  assert.equal(requests.length, 1);
+  assert.match(result.markdown, /^VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:/);
+  assert.match(result.markdown, /- The MCU is visible on the left\./);
+  assert.match(result.markdown, /- I3C2_SDA connects toward R102\./);
+  assert.ok(result.warnings.includes('vision_contract_repaired'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_contract_repaired'
+    && entry.details.reason === 'content_evidence_marker_missing'));
+});

@@ -201,6 +201,10 @@ const PROFILES = Object.freeze({
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 頁 zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 頁 zoom tile ${completed}/${total}…`,
       pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `第 ${page} 頁 zoom tile ${tile} 分析失敗；保留缺口並繼續…`,
+      imageZoomTile: ({ count = 0 }) => `圖片將切成 ${count} 個重疊 zoom tiles…`,
+      imageZoomTileRender: ({ completed = 0, total = 0 }) => `正在建立圖片 zoom tile ${completed}/${total}…`,
+      imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `正在分析圖片 zoom tile ${completed}/${total}…`,
+      imageZoomTileFailed: ({ tile = 0 }) => `圖片 zoom tile ${tile} 分析失敗；保留缺口並繼續…`,
       currentStepWaiting: ({ seconds = 0 }) => `目前處理步驟仍在進行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -278,6 +282,10 @@ const PROFILES = Object.freeze({
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 页 zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 页 zoom tile ${completed}/${total}…`,
       pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `第 ${page} 页 zoom tile ${tile} 分析失败；保留缺口并继续…`,
+      imageZoomTile: ({ count = 0 }) => `图片将切成 ${count} 个重叠 zoom tiles…`,
+      imageZoomTileRender: ({ completed = 0, total = 0 }) => `正在建立图片 zoom tile ${completed}/${total}…`,
+      imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `正在分析图片 zoom tile ${completed}/${total}…`,
+      imageZoomTileFailed: ({ tile = 0 }) => `图片 zoom tile ${tile} 分析失败；保留缺口并继续…`,
       currentStepWaiting: ({ seconds = 0 }) => `当前处理步骤仍在进行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -355,6 +363,10 @@ const PROFILES = Object.freeze({
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `Preparing PDF page ${page} zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `Analyzing PDF page ${page} zoom tile ${completed}/${total}…`,
       pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF page ${page} zoom tile ${tile} failed; preserving the evidence gap and continuing…`,
+      imageZoomTile: ({ count = 0 }) => `The image will be split into ${count} overlapping zoom tiles…`,
+      imageZoomTileRender: ({ completed = 0, total = 0 }) => `Preparing image zoom tile ${completed}/${total}…`,
+      imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `Analyzing image zoom tile ${completed}/${total}…`,
+      imageZoomTileFailed: ({ tile = 0 }) => `Image zoom tile ${tile} failed; preserving the evidence gap and continuing…`,
       currentStepWaiting: ({ seconds = 0 }) => `The current processing step is still running. Waiting for ${seconds}s…`,
     }),
     media: Object.freeze({
@@ -432,6 +444,10 @@ const PROFILES = Object.freeze({
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page} ページのズームタイル ${completed}/${total} を作成中…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page} ページのズームタイル ${completed}/${total} を解析中…`,
       pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF ${page} ページのズームタイル ${tile} の解析に失敗しました。欠落を保持して続行します…`,
+      imageZoomTile: ({ count = 0 }) => `画像を ${count} 個の重複ズームタイルに分割します…`,
+      imageZoomTileRender: ({ completed = 0, total = 0 }) => `画像ズームタイル ${completed}/${total} を作成中…`,
+      imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `画像ズームタイル ${completed}/${total} を解析中…`,
+      imageZoomTileFailed: ({ tile = 0 }) => `画像ズームタイル ${tile} の解析に失敗しました。欠落を保持して続行します…`,
       currentStepWaiting: ({ seconds = 0 }) => `現在の処理手順は継続中です。${seconds}秒経過しました…`,
     }),
     media: Object.freeze({
@@ -509,6 +525,10 @@ const PROFILES = Object.freeze({
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page}페이지 줌 타일 ${completed}/${total} 생성 중…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `PDF ${page}페이지 줌 타일 ${completed}/${total} 분석 중…`,
       pdfZoomTileFailed: ({ page = 0, tile = 0 }) => `PDF ${page}페이지 줌 타일 ${tile} 분석 실패; 증거 공백을 유지하고 계속합니다…`,
+      imageZoomTile: ({ count = 0 }) => `이미지를 ${count}개의 겹침 줌 타일로 나눕니다…`,
+      imageZoomTileRender: ({ completed = 0, total = 0 }) => `이미지 줌 타일 ${completed}/${total} 생성 중…`,
+      imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `이미지 줌 타일 ${completed}/${total} 분석 중…`,
+      imageZoomTileFailed: ({ tile = 0 }) => `이미지 줌 타일 ${tile} 분석 실패; 증거 공백을 유지하고 계속합니다…`,
       currentStepWaiting: ({ seconds = 0 }) => `현재 처리 단계가 계속 진행 중입니다. ${seconds}초 경과…`,
     }),
     media: Object.freeze({
@@ -601,6 +621,10 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
     pdf_zoom_tile_render: 'pdfZoomTileRender',
     pdf_zoom_tile_analyze: 'pdfZoomTileAnalyze',
     pdf_zoom_tile_failed: 'pdfZoomTileFailed',
+    image_zoom_tile: 'imageZoomTile',
+    image_zoom_tile_render: 'imageZoomTileRender',
+    image_zoom_tile_analyze: 'imageZoomTileAnalyze',
+    image_zoom_tile_failed: 'imageZoomTileFailed',
   };
   if (phase === 'queue_wait') return statusText(locale, 'queueWait', { position: details.position ?? 0 });
   const key = phaseToKey[phase];

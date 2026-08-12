@@ -99,3 +99,20 @@ test('V0.2.28.20 media progress descriptor scan bounds deep content', () => {
     (error) => error?.code === 'request_structure_too_deep' && error?.status === 422,
   );
 });
+
+test('V0.29.4 media context preserves safe provenance for images returned by Read', () => {
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-img', name: 'Read', input: { file_path: '/private/board.pdf', pages: '6' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-img', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'x' } },
+    ] }] },
+  ];
+  const tracker = createMediaProgressTracker(messages);
+  const context = tracker.contextForPath(['messages', 1, 'content', 0, 'content', 0]);
+  assert.equal(context.origin, 'read');
+  assert.equal(context.originTool, 'Read');
+  assert.equal(context.sourceKind, 'read_pdf_image');
+  assert.equal(context.readSourceRef.length, 64);
+  assert.deepEqual(context.pageScope, { pages: [6], canonical: '6' });
+  assert.doesNotMatch(JSON.stringify(context), /\/private\/board\.pdf/);
+});

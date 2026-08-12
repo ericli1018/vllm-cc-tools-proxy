@@ -1,7 +1,18 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.3 adds bounded recursive Vision zoom and overlapping PDF tiles for dense visual pages, while retaining the V0.29.2 machine-checkable Vision contract, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.4 closes the generic-image zoom execution gap, preserves safe media provenance, and locally repairs formatting-only Vision contract defects while retaining V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
+
+
+## V0.29.4 Generic Zoom Fallback & Vision Contract Repair
+
+V0.29.4 makes `VISUAL_STATUS: NEEDS_ZOOM` actionable for ordinary image blocks as well as PDF visual pages. Generic images first receive one whole-frame Vision pass. If that pass returns `NEEDS_ZOOM` without a successful `request_image_crop`, the Proxy deterministically creates aspect-aware overlapping zoom tiles instead of resending the same whole frame. Generic tiles use 15% overlap, a maximum of 6 automatic tiles, and the existing VisualAssetRegistry depth limit of 2; a tile may still request one precise `request_image_crop` at the next depth. Each subsequent Vision call therefore receives new visual information rather than the unchanged root frame.
+
+Image provenance now flows from Claude Code media context into safe diagnostics and normalized evidence. Supported fields include `origin` (`direct`, `read`, or `tool_result`), `origin_tool`, `source_kind`, hashed `read_source_ref`, and requested page numbers when available. Raw local paths are not placed in evidence. Read-produced images from a `.pdf` source are identified as `read_pdf_image`, which makes PDF-derived image behavior observable even when Claude Code supplies the page as an image block rather than an `application/pdf` block.
+
+The Vision output contract now distinguishes semantic failure from formatting-only failure. A `VISUAL_STATUS: CONTENT` response that contains one or more non-protocol visible-content lines but only omits the `VISUAL_EVIDENCE:` marker is canonicalized locally into evidence bullets, emits `vision_contract_repaired`, and is not sent back through Vision a second time. Empty content, missing/invalid `VISUAL_STATUS`, `UNREADABLE`, or CONTENT with no body remain bounded recovery/error paths. No semantic facts are invented during repair.
+
+Generic zoom progress phases (`image_zoom_tile`, `image_zoom_tile_render`, `image_zoom_tile_analyze`, `image_zoom_tile_failed`) are localized for zh-TW, zh-CN, en-US, ja-JP, and ko-KP. Vision/evidence cache generations advance to `visual-v14` / `evidence-v10`; the media pipeline remains `media-v8`. No new required ENV variable is added.
 
 ## V0.29.3 Recursive Vision Zoom & Overlapping Tiles
 

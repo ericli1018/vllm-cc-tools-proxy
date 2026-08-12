@@ -6,6 +6,7 @@ import { parsePdf as defaultParsePdf } from '../parsers/pdf.js';
 import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage } from '../parsers/image.js';
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
+import { analyzeGenericZoomFallback } from '../visual/generic-zoom.js';
 import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
@@ -52,8 +53,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
     buffer,
     mediaType,
     pipelineVersion: config.cache?.pipelineVersion || 'media-v8',
-    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v13',
-    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v9',
+    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v14',
+    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v10',
     visionModel: config.vllmVisionModel || '',
     visionProvider: config.vllmVisionProvider || 'vllm',
     visionApiProtocol: config.vllmVisionApiProtocol || 'openai-chat',
@@ -208,6 +209,13 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const key = block.source.cache_key || '';
       const tracked = mediaProgress?.contextForPath(context.path);
       const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'image';
+      const provenance = {
+        origin: tracked?.origin || 'direct',
+        originTool: tracked?.originTool || '',
+        sourceKind: tracked?.sourceKind || 'direct_image',
+        readSourceRef: tracked?.readSourceRef || '',
+        requestedPages: Array.isArray(tracked?.pageScope?.pages) ? tracked.pageScope.pages : null,
+      };
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       const fallback = {
         mediaType: block.source.media_type,
@@ -232,24 +240,55 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           normalized_width: normalized.width,
           normalized_height: normalized.height,
           wire_dimensions: block.source.wire_dimensions || {},
+          ...(tracked ? {
+            origin: provenance.origin,
+            origin_tool: provenance.originTool,
+            source_kind: provenance.sourceKind,
+            read_source_ref: provenance.readSourceRef,
+            requested_pages: provenance.requestedPages,
+          } : {}),
         });
         const registry = new VisualAssetRegistry();
         const asset = registry.add({
           ...normalized,
           label: filename || 'Claude Code image',
-          sourceKind: 'image',
+          sourceKind: provenance.sourceKind,
+          sourceMetadata: { origin: provenance.origin, originTool: provenance.originTool, readSourceRef: provenance.readSourceRef, requestedPages: provenance.requestedPages },
           originalBuffer: sourceBuffer,
           originalMediaType: mediaType,
           originalWidth: normalized.originalWidth || normalized.width,
           originalHeight: normalized.originalHeight || normalized.height,
         });
         await reportProgress('正在使用視覺模型分析圖片…', { phase: 'image_vision' });
-        const result = await analyzeWithAdmission([asset], {
+        let result = await analyzeWithAdmission([asset], {
           baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
           provider: config.vllmVisionProvider, think: config.vllmVisionThink,
           registry, signal: analysisSignal, onProgress: reportProgress,
+          allowNeedsZoomFallback: true,
           cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
         });
+        if (result.needsZoom) {
+          const zoom = await analyzeGenericZoomFallback(asset, {
+            registry, signal: analysisSignal, overlap: 0.15, maxTiles: 6,
+            onProgress: reportProgress,
+            isRecoverable: recoverableVisionFailure,
+            cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
+            analyzeTile: async (tileAsset, tile) => analyzeWithAdmission([tileAsset], {
+              baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
+              provider: config.vllmVisionProvider, think: config.vllmVisionThink,
+              registry, signal: analysisSignal, onProgress: reportProgress, allowNeedsZoomFallback: true,
+              prompt: `Analyze generic zoom tile ${tile.index}. This region overlaps adjacent tiles by 15 percent. Extract only directly visible text, labels, components, arrows, nets, table cells and relationships. Repeated content near boundaries is a continuity anchor. If one precise smaller region remains necessary, use request_image_crop. Do not answer the final user task.`,
+              cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
+            }),
+          });
+          result = {
+            ...result,
+            markdown: `${result.markdown}\n\n${zoom.markdown}`,
+            warnings: [...(result.warnings || []), ...(zoom.warnings || []), 'vision_generic_zoom_fallback'],
+            cropCount: Number(result.cropCount || 0) + Number(zoom.cropCount || 0),
+            needsZoom: false,
+          };
+        }
         await reportProgress('圖片分析已完成。', { phase: 'image_complete', completed: 1, total: 1 });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
         const warnings = [...(result.warnings || []), ...(bounded.truncated ? ['proxy_output_char_limit'] : [])];
@@ -267,6 +306,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             truncated: bounded.truncated,
             content: bounded.text,
             warnings,
+            ...provenance,
           }),
         };
         return {
@@ -299,6 +339,10 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           media_type: fallback.mediaType,
           width: fallback.width,
           height: fallback.height,
+          origin: provenance.origin,
+          origin_tool: provenance.originTool,
+          source_kind: provenance.sourceKind,
+          read_source_ref: provenance.readSourceRef,
         });
         return {
           type: 'text',
@@ -309,6 +353,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             height: fallback.height,
             visualModel: config.vllmVisionModel,
             errorCode,
+            ...provenance,
           }),
         };
       }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.4 - 2026-08-12
+
+- Made generic image `VISUAL_STATUS: NEEDS_ZOOM` deterministic: no-crop results now use aspect-aware 15% overlapping zoom tiles instead of resending the unchanged whole image.
+- Limited generic automatic zoom to at most 6 tiles while preserving VisualAssetRegistry max depth 2 and precise nested `request_image_crop` support.
+- Propagated safe media provenance (`origin`, `origin_tool`, `source_kind`, hashed `read_source_ref`, requested pages) into image diagnostics/evidence without exposing raw paths.
+- Added local canonical repair for formatting-only CONTENT evidence defects, avoiding a second Vision inference when semantic evidence already exists.
+- Added five-locale generic image zoom progress phases.
+- Advanced Vision/evidence cache generations to `visual-v14` / `evidence-v10`; media pipeline remains `media-v8`.
+
 ## 0.29.3 - 2026-08-12
 
 - Added `VISUAL_STATUS: NEEDS_ZOOM` as an actionable non-cacheable Vision state rather than treating dense whole-page content as WEAK/UNREADABLE.

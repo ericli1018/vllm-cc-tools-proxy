@@ -86,6 +86,32 @@ function parseVisionEvidenceContract(content) {
   return { visualStatus, contractValid: true, reasons: [] };
 }
 
+function repairVisionEvidenceContract(content) {
+  const text = String(content || '').trim();
+  const lines = text.split(/\r?\n/);
+  const firstIndex = lines.findIndex((line) => line.trim().length > 0);
+  if (firstIndex < 0) return { content: text, repaired: false, reason: '' };
+  const firstLine = lines[firstIndex].trim();
+  const statusMatch = firstLine.match(VISUAL_STATUS_LINE_PATTERN);
+  if (!statusMatch || statusMatch[1].toLowerCase() !== 'content') {
+    return { content: text, repaired: false, reason: '' };
+  }
+  const parsed = parseVisionEvidenceContract(text);
+  if (parsed.contractValid || !parsed.reasons.includes('content_evidence_missing')) {
+    return { content: text, repaired: false, reason: '' };
+  }
+  const body = lines.slice(firstIndex + 1)
+    .map((line) => line.trim())
+    .filter((line) => line && !VISUAL_EVIDENCE_LINE_PATTERN.test(line) && !/^VISUAL_REASON:/i.test(line));
+  if (body.length === 0) return { content: text, repaired: false, reason: '' };
+  const bullets = body.map((line) => EVIDENCE_BULLET_PATTERN.test(line) ? line : `- ${line.replace(/^#+\s*/, '')}`);
+  return {
+    content: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n${bullets.join('\n')}`,
+    repaired: true,
+    reason: 'content_evidence_marker_missing',
+  };
+}
+
 function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence' } = {}) {
   const text = String(content || '').trim();
   if (toolCallCount > 0) {
@@ -331,9 +357,16 @@ export async function analyzeVisualAssets(assets, {
       });
     }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    const quality = classifyVisionOutputQuality(sanitized.content, { toolCallCount: calls.length, outputContract });
+    const repair = outputContract === 'evidence' && calls.length === 0
+      ? repairVisionEvidenceContract(sanitized.content)
+      : { content: sanitized.content, repaired: false, reason: '' };
+    const visibleContent = repair.content;
+    if (repair.repaired) {
+      await onDiagnostic('vision_contract_repaired', { reason: repair.reason, visual_status: 'content' });
+    }
+    const quality = classifyVisionOutputQuality(visibleContent, { toolCallCount: calls.length, outputContract });
     await onDiagnostic('vision_output_observed', {
-      content_chars: sanitized.content.length,
+      content_chars: visibleContent.length,
       thinking_chars: typeof message?.thinking === 'string' ? message.thinking.length : 0,
       tool_call_count: calls.length,
       control_tag_count: controlTags.length,
@@ -354,8 +387,8 @@ export async function analyzeVisualAssets(assets, {
     if (calls.length === 0 || !toolsEnabled) {
       if (quality.quality === 'good') {
         return {
-          markdown: sanitized.content,
-          warnings: [],
+          markdown: visibleContent,
+          warnings: repair.repaired ? ['vision_contract_repaired'] : [],
           cropCount,
           needsZoom: false,
           visualStatus: quality.visualStatus,
@@ -374,7 +407,7 @@ export async function analyzeVisualAssets(assets, {
         });
         if (allowNeedsZoomFallback) {
           return {
-            markdown: sanitized.content,
+            markdown: visibleContent,
             warnings: ['vision_needs_zoom'],
             cropCount,
             needsZoom: true,
@@ -431,7 +464,7 @@ export async function analyzeVisualAssets(assets, {
       });
     }
 
-    messages.push(assistantMessage(message, provider, sanitized.content));
+    messages.push(assistantMessage(message, provider, visibleContent));
     cropRound += 1;
     const batchTooLarge = calls.length > 4;
     const cropAssets = [];

@@ -421,3 +421,57 @@ test('V0.29.0 unscoped Read persists original PDF and later Read.pages prefers c
   assert.match(focused.text, /PAGE 42 FROM ORIGINAL/);
   assert.match(focused.text, /requested_pages: \[42\]/);
 });
+
+test('V0.29.4 generic image NEEDS_ZOOM uses distinct overlapping crops instead of resending the whole frame', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const calls = [];
+  const crops = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 20_000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 1170, height: 827, originalWidth: 1170, originalHeight: 827 }),
+    cropImage: async (_asset, authorization) => {
+      crops.push(authorization.rootPixelBox);
+      return { buffer: Buffer.from(`crop-${crops.length}`), mediaType: 'image/png', width: 640, height: 480 };
+    },
+    analyzeVisualAssets: async (assets, options) => {
+      calls.push({ ids: assets.map((asset) => asset.sourceId), allowNeedsZoomFallback: options.allowNeedsZoomFallback, prompt: options.prompt });
+      if (calls.length === 1) {
+        return { markdown: 'VISUAL_STATUS: NEEDS_ZOOM\nVISUAL_REASON: dense labels', warnings: ['vision_needs_zoom'], cropCount: 0, needsZoom: true, visualStatus: 'needs_zoom' };
+      }
+      return { markdown: `VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Tile ${calls.length - 1} is readable.`, warnings: [], cropCount: 0, needsZoom: false, visualStatus: 'content' };
+    },
+  });
+  const output = await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } });
+  assert.equal(calls[0].allowNeedsZoomFallback, true);
+  assert.ok(crops.length >= 4);
+  assert.ok(crops[1].left < crops[0].left + crops[0].width, 'adjacent tiles must overlap horizontally');
+  assert.ok(calls.length >= 5);
+  assert.ok(calls.slice(1).every((call) => call.ids.every((id) => id !== 'asset-1')));
+  assert.match(output.text, /Generic zoom evidence/i);
+  assert.match(output.text, /Tile 1 is readable/);
+});
+
+test('V0.29.4 image evidence and diagnostics carry safe provenance without raw paths', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const diagnostics = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 5000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaProgress: { contextForPath: () => ({ filename: 'board.pdf', origin: 'read', originTool: 'Read', sourceKind: 'read_pdf_image', readSourceRef: 'a'.repeat(64), pageScope: { pages: [6], canonical: '6' } }) },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 1170, height: 827, originalWidth: 1170, originalHeight: 827 }),
+    analyzeVisualAssets: async () => ({ markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_EVIDENCE:\n- Read-derived image evidence.', warnings: [], cropCount: 0 }),
+  });
+  const output = await adapters.adaptImage({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }, { path: ['messages', 1, 'content', 0] });
+  const normalized = diagnostics.find((entry) => entry.event === 'image_payload_normalized')?.details;
+  assert.equal(normalized.origin, 'read');
+  assert.equal(normalized.origin_tool, 'Read');
+  assert.equal(normalized.source_kind, 'read_pdf_image');
+  assert.equal(normalized.read_source_ref, 'a'.repeat(64));
+  assert.match(output.text, /origin: "read"/);
+  assert.match(output.text, /source_kind: "read_pdf_image"/);
+  assert.doesNotMatch(output.text, /\/private\//);
+});

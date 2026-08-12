@@ -296,3 +296,14 @@ test('V0.29.3 localizes NEEDS_ZOOM and PDF zoom-tile progress phases', () => {
   assert.match(en, /zoom tile/i);
   assert.match(ja, /ズーム|タイル/);
 });
+
+test('V0.29.4 localizes generic image zoom-tile progress phases', () => {
+  const tw = language.localizeProgressMessage('zh-TW', 'fallback', { phase: 'image_zoom_tile', count: 4 });
+  const en = language.localizeProgressMessage('en-US', 'fallback', { phase: 'image_zoom_tile_analyze', completed: 2, total: 4, tile: 2 });
+  const ja = language.localizeProgressMessage('ja-JP', 'fallback', { phase: 'image_zoom_tile_failed', tile: 3 });
+  const ko = language.localizeProgressMessage('ko-KP', 'fallback', { phase: 'image_zoom_tile_render', completed: 1, total: 4 });
+  assert.match(tw, /圖片|重疊|zoom/i);
+  assert.match(en, /image zoom tile/i);
+  assert.match(ja, /画像|ズーム/);
+  assert.match(ko, /이미지|줌/);
+});
