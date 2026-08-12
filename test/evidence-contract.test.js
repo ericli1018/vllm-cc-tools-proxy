@@ -181,3 +181,19 @@ test('V0.2.27.2 whole-document evidence does not invent a requested page scope',
   assert.doesNotMatch(text, /requested_pages:/);
   assert.doesNotMatch(text, /page_scope_mode:/);
 });
+
+test('V0.2.28.20 protocol inventory skips raw Base64 media data', () => {
+  const value = [{ role: 'user', content: [{
+    type: 'document',
+    source: { type: 'base64', media_type: 'application/pdf', data: '<thinking>'.repeat(1000) },
+  }] }];
+  assert.deepEqual(inventoryProtocolTags(value), { total: 0, counts: {} });
+});
+
+test('V0.2.28.20 protocol neutralization preserves raw Base64 data without scanning or rewriting it', () => {
+  const raw = '<thinking>'.repeat(1000);
+  const value = { type: 'base64', media_type: 'application/pdf', data: raw, note: '</thinking>' };
+  const neutral = neutralizeProtocolValue(value);
+  assert.equal(neutral.data, raw);
+  assert.match(neutral.note, /&lt;\/thinking&gt;/);
+});

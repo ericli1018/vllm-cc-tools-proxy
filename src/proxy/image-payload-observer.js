@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
+import { enterRequestStructure } from '../lib/structure-guard.js';
 
 function safeBasename(value) {
   if (typeof value !== 'string' || !value.trim()) return '';
@@ -16,26 +17,32 @@ function hashReference(value) {
 
 function collectToolContexts(messages) {
   const contexts = new Map();
-  const walk = (value) => {
-    if (Array.isArray(value)) {
-      for (const item of value) walk(item);
-      return;
-    }
+  const ancestors = new WeakSet();
+  const walk = (value, depth = 0) => {
     if (!value || typeof value !== 'object') return;
-    if (value.type === 'tool_use' && typeof value.id === 'string') {
-      const toolName = String(value.name || '');
-      const isRead = toolName.toLowerCase() === 'read';
-      const sourcePath = isRead
-        ? String(value.input?.file_path || value.input?.path || value.input?.filename || '')
-        : '';
-      contexts.set(value.id, {
-        toolName,
-        isRead,
-        filename: safeBasename(sourcePath),
-        readSourceRef: hashReference(sourcePath),
-      });
+    const leave = enterRequestStructure(value, ancestors, depth);
+    try {
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item, depth + 1);
+        return;
+      }
+      if (value.type === 'tool_use' && typeof value.id === 'string') {
+        const toolName = String(value.name || '');
+        const isRead = toolName.toLowerCase() === 'read';
+        const sourcePath = isRead
+          ? String(value.input?.file_path || value.input?.path || value.input?.filename || '')
+          : '';
+        contexts.set(value.id, {
+          toolName,
+          isRead,
+          filename: safeBasename(sourcePath),
+          readSourceRef: hashReference(sourcePath),
+        });
+      }
+      if (Array.isArray(value.content)) walk(value.content, depth + 1);
+    } finally {
+      leave();
     }
-    if (Array.isArray(value.content)) walk(value.content);
   };
   walk(messages);
   return contexts;
@@ -74,8 +81,11 @@ export function observeImagePayloads(messages) {
   const toolContexts = collectToolContexts(messages);
   const observed = [];
 
-  const walkBlock = (block, currentPath, parentType = null, toolContext = null) => {
+  const ancestors = new WeakSet();
+  const walkBlock = (block, currentPath, parentType = null, toolContext = null, depth = 0) => {
     if (!block || typeof block !== 'object') return;
+    const leave = enterRequestStructure(block, ancestors, depth);
+    try {
     const nextToolContext = block.type === 'tool_result'
       ? (toolContexts.get(block.tool_use_id) || toolContext)
       : toolContext;
@@ -104,8 +114,11 @@ export function observeImagePayloads(messages) {
 
     if (Array.isArray(block.content)) {
       for (let index = 0; index < block.content.length; index += 1) {
-        walkBlock(block.content[index], [...currentPath, 'content', index], block.type || parentType, nextToolContext);
+        walkBlock(block.content[index], [...currentPath, 'content', index], block.type || parentType, nextToolContext, depth + 1);
       }
+    }
+    } finally {
+      leave();
     }
   };
 

@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { decodeBase64Media } from '../lib/media.js';
 import { buildMediaCacheKey } from '../cache/cache-key.js';
+import { enterRequestStructure } from '../lib/structure-guard.js';
 
 function isExternalBase64Media(block) {
   return block && typeof block === 'object'
@@ -50,13 +51,16 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
     await fs.rm(root, { recursive: true, force: true });
   };
 
-  const walk = async (value, currentPath = []) => {
+  const ancestors = new WeakSet();
+  const walk = async (value, currentPath = [], depth = 0) => {
     if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
-    if (Array.isArray(value)) {
-      for (let index = 0; index < value.length; index += 1) await walk(value[index], [...currentPath, index]);
-      return;
-    }
     if (!value || typeof value !== 'object') return;
+    const leave = enterRequestStructure(value, ancestors, depth);
+    try {
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) await walk(value[index], [...currentPath, index], depth + 1);
+        return;
+      }
     if (isExternalBase64Media(value)) {
       const mediaType = value.source.media_type;
       const buffer = decodeBase64Media(value.source.data, maxDecodedBytes, mediaType);
@@ -105,7 +109,10 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
       };
       return;
     }
-    if (Array.isArray(value.content)) await walk(value.content, [...currentPath, 'content']);
+      if (Array.isArray(value.content)) await walk(value.content, [...currentPath, 'content'], depth + 1);
+    } finally {
+      leave();
+    }
   };
 
   try {

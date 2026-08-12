@@ -147,3 +147,23 @@ test('V0.2.28 image preflight preserves only safe dimension metadata and decoded
     await prepared.cleanup();
   }
 });
+
+test('V0.2.28.20 media preflight rejects excessively deep content with bounded 422 error', async () => {
+  let nested = { type: 'text', text: 'leaf' };
+  for (let i = 0; i < 140; i += 1) nested = { type: 'tool_result', content: [nested] };
+  const messages = [{ role: 'user', content: [nested] }];
+  await assert.rejects(
+    prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 }),
+    (error) => error?.code === 'request_structure_too_deep' && error?.status === 422,
+  );
+});
+
+test('V0.2.28.20 media preflight rejects cyclic content instead of overflowing the call stack', async () => {
+  const cyclic = { type: 'tool_result', content: [] };
+  cyclic.content.push(cyclic);
+  const messages = [{ role: 'user', content: [cyclic] }];
+  await assert.rejects(
+    prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 }),
+    (error) => error?.code === 'request_structure_cycle' && error?.status === 422,
+  );
+});

@@ -1,6 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { redactDiagnosticText } from './protocol-diagnostics.js';
+import { estimateDecodedBytes } from '../lib/media.js';
 
 const SCHEMA_VERSION = 'vcc-web-tool-trace-v1';
 const SECRET_KEY = /^(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)$/i;
@@ -18,16 +20,32 @@ function timestampComponent(date) {
   return date.toISOString().replace(/[-:]/g, '');
 }
 
-export function redactWebToolTraceValue(value, key = '', seen = new WeakSet()) {
+export function redactWebToolTraceValue(value, key = '', seen = new WeakSet(), depth = 0) {
   if (SECRET_KEY.test(String(key || ''))) return '[REDACTED]';
+  if (depth > 128) return '[DEPTH_LIMIT]';
   if (typeof value === 'string') return redactDiagnosticText(value);
   if (value === null || value === undefined || typeof value !== 'object') return value;
   if (seen.has(value)) return '[CIRCULAR]';
   seen.add(value);
-  if (Array.isArray(value)) return value.map((entry) => redactWebToolTraceValue(entry, '', seen));
+  if (Array.isArray(value)) return value.map((entry) => redactWebToolTraceValue(entry, '', seen, depth + 1));
+
+  if (value.type === 'base64' && typeof value.data === 'string') {
+    const raw = value.data;
+    const output = {};
+    for (const [childKey, child] of Object.entries(value)) {
+      if (childKey === 'data') continue;
+      output[childKey] = redactWebToolTraceValue(child, childKey, seen, depth + 1);
+    }
+    output.data = '[OMITTED_BASE64]';
+    output.base64_chars = raw.length;
+    output.estimated_decoded_bytes = estimateDecodedBytes(raw);
+    output.base64_sha256 = crypto.createHash('sha256').update(raw).digest('hex');
+    return output;
+  }
+
   return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [
     childKey,
-    redactWebToolTraceValue(child, childKey, seen),
+    redactWebToolTraceValue(child, childKey, seen, depth + 1),
   ]));
 }
 

@@ -59,3 +59,12 @@ test('observer labels non-Read tool-result image without inventing MCP semantics
   assert.equal(item.origin, 'tool_result');
   assert.equal(item.toolName, 'capture_screenshot');
 });
+
+test('V0.2.28.20 image payload observer bounds deep content instead of overflowing', () => {
+  let nested = { type: 'text', text: 'leaf' };
+  for (let i = 0; i < 140; i += 1) nested = { type: 'tool_result', content: [nested] };
+  assert.throws(
+    () => observeImagePayloads([{ role: 'user', content: [nested] }]),
+    (error) => error?.code === 'request_structure_too_deep' && error?.status === 422,
+  );
+});

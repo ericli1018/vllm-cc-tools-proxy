@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.28.20 - 2026-08-12
+
+- Replaced the large whole-string Base64 regex with size-first iterative Base64 validation, preventing V8 `Maximum call stack size exceeded` failures on multi-MiB PDF and image payloads.
+- Applied the hardened Base64 path to PDF, PNG, JPEG, GIF, and WebP and added an 8 MiB Claude Code `Read` PDF end-to-end regression proving raw Base64 is not forwarded to Base vLLM.
+- Added shared request-structure depth/cycle guards across media classification, image observation, media progress, and media preflight, returning controlled 422 errors instead of call-stack exhaustion.
+- Excluded raw Base64 from protocol inventory/neutralization scans and from Web Tool diagnostic trace files; diagnostics retain bounded metadata and SHA-256 only.
+- Added normalized-image output-size enforcement so image conversion cannot silently expand beyond the configured decoded-media budget.
+- Avoided cloning untouched user media history during Progress stripping and skipped full-message WebFetch enrichment clones when no fallback candidate exists.
+- Added `request_stage`, `error_name`, and bounded `error_stack` fields to request-failure diagnostics.
+- Preserved V0.2.28.19 unified round telemetry, 30-second SSE heartbeat, native statusLine/global counters, Language Repair, independent Base scheduling, and existing resource-profile defaults.
+
 ## 0.2.28.19 - 2026-08-12
 
 - Unified native Claude Code `statusLine` and the visible 30-second SSE model heartbeat on the same current-model-round semantic telemetry snapshot.

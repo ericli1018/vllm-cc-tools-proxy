@@ -279,3 +279,22 @@ test('V0.2.28.3 failed weak Vision analysis is not written to media cache', asyn
   }), (error) => error?.code === 'vision_output_invalid');
   assert.equal(cacheWrites, 0);
 });
+
+test('V0.2.28.20 decodes large supported PDF and PNG Base64 without RegExp stack overflow', () => {
+  const size = 8 * 1024 * 1024;
+  const pdf = Buffer.alloc(size, 0x41);
+  Buffer.from('%PDF-1.7\n').copy(pdf, 0);
+  const png = Buffer.alloc(size, 0x00);
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+
+  assert.equal(decodeBase64Media(pdf.toString('base64'), size, 'application/pdf').length, size);
+  assert.equal(decodeBase64Media(png.toString('base64'), size, 'image/png').length, size);
+});
+
+test('V0.2.28.20 rejects oversized Base64 before validating the full payload', () => {
+  const oversizedInvalid = `${'A'.repeat(4092)}***=`;
+  assert.throws(
+    () => decodeBase64Media(oversizedInvalid, 1024, 'application/pdf'),
+    (error) => error?.code === 'media_too_large' && error?.status === 413,
+  );
+});

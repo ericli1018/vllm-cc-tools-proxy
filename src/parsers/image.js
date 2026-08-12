@@ -45,6 +45,9 @@ export async function normalizeImage(buffer, {
     });
     const normalized = await identify(outputPath, options);
     const output = await fs.readFile(outputPath);
+    if (output.length > maxDecodedBytes) {
+      throw new HttpError(413, 'Normalized image exceeds the configured byte limit.', { code: 'media_too_large' });
+    }
     return { buffer: output, mediaType: 'image/png', width: normalized.width, height: normalized.height, originalWidth: original.width, originalHeight: original.height, warnings: [] };
   } finally {
     await fs.rm(directory, { recursive: true, force: true });

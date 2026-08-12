@@ -90,3 +90,12 @@ test('V0.2.27.2 correlates Read.pages with the returned PDF tool_result', () => 
   assert.equal(context.readSourceRef?.length, 64);
   assert.doesNotMatch(JSON.stringify(context), /\/work\/board\.pdf/);
 });
+
+test('V0.2.28.20 media progress descriptor scan bounds deep content', () => {
+  let nested = { type: 'text', text: 'leaf' };
+  for (let i = 0; i < 140; i += 1) nested = { type: 'tool_result', content: [nested] };
+  assert.throws(
+    () => createMediaProgressTracker([{ role: 'user', content: [nested] }]),
+    (error) => error?.code === 'request_structure_too_deep' && error?.status === 422,
+  );
+});

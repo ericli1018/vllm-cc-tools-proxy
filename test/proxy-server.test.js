@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.2.28.19', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.2.28.20', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -106,6 +106,43 @@ test('non-stream PDF is locally parsed and raw Base64 never reaches base vLLM', 
   const serialized = JSON.stringify(upstreamBodies[0]);
   assert.match(serialized, /Native PDF text page/);
   assert.equal(serialized.includes(base64), false);
+});
+
+test('V0.2.28.20 large PDF Read request is fileized without RegExp stack overflow or raw Base64 upstream leakage', async (t) => {
+  const pdf = Buffer.alloc(8 * 1024 * 1024, 0x41);
+  Buffer.from('%PDF-1.7\n').copy(pdf, 0);
+  const base64 = pdf.toString('base64');
+  let upstreamBody;
+  const vllm = await startJsonServer(async (req, res) => {
+    upstreamBody = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'large-pdf',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'done'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    limits: { ...config().limits, maxRequestBytes: 16 * 1024 * 1024, maxDecodedBytes: 10 * 1024 * 1024 },
+  }), {
+    mediaAdapterDependencies: {
+      parsePdf: async () => ({
+        parser: 'test', page_count: 1, processed_pages: 1, visual_used: false,
+        markdown: '# Large PDF parsed', warnings: [], truncated: false,
+      }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[{type:'document',source:{type:'base64',media_type:'application/pdf',data:base64}}]}] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'done');
+  const serialized = JSON.stringify(upstreamBody);
+  assert.match(serialized, /Large PDF parsed/);
+  assert.equal(serialized.includes(base64.slice(0, 4096)), false);
 });
 
 test('historical PDF is analyzed once then served from cache without a second progress block', async (t) => {
@@ -3051,7 +3088,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.2\.28\.19/);
+  assert.match(first, /VERSION\s+0\.2\.28\.20/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3081,10 +3118,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.2.28.19');
+  assert.equal(payload.version, '0.2.28.20');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.19/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.2\.28\.20/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3216,4 +3253,27 @@ test('V0.2.28.19 status endpoint combines current-round semantic telemetry with 
   assert.match(payload.display, /思考中/);
   assert.match(payload.display, /59s/);
   assert.doesNotMatch(payload.display, /59\.\d+s/);
+});
+
+test('V0.2.28.20 request_failed identifies media preflight stage and keeps a bounded error stack', async (t) => {
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: 'http://127.0.0.1:9',
+    logLevel: 'error',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'AAAA' } }] }],
+    }),
+  });
+  assert.equal(response.status, 422);
+  const failed = logs.find((entry) => entry.event === 'request_failed');
+  assert.equal(failed.request_stage, 'media_preflight');
+  assert.equal(failed.error_name, 'HttpError');
+  assert.match(failed.error_stack, /decodeBase64Media|media-preflight/);
+  assert.equal(failed.error_stack.length <= 4000, true);
 });

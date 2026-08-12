@@ -1,7 +1,5 @@
 import { HttpError } from './http.js';
 
-const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
 export function estimateDecodedBytes(base64) {
   if (typeof base64 !== 'string') return Number.POSITIVE_INFINITY;
   const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
@@ -18,13 +16,36 @@ export function detectMediaType(buffer) {
   return '';
 }
 
+function isBase64AlphabetCode(code) {
+  return (code >= 0x41 && code <= 0x5a)
+    || (code >= 0x61 && code <= 0x7a)
+    || (code >= 0x30 && code <= 0x39)
+    || code === 0x2b
+    || code === 0x2f;
+}
+
+function hasValidBase64AlphabetAndPadding(data) {
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0;
+  const payloadEnd = data.length - padding;
+  for (let index = 0; index < payloadEnd; index += 1) {
+    if (!isBase64AlphabetCode(data.charCodeAt(index))) return false;
+  }
+  for (let index = payloadEnd; index < data.length; index += 1) {
+    if (data.charCodeAt(index) !== 0x3d) return false;
+  }
+  return true;
+}
+
 export function decodeBase64Media(data, maxBytes, expectedMediaType) {
-  if (typeof data !== 'string' || data.length === 0 || data.length % 4 !== 0 || !BASE64_PATTERN.test(data)) {
+  if (typeof data !== 'string' || data.length === 0 || data.length % 4 !== 0) {
     throw new HttpError(422, 'Media source contains invalid Base64.', { code: 'invalid_base64' });
   }
   const estimated = estimateDecodedBytes(data);
   if (estimated > maxBytes) {
     throw new HttpError(413, 'Decoded media exceeds the configured resource profile.', { code: 'media_too_large' });
+  }
+  if (!hasValidBase64AlphabetAndPadding(data)) {
+    throw new HttpError(422, 'Media source contains invalid Base64.', { code: 'invalid_base64' });
   }
   const buffer = Buffer.from(data, 'base64');
   if (buffer.length > maxBytes) {

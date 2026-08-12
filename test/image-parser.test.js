@@ -53,3 +53,22 @@ test('V0.2.26 cropImage reads the root original image and root pixel box instead
   assert.deepEqual(firstConvertInput, rootBytes);
   assert.equal(result.mediaType, 'image/png');
 });
+
+test('V0.2.28.20 normalizeImage rejects normalized PNG expansion above byte profile', async (t) => {
+  const fixture = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const maxDecodedBytes = fixture.length + 1024;
+  const oversized = Buffer.alloc(maxDecodedBytes + 1, 0);
+  oversized.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+  const runner = async (command, args) => {
+    if (command === 'identify') return { stdout: Buffer.from('600 180'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') {
+      await fs.writeFile(args.at(-1), oversized);
+      return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+    }
+    throw new Error(`unexpected ${command}`);
+  };
+  await assert.rejects(
+    normalizeImage(fixture, { ...limits, maxDecodedBytes, runner }),
+    (error) => error?.code === 'media_too_large' && error?.status === 413,
+  );
+});

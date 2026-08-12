@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { parsePdfPageScope } from './pdf-page-scope.js';
 import { languageProfile, mediaText, statusText } from '../i18n/response-language.js';
+import { enterRequestStructure } from '../lib/structure-guard.js';
 
 function safeBasename(value, fallback = '') {
   if (typeof value !== 'string' || !value.trim()) return fallback;
@@ -23,27 +24,33 @@ function pathKey(value) {
 
 function readToolContextMap(messages) {
   const result = new Map();
-  const walk = (value) => {
-    if (Array.isArray(value)) {
-      for (const item of value) walk(item);
-      return;
-    }
+  const ancestors = new WeakSet();
+  const walk = (value, depth = 0) => {
     if (!value || typeof value !== 'object') return;
-    if (value.type === 'tool_use' && typeof value.id === 'string' && String(value.name || '').toLowerCase() === 'read') {
-      const rawPath = value.input?.file_path || value.input?.path || value.input?.filename || '';
-      const filename = safeBasename(rawPath);
-      let pageScope = null;
-      let pageScopeError = null;
-      try { pageScope = parsePdfPageScope(value.input?.pages); }
-      catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
-      result.set(value.id, {
-        filename,
-        pageScope,
-        pageScopeError,
-        readSourceRef: rawPath ? crypto.createHash('sha256').update(String(rawPath)).digest('hex') : '',
-      });
+    const leave = enterRequestStructure(value, ancestors, depth);
+    try {
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item, depth + 1);
+        return;
+      }
+      if (value.type === 'tool_use' && typeof value.id === 'string' && String(value.name || '').toLowerCase() === 'read') {
+        const rawPath = value.input?.file_path || value.input?.path || value.input?.filename || '';
+        const filename = safeBasename(rawPath);
+        let pageScope = null;
+        let pageScopeError = null;
+        try { pageScope = parsePdfPageScope(value.input?.pages); }
+        catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
+        result.set(value.id, {
+          filename,
+          pageScope,
+          pageScopeError,
+          readSourceRef: rawPath ? crypto.createHash('sha256').update(String(rawPath)).digest('hex') : '',
+        });
+      }
+      if (Array.isArray(value.content)) walk(value.content, depth + 1);
+    } finally {
+      leave();
     }
-    if (Array.isArray(value.content)) walk(value.content);
   };
   walk(messages);
   return result;
@@ -55,8 +62,11 @@ function collectDescriptors(messages, locale = 'zh-TW') {
   let documentFallback = 0;
   let imageFallback = 0;
 
-  const walkBlock = (block, currentPath, inheritedFilename = '', inheritedToolContext = null) => {
+  const ancestors = new WeakSet();
+  const walkBlock = (block, currentPath, inheritedFilename = '', inheritedToolContext = null, depth = 0) => {
     if (!block || typeof block !== 'object') return;
+    const leave = enterRequestStructure(block, ancestors, depth);
+    try {
     let filename = inheritedFilename;
     const toolContext = block.type === 'tool_result' ? (toolContexts.get(block.tool_use_id) || inheritedToolContext) : inheritedToolContext;
     if (toolContext?.filename) filename = toolContext.filename;
@@ -84,8 +94,11 @@ function collectDescriptors(messages, locale = 'zh-TW') {
 
     if (Array.isArray(block.content)) {
       for (let index = 0; index < block.content.length; index += 1) {
-        walkBlock(block.content[index], [...currentPath, 'content', index], filename, toolContext);
+        walkBlock(block.content[index], [...currentPath, 'content', index], filename, toolContext, depth + 1);
       }
+    }
+    } finally {
+      leave();
     }
   };
 

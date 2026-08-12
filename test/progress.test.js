@@ -603,3 +603,11 @@ test('V0.2.28.16 semantic heartbeat keeps append-only 30-second liveness lines a
   assert.equal(deltas[2], '\n◓ 主模型思考中 · 59s · 44.83 KB · 760 B/s');
   assert.doesNotMatch(deltas.join(''), /\r|\x1b/);
 });
+
+test('V0.2.28.20 progress history stripping does not clone untouched user Base64 media messages', () => {
+  const userMessage = { role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'QUJD' } }] };
+  const progressMessage = { role: 'assistant', content: [{ type: 'text', text: '目前處理進度：\n  ◐ 主模型思考中' }] };
+  const result = stripProgressHistory([userMessage, progressMessage]);
+  assert.equal(result[0], userMessage);
+  assert.equal(result[0].content[0].source.data, 'QUJD');
+});

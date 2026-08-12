@@ -49,3 +49,20 @@ test('WebToolDiagnosticTraceStore writes complete redacted payloads to private f
   assert.match(index, /"event":"client_request"/);
   assert.doesNotMatch(index, /super-secret|session=abc/);
 });
+
+test('V0.2.28.20 diagnostic trace omits raw Base64 and records bounded media metadata', async (t) => {
+  const rootDir = await tempDir(t);
+  const store = new WebToolDiagnosticTraceStore({ rootDir, sessionId: 'media-trace' });
+  const raw = 'QUJD'.repeat(1024 * 256);
+  const result = await store.write({
+    request_id: 'req-media', event: 'client_request', direction: 'claude_code_to_proxy',
+    payload: { body: { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: raw } }] }] } },
+  });
+  const saved = JSON.parse(await fs.readFile(result.file_path, 'utf8'));
+  const source = saved.payload.body.messages[0].content[0].source;
+  assert.equal(source.data, '[OMITTED_BASE64]');
+  assert.equal(source.base64_chars, raw.length);
+  assert.equal(typeof source.estimated_decoded_bytes, 'number');
+  assert.match(source.base64_sha256, /^[a-f0-9]{64}$/);
+  assert.equal((await fs.stat(result.file_path)).size < 100_000, true);
+});

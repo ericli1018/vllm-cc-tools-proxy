@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { adaptMessages } from '../src/proxy/content-blocks.js';
+import { adaptMessages, countAdaptableMedia } from '../src/proxy/content-blocks.js';
 
 test('adaptMessages replaces top-level PDF and nested tool-result image blocks', async () => {
   const input = [{
@@ -36,4 +36,23 @@ test('adaptMessages leaves ordinary text untouched', async () => {
   const output = await adaptMessages(input, {});
   assert.deepEqual(output, input);
   assert.notEqual(output, input);
+});
+
+
+test('V0.2.28.20 media classification rejects excessive nesting before recursive overflow', () => {
+  let nested = { type: 'text', text: 'leaf' };
+  for (let i = 0; i < 140; i += 1) nested = { type: 'tool_result', content: [nested] };
+  assert.throws(
+    () => countAdaptableMedia([{ role: 'user', content: [nested] }]),
+    (error) => error?.code === 'request_structure_too_deep' && error?.status === 422,
+  );
+});
+
+test('V0.2.28.20 media classification rejects cycles with controlled request error', () => {
+  const cyclic = { type: 'tool_result', content: [] };
+  cyclic.content.push(cyclic);
+  assert.throws(
+    () => countAdaptableMedia([{ role: 'user', content: [cyclic] }]),
+    (error) => error?.code === 'request_structure_cycle' && error?.status === 422,
+  );
 });

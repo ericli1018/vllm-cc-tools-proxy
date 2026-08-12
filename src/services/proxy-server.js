@@ -528,7 +528,16 @@ export function createProxyServer(config, dependencies = {}) {
   }
 
   async function enrichReturnedWebFetchResults(messages, { sessionId, model, signal, requestId }) {
-    const outputMessages = structuredClone(Array.isArray(messages) ? messages : []);
+    const sourceMessages = Array.isArray(messages) ? messages : [];
+    const hasFallbackCandidate = sourceMessages.some((message) => (
+      message?.role === 'user'
+      && Array.isArray(message.content)
+      && message.content.some((block) => webFetchResultNeedsFallback(block))
+    ));
+    if (!hasFallbackCandidate) {
+      return { messages: sourceMessages, changed: false, enrichedCount: 0 };
+    }
+    const outputMessages = structuredClone(sourceMessages);
     const sessionKey = sessionId || `request:${requestId}`;
     let changed = false;
     let enrichedCount = 0;
@@ -580,6 +589,7 @@ export function createProxyServer(config, dependencies = {}) {
     let preparedMedia = null;
     let mediaProgress = null;
     let releaseRuntimeRequest = null;
+    let requestStage = 'request_start';
     let initialStreamUsage = usageFromTokenCount({});
     let baseResponseBytes = 0; // raw upstream wire bytes; timeout/stall diagnostics only
     let lastBaseResponseChunkAt = 0;
@@ -976,6 +986,7 @@ export function createProxyServer(config, dependencies = {}) {
         completed = true;
         return;
       }
+      requestStage = 'request_body';
       let rawBody = await readBody(req, config.limits.maxRequestBytes);
       let original = parseJson(rawBody);
       if (!original) {
@@ -985,6 +996,7 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      requestStage = 'request_trace';
       await writeWebToolTrace(
         requestId,
         'client_request',
@@ -1070,6 +1082,7 @@ export function createProxyServer(config, dependencies = {}) {
         );
       }
 
+      requestStage = 'protocol_inventory';
       const incomingSystemProtocolInventory = inventoryProtocolTags(original.system);
       const incomingMessageProtocolInventory = inventoryProtocolTags(original.messages);
       const incomingToolProtocolInventory = inventoryProtocolTags(original.tools);
@@ -1235,6 +1248,7 @@ export function createProxyServer(config, dependencies = {}) {
         return shown;
       };
 
+      requestStage = 'request_classification';
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
@@ -1334,6 +1348,7 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      requestStage = 'managed_bridge';
       validateMessagesRequest(original);
       const serverWebUiDeclaration = detectServerWebUiDeclaration(original);
       const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
@@ -1396,9 +1411,11 @@ export function createProxyServer(config, dependencies = {}) {
       let allMediaCached = false;
 
       if (hasMedia) {
+        requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
         await cacheReady;
+        requestStage = 'media_preflight';
         preparedMedia = await prepareMediaHandles(request.messages, config.limits, {
           signal: abortController.signal,
           cacheKeyContext: {
@@ -1413,6 +1430,7 @@ export function createProxyServer(config, dependencies = {}) {
           },
         });
         request.messages = preparedMedia.messages;
+        requestStage = 'media_progress';
         mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
         for (const occurrence of mediaOccurrences) {
@@ -1633,6 +1651,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       if (hasMedia) {
+        requestStage = 'media_transform';
         if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
@@ -1644,6 +1663,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       if (request.stream === true) {
+        requestStage = 'managed_usage_preflight';
         initialStreamUsage = await preflightManagedUsage(
           request,
           config,
@@ -1892,7 +1912,21 @@ export function createProxyServer(config, dependencies = {}) {
           cause_code: error.details?.cause_code,
         });
       }
-      log(config, failureLevel, 'request_failed', { requestId, method: req.method, path: url.pathname, code: error.code || 'internal_error', message: error.message });
+      const errorStack = String(error?.stack || '')
+        .split('\n')
+        .slice(0, 8)
+        .join(' | ')
+        .slice(0, 4000);
+      log(config, failureLevel, 'request_failed', {
+        requestId,
+        method: req.method,
+        path: url.pathname,
+        code: error.code || 'internal_error',
+        message: error.message,
+        request_stage: requestStage,
+        error_name: String(error?.name || 'Error'),
+        ...(errorStack ? { error_stack: errorStack } : {}),
+      });
       if (progress) await emitSseError(progress, error);
       else if (!res.headersSent) sendError(res, error);
       else res.destroy(error);

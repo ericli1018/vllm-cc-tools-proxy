@@ -67,7 +67,7 @@ export function hasProgressHistory(messages) {
 export function stripProgressHistory(messages) {
   if (!Array.isArray(messages)) return messages;
   return messages.map((message) => {
-    if (message?.role !== 'assistant') return structuredClone(message);
+    if (message?.role !== 'assistant') return message;
     const clone = { ...message };
     if (typeof message.content === 'string') {
       clone.content = isDedicatedProgressText(message.content) ? '' : stripLegacyText(message.content);
@@ -76,7 +76,7 @@ export function stripProgressHistory(messages) {
     if (!Array.isArray(message.content)) return clone;
 
     let blocks = message.content.map((block) => {
-      if (block?.type !== 'text') return structuredClone(block);
+      if (block?.type !== 'text') return block;
       return { ...block, text: stripLegacyText(block.text) };
     });
     if (isDedicatedProgressBlock(blocks[0])) blocks = blocks.slice(1);

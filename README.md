@@ -1,6 +1,41 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.19 unifies the 30-second Progress heartbeat and Claude Code native statusLine on one current-model-round telemetry source, adds Proxy-wide session/activity/wait counters to the statusLine, and renders elapsed seconds as whole integers.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.2.28.20 hardens Claude Code Read/media requests against large Base64 and pathological content structures while preserving the V0.2.28.19 unified progress/statusLine telemetry contract.
+
+## V0.2.28.20 Large Payload & Media Safety
+
+V0.2.28.20 fixes the `Maximum call stack size exceeded` failure seen when Claude Code `Read` returns a multi-MiB PDF as Base64. The root cause was whole-string quantified-regex validation in `decodeBase64Media()`: large valid Base64 could overflow the V8 RegExp stack before the configured decoded-byte limit was even checked. The same decoder is shared by supported Base64 images, so this release treats the problem as a media-boundary issue rather than a PDF-only hotfix.
+
+Base64 validation is now stack-safe and size-first:
+
+```text
+input string / length checks
+  -> estimate decoded bytes
+  -> reject oversize (413) before full validation
+  -> iterative alphabet + padding validation (O(n), O(1) call stack)
+  -> Buffer.from(..., 'base64')
+  -> decoded-size check
+  -> MIME magic validation
+```
+
+The hardened path applies to `application/pdf`, `image/png`, `image/jpeg`, `image/gif`, and `image/webp`. An 8 MiB PDF `Read` request is covered by an end-to-end Proxy regression that verifies local media adaptation succeeds and raw Base64 never reaches Base vLLM.
+
+Request-content walkers used by media classification, image observation, media progress, and media preflight now share a bounded structural guard. Nesting beyond 128 levels returns controlled `422 request_structure_too_deep`; cyclic object graphs return controlled `422 request_structure_cycle` instead of exhausting the Node.js call stack.
+
+Large-payload amplification is also reduced at adjacent boundaries:
+
+- protocol inventory skips `source.type=base64` raw `data` strings instead of scanning them for control tags;
+- protocol neutralization preserves raw Base64 without regex processing;
+- Web Tool diagnostic trace replaces raw Base64 with `[OMITTED_BASE64]` plus character count, estimated decoded bytes, and SHA-256;
+- untouched user media history is no longer deep-cloned merely to remove Progress history;
+- WebFetch-result enrichment avoids cloning the entire messages array when no fallback candidate exists;
+- image normalization re-checks the normalized PNG output against the decoded-byte limit, preventing a compressed input image from expanding beyond the configured media budget.
+
+`request_failed` diagnostics now include the current `request_stage`, `error_name`, and a bounded error stack. This makes future failures distinguishable between protocol inventory, classification, media observation, media preflight, transformation, and usage preflight instead of logging only the final error message.
+
+The existing resource-profile limits are intentionally not changed in this release. `MAX_REQUEST_BYTES` remains the full JSON-envelope limit (including Base64 expansion and conversation history), while `MAX_DECODED_BYTES` remains the per-media decoded-content limit. No new required ENV variables are added.
+
+V0.2.28.19 round-scoped semantic bytes/throughput, 30-second SSE liveness heartbeat, Claude Code native statusLine, Proxy-wide `▦ / ▶ / ⋯` counters, strict Final Language Repair, independent Base scheduling, and explicit-busy retry semantics remain unchanged.
 
 ## V0.2.28.19 Unified Round-Scoped Telemetry
 

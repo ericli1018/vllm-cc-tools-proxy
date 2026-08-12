@@ -105,8 +105,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.2.28.19'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.19'
+test "$(node -p "require('./package.json').version")" = '0.2.28.20'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.2.28.20'
 
 
 test -f src/i18n/response-language.js
@@ -439,6 +439,21 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 
 
 
+# V0.2.28.20 large payload + media safety
+test -f V0.2.28.20-更新說明.md
+grep -Fq 'V0.2.28.20 Large Payload & Media Safety' README.md
+test -f src/lib/structure-guard.js
+! grep -Fq 'BASE64_PATTERN' src/lib/media.js
+grep -Fq 'hasValidBase64AlphabetAndPadding' src/lib/media.js
+grep -Fq 'estimateDecodedBytes(data)' src/lib/media.js
+grep -Fq 'MAX_REQUEST_STRUCTURE_DEPTH = 128' src/lib/structure-guard.js
+grep -Fq '[OMITTED_BASE64]' src/proxy/web-tool-diagnostic-trace-store.js
+grep -Fq 'base64_sha256' src/proxy/web-tool-diagnostic-trace-store.js
+grep -Fq 'Normalized image exceeds the configured byte limit.' src/parsers/image.js
+grep -Fq 'request_stage' src/services/proxy-server.js
+grep -Fq 'error_stack' src/services/proxy-server.js
+grep -Fq 'V0.2.28.20 large PDF Read request is fileized' test/proxy-server.test.js
+
 # V0.2.28.19 unified round-scoped telemetry + Proxy-global status counters
 test -f V0.2.28.19-更新說明.md
 grep -Fq 'V0.2.28.19 Unified Round-Scoped Telemetry' README.md
@@ -459,7 +474,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.2.28.19'
+test "$(node -p "require('./package-lock.json').version")" = '0.2.28.20'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
