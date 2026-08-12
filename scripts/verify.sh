@@ -19,7 +19,7 @@ grep -Fq 'npm ci --omit=dev --no-audit --no-fund' compose.yaml
 grep -Fq 'node_modules/.dependency-fingerprint' compose.yaml
 ! grep -Eq 'bootstrap\.sh' compose.yaml
 ! grep -Eq '^  (document-parser|image-parser|ocr-service):' compose.yaml
-for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_PROVIDER WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS MODEL_RESPONSE_LANGUAGE LOG_PROTOCOL_SNIPPETS DIAGNOSTIC_WEB_TOOL_PASSTHROUGH DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_TOOL_TRACE DIAGNOSTIC_WEB_TOOL_TRACE_DIR; do
+for name in VLLM_BASE_URL VLLM_BASE_API_KEY VLLM_BASE_CONNECT_TIMEOUT_MS VLLM_BASE_HEADERS_TIMEOUT_MS VLLM_BASE_BODY_TIMEOUT_MS VLLM_VISION_URL VLLM_VISION_MODEL VLLM_VISION_API_KEY VLLM_VISION_PROVIDER VLLM_VISION_THINK VLLM_VISION_TIMEOUT_MS WEB_FETCH_API_KEY WEB_FETCH_PROCESSOR_ENABLED WEB_FETCH_PROCESSOR_PROVIDER WEB_FETCH_PROCESSOR_URL WEB_FETCH_PROCESSOR_MODEL WEB_FETCH_PROCESSOR_API_KEY WEB_FETCH_PROCESSOR_THINK WEB_FETCH_PROCESSOR_CONCURRENCY WEB_FETCH_PROCESSOR_TIMEOUT_MS MODEL_RESPONSE_LANGUAGE LOG_PROTOCOL_SNIPPETS DIAGNOSTIC_WEB_TOOL_PASSTHROUGH DIAGNOSTIC_WEB_SEARCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_FETCH_PASSTHROUGH_COUNT DIAGNOSTIC_WEB_TOOL_TRACE DIAGNOSTIC_WEB_TOOL_TRACE_DIR; do
   grep -q "^${name}=" .env.example
 done
 ! grep -q '^CONCURRENCY_PROFILE=' .env.example
@@ -44,8 +44,10 @@ test -f src/media/analysis-registry.js
 test -f src/visual/crop-errors.js
 grep -Fq 'VLLM_VISION_PROVIDER: ${VLLM_VISION_PROVIDER:-vllm}' compose.yaml
 grep -Fq 'VLLM_VISION_THINK: ${VLLM_VISION_THINK:-false}' compose.yaml
+grep -Fq 'VLLM_VISION_TIMEOUT_MS: ${VLLM_VISION_TIMEOUT_MS:-120000}' compose.yaml
 grep -q '^VLLM_VISION_PROVIDER=vllm$' .env.example
 grep -q '^VLLM_VISION_THINK=false$' .env.example
+grep -q '^VLLM_VISION_TIMEOUT_MS=120000$' .env.example
 grep -q '^PROGRESS_HEARTBEAT_MS=30000$' .env.example
 grep -q '^SSE_DRAIN_TIMEOUT_MS=10000$' .env.example
 grep -Fq 'PROGRESS_HEARTBEAT_MS: ${PROGRESS_HEARTBEAT_MS:-30000}' compose.yaml
@@ -105,8 +107,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.0'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.0'
+test "$(node -p "require('./package.json').version")" = '0.29.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.1'
 
 
 test -f src/i18n/response-language.js
@@ -155,7 +157,7 @@ test -f src/proxy/protocol-diagnostic-store.js
 test -f src/version.js
 grep -Fq 'VCC_PROXY_EVIDENCE_CONTRACT_V1' src/proxy/evidence-contract.js
 grep -Fq "pipelineVersion: 'media-v8'" src/config.js
-grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v7'" src/config.js
 grep -Fq 'assertNeutralEvidence' src/proxy/evidence-contract.js
 grep -Fq 'sanitizeProtocolHistory' src/services/proxy-server.js
@@ -342,7 +344,7 @@ grep -Fq 'managed_model_stream_phase_changed' src/services/proxy-server.js
 grep -Fq "'modelHeartbeat'" test/response-language.test.js
 grep -Fq "modelRoundProgress.phase = 'waiting'" src/services/proxy-server.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
-grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v7'" src/config.js
 
 # V0.2.28.6 Final Language direct-segment repair
@@ -355,7 +357,7 @@ grep -Fq 'segment_count' src/services/final-language-repair.js
 ! grep -Fq 'parseLanguageRepairSegments' src/services/final-language-repair.js
 ! grep -Fq 'encodeLanguageRepairSegments' src/services/final-language-repair.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
-grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v7'" src/config.js
 
 
@@ -373,7 +375,7 @@ grep -Fq 'CONTINUATION_WINDOW_CHARS = 24_000' src/proxy/continuation-state.js
 grep -Fq 'CONTINUATION_OVERLAP_CHARS = 4_000' src/proxy/continuation-state.js
 ! grep -Eq '^CONTINUATION_[A-Z0-9_]+=' .env.example
 ! grep -Eq 'CONTINUATION_[A-Z0-9_]+:' compose.yaml
-grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v7'" src/config.js
 
 
@@ -383,7 +385,7 @@ test -f V0.2.28.4-更新說明.md
 grep -Fq 'pdf_schematic_tile_failed' src/parsers/pdf.js
 grep -Fq 'transport_code' src/lib/media.js
 grep -Fq 'UND_ERR_HEADERS_TIMEOUT' src/lib/media.js
-grep -Fq "visualPromptVersion: 'visual-v10'" src/config.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
 grep -Fq "evidenceContractVersion: 'evidence-v7'" src/config.js
 grep -Fq 'visual-v10' README.md
 grep -Fq 'evidence-v6' README.md
@@ -453,6 +455,18 @@ grep -Fq 'evidence-v7' src/config.js
 grep -Fq 'V0.29.0 Read.pages reuses the persistent original PDF source cache' test/proxy-server.test.js
 grep -Fq 'V0.29.0 unscoped large PDF returns a bounded document map' test/pdf-parser.test.js
 
+# V0.29.1 Vision Recovery Safety
+test -f V0.29.1-更新說明.md
+grep -Fq 'V0.29.1 Vision Recovery Safety' README.md
+grep -Fq 'VLLM_VISION_TIMEOUT_MS=120000' README.md
+grep -Fq "code: 'vision_service_timeout'" src/visual/vision-client.js
+grep -Fq "phase: 'vision_quality_retry'" src/visual/vision-client.js
+grep -Fq "phase: 'image_vision_unavailable'" src/proxy/media-adapters.js
+grep -Fq 'evidence_available: false' src/proxy/evidence-contract.js
+grep -Fq "visualPromptVersion: 'visual-v11'" src/config.js
+grep -Fq 'V0.29.1 one recoverable image failure does not stop later images' test/media-adapters.test.js
+grep -Fq 'V0.29.1 Vision timeout uses explicit deadline' test/vision-client.test.js
+
 # V0.2.28.20 large payload + media safety
 test -f V0.2.28.20-更新說明.md
 grep -Fq 'V0.2.28.20 Large Payload & Media Safety' README.md
@@ -488,7 +502,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.0'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.1'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md

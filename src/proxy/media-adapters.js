@@ -6,7 +6,7 @@ import { parsePdf as defaultParsePdf } from '../parsers/pdf.js';
 import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage } from '../parsers/image.js';
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
-import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence } from './evidence-contract.js';
+import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
 export function createMediaAdapters(config, signal, onProgress = () => {}, dependencies = {}) {
@@ -64,11 +64,24 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const analyzeWithAdmission = async (assets, options) => {
     const release = await acquireVision({ signal: options?.signal || signal });
     try {
-      return await analyzeVisualAssets(assets, { ...options, onDiagnostic, onEvent: onVisionEvent });
+      return await analyzeVisualAssets(assets, {
+        ...options,
+        timeoutMs: options?.timeoutMs ?? config.vllmVisionTimeoutMs ?? 120000,
+        onDiagnostic,
+        onEvent: onVisionEvent,
+      });
     } finally {
       release();
     }
   };
+
+  const recoverableVisionFailure = (error) => Boolean(error?.retryable) && [
+    'vision_service_error',
+    'vision_service_timeout',
+    'vision_empty_output',
+    'vision_output_invalid',
+    'vision_invalid_response',
+  ].includes(error?.code);
 
   const cacheLookup = async (key) => {
     if (!key || !mediaCache) return null;
@@ -196,10 +209,19 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const tracked = mediaProgress?.contextForPath(context.path);
       const filename = tracked?.filename || block.source.filename || block.title || context.filename || 'image';
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
-      return cachedAnalysis(key, () => readSource(block.source, block.source.media_type), async (analysisSignal, sourceBuffer) => {
+      const fallback = {
+        mediaType: block.source.media_type,
+        width: null,
+        height: null,
+      };
+      try {
+        return await cachedAnalysis(key, () => readSource(block.source, block.source.media_type), async (analysisSignal, sourceBuffer) => {
         const mediaType = block.source.media_type;
         await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal: analysisSignal });
+        fallback.mediaType = normalized.mediaType || mediaType;
+        fallback.width = normalized.width;
+        fallback.height = normalized.height;
         const receivedWidth = normalized.originalWidth || normalized.width;
         const receivedHeight = normalized.originalHeight || normalized.height;
         onDiagnostic('image_payload_normalized', {
@@ -263,7 +285,33 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             truncated: bounded.truncated,
           },
         };
-      });
+        });
+      } catch (error) {
+        if (!recoverableVisionFailure(error)) throw error;
+        const errorCode = String(error.code || 'vision_service_error').slice(0, 80);
+        await reportProgress('圖片分析失敗，已略過並繼續處理其他附件。', {
+          phase: 'image_vision_unavailable',
+          error_code: errorCode,
+        });
+        onDiagnostic('image_vision_unavailable', {
+          error_code: errorCode,
+          retryable: true,
+          media_type: fallback.mediaType,
+          width: fallback.width,
+          height: fallback.height,
+        });
+        return {
+          type: 'text',
+          text: formatUnavailableImageEvidence({
+            sourceSha256: block.source.media_sha256 || '',
+            mediaType: fallback.mediaType,
+            width: fallback.width,
+            height: fallback.height,
+            visualModel: config.vllmVisionModel,
+            errorCode,
+          }),
+        };
+      }
     },
   };
 }

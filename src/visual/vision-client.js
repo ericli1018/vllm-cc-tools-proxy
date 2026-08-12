@@ -191,6 +191,7 @@ export async function analyzeVisualAssets(assets, {
   onEvent = () => {},
   maxCropRounds = 3,
   allowCrops = true,
+  timeoutMs = 120000,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
   if (!baseUrl || !model) throw new HttpError(422, 'Visual endpoint is required for this media.', { code: 'vision_endpoint_required' });
@@ -212,15 +213,35 @@ export async function analyzeVisualAssets(assets, {
     const requestStartedAt = Date.now();
     await emitEvent(onEvent, 'vision_upstream_request', summary);
     let payload;
+    const requestTimeoutMs = Number.isInteger(timeoutMs) && timeoutMs > 0 ? timeoutMs : 120000;
+    const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+    const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
     try {
       payload = await fetchJson(endpoint, {
         method: 'POST',
-        signal,
+        signal: requestSignal,
         headers: { 'content-type': 'application/json', ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         body: JSON.stringify(requestBody({ provider, model, messages, think: currentThink, toolsEnabled })),
       }, { errorCode: 'vision_service_error' });
       await emitEvent(onEvent, 'vision_upstream_response', { ...summary, http_status: 200, elapsed_ms: Date.now() - requestStartedAt });
     } catch (error) {
+      if (timeoutSignal.aborted && !signal?.aborted) {
+        const timeoutError = new HttpError(504, `Visual service exceeded the configured ${requestTimeoutMs} ms request timeout.`, {
+          code: 'vision_service_timeout',
+          retryable: true,
+          details: { transport_phase: 'deadline', timeout_ms: requestTimeoutMs },
+        });
+        await emitEvent(onEvent, 'vision_upstream_response', {
+          ...summary,
+          http_status: 504,
+          elapsed_ms: Date.now() - requestStartedAt,
+          code: timeoutError.code,
+          retryable: true,
+          transport_phase: 'deadline',
+          timeout_ms: requestTimeoutMs,
+        });
+        throw timeoutError;
+      }
       await emitEvent(onEvent, 'vision_upstream_response', {
         ...summary,
         http_status: Number.isInteger(error?.status) ? error.status : null,
@@ -273,7 +294,6 @@ export async function analyzeVisualAssets(assets, {
       if (qualityRecoveryRetries < 1) {
         qualityRecoveryRetries += 1;
         const previousThink = currentThink;
-        currentThink = true;
         if (quality.quality === 'empty') {
           await onDiagnostic('vision_empty_output_retry', {
             attempt: qualityRecoveryRetries,
@@ -288,6 +308,13 @@ export async function analyzeVisualAssets(assets, {
           reasons: quality.reasons,
           from_think: previousThink,
           to_think: currentThink,
+          strict: true,
+        });
+        await onProgress('圖片分析內容不足，正在以嚴格提示重試…', {
+          phase: 'vision_quality_retry',
+          attempt: qualityRecoveryRetries,
+          max_retries: 1,
+          reason: quality.reasons[0] || quality.quality,
         });
         messages.push({ role: 'user', content: VISION_RECOVERY_PROMPT });
         continue;

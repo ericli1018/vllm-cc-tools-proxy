@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.29.1 - 2026-08-12
+
+- Preserved `VLLM_VISION_THINK` across the one bounded Vision quality-recovery retry instead of forcing `think=true` after a weak/empty first response.
+- Added `VLLM_VISION_TIMEOUT_MS` with a 120-second default per Vision upstream request and a dedicated retryable `vision_service_timeout` deadline error.
+- Converted retryable per-image Vision service/quality failures into explicit non-cacheable `evidence_available: false` image evidence so later images in the same request continue.
+- Added visible `vision_quality_retry` and `image_vision_unavailable` progress phases for recovery and skip/continue behavior.
+- Advanced the Vision cache generation to `visual-v11` so results created by the previous adaptive-thinking recovery cannot be reused under the new strict THINK contract.
+- Preserved V0.29.0 progressive PDF Document Map / persistent source cache behavior and V0.2.28.20 large-media safety.
+
 ## 0.29.0 - 2026-08-12
 
 - Added progressive PDF disclosure: unscoped PDFs above 20 pages return a bounded Document Map instead of full-document evidence.

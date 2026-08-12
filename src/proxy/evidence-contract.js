@@ -135,6 +135,32 @@ export function formatImageEvidence({
   return output;
 }
 
+export function formatUnavailableImageEvidence({
+  sourceSha256,
+  mediaType,
+  width,
+  height,
+  visualModel,
+  errorCode,
+}) {
+  const output = [
+    '[VCC_PROXY_EVIDENCE_BEGIN version=1 kind=image]',
+    'evidence_available: false',
+    field('source_sha256', sourceSha256),
+    field('media_type', mediaType),
+    field('width', width),
+    field('height', height),
+    field('visual_model', visualModel),
+    field('error_code', errorCode),
+    'retryable: true',
+    '--- source content ---',
+    'Visual evidence unavailable for this image. Do not infer unseen image content from this placeholder.',
+    '[VCC_PROXY_EVIDENCE_END]',
+  ].filter((line) => line !== '').join('\n');
+  assertNeutralEvidence(output);
+  return output;
+}
+
 function systemContainsContract(system) {
   if (typeof system === 'string') return system.includes(EVIDENCE_CONTRACT_MARKER);
   if (!Array.isArray(system)) return false;

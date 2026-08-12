@@ -175,6 +175,7 @@ export function loadConfig(env = process.env) {
   const vllmVisionModel = env.VLLM_VISION_MODEL || '';
   const vllmVisionProvider = enumValue(env.VLLM_VISION_PROVIDER, 'vllm', 'VLLM_VISION_PROVIDER', ['vllm', 'ollama']);
   const vllmVisionThink = booleanValue(env.VLLM_VISION_THINK, false, 'VLLM_VISION_THINK');
+  const vllmVisionTimeoutMs = intValue(env.VLLM_VISION_TIMEOUT_MS, 120000, 'VLLM_VISION_TIMEOUT_MS', { min: 1000, max: 3_600_000 });
   const vllmVisionApiProtocol = vllmVisionProvider === 'ollama' ? 'ollama-native' : 'openai-chat';
   if (vllmVisionUrl && !vllmVisionModel) throw new Error('VLLM_VISION_MODEL is required when VLLM_VISION_URL is set');
   if (vllmVisionModel && !vllmVisionUrl) throw new Error('VLLM_VISION_URL is required when VLLM_VISION_MODEL is set');
@@ -208,7 +209,7 @@ export function loadConfig(env = process.env) {
     retentionMs: cacheProfile.retentionDays * 24 * 60 * 60 * 1000,
     limitMode: explicitCacheMb === 0 ? 'filesystem' : 'bounded',
     pipelineVersion: 'media-v8',
-    visualPromptVersion: 'visual-v10',
+    visualPromptVersion: 'visual-v11',
     evidenceContractVersion: 'evidence-v7',
   });
 
@@ -233,6 +234,7 @@ export function loadConfig(env = process.env) {
     vllmVisionApiKey: env.VLLM_VISION_API_KEY || '',
     vllmVisionProvider,
     vllmVisionThink,
+    vllmVisionTimeoutMs,
     vllmVisionApiProtocol,
     searxngUrl: normalizedUrl(env.SEARXNG_URL, '', 'SEARXNG_URL'),
     webFetchUrl: normalizedUrl(env.WEB_FETCH_URL, '', 'WEB_FETCH_URL'),

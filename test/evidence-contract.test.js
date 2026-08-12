@@ -5,6 +5,7 @@ import {
   escapeEvidenceText,
   formatDocumentEvidence,
   formatImageEvidence,
+  formatUnavailableImageEvidence,
   injectEvidenceContract,
   assertNeutralEvidence,
 } from '../src/proxy/evidence-contract.js';
@@ -52,6 +53,18 @@ test('image evidence uses the same escaped contract', () => {
   assert.match(text, /kind=image/);
   assert.doesNotMatch(text, /<visual_asset|<analysis|<\/function_result>/);
   assert.match(text, /&lt;\/function_result&gt;/);
+});
+
+test('V0.29.1 unavailable image evidence is explicit and does not invent visual content', () => {
+  const text = formatUnavailableImageEvidence({
+    sourceSha256: 'abc', mediaType: 'image/jpeg', width: 1170, height: 827,
+    visualModel: 'glm-4.6v-flash', errorCode: 'vision_service_timeout',
+  });
+  assert.match(text, /kind=image/);
+  assert.match(text, /evidence_available: false/);
+  assert.match(text, /vision_service_timeout/);
+  assert.match(text, /Do not infer unseen image content/i);
+  assert.deepEqual(scanControlTags(text), []);
 });
 
 test('evidence contract injection is idempotent and preserves system representation', () => {

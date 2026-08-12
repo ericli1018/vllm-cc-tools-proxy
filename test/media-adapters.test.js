@@ -5,6 +5,7 @@ import { decodeBase64Media, detectMediaType } from '../src/lib/media.js';
 import { createMediaAdapters } from '../src/proxy/media-adapters.js';
 import { MediaAnalysisRegistry } from '../src/media/analysis-registry.js';
 import { scopePdfDocumentCacheKey } from '../src/cache/cache-key.js';
+import { adaptMessages } from '../src/proxy/content-blocks.js';
 
 test('decodeBase64Media strictly validates size and PDF magic', () => {
   const pdf = Buffer.from('%PDF-1.7\n');
@@ -279,6 +280,62 @@ test('V0.2.28.3 failed weak Vision analysis is not written to media cache', asyn
     type: 'image', source: { type: 'base64', media_type: 'image/png', data: original.toString('base64'), cache_key: 'f'.repeat(64) },
   }), (error) => error?.code === 'vision_output_invalid');
   assert.equal(cacheWrites, 0);
+});
+
+test('V0.29.1 recoverable Vision timeout becomes unavailable image evidence and is not cached', async () => {
+  const original = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let cacheWrites = 0;
+  const progress = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'ollama', vllmVisionThink: false,
+    vllmVisionTimeoutMs: 120000,
+  }, undefined, (message, details) => progress.push({ message, details }), {
+    mediaCache: { get: async () => null, set: async () => { cacheWrites += 1; return true; } },
+    analysisRegistry: new MediaAnalysisRegistry(),
+    normalizeImage: async () => ({ buffer: Buffer.from('normalized'), mediaType: 'image/png', width: 600, height: 180 }),
+    analyzeVisualAssets: async () => { throw Object.assign(new Error('timeout'), { code: 'vision_service_timeout', retryable: true }); },
+  });
+
+  const block = await adapters.adaptImage({
+    type: 'image', source: { type: 'base64', media_type: 'image/png', data: original.toString('base64'), cache_key: '9'.repeat(64), media_sha256: 'a'.repeat(64) },
+  }, { path: ['messages', 0, 'content', 0], filename: 'image #2' });
+
+  assert.equal(cacheWrites, 0);
+  assert.match(block.text, /evidence_available: false/i);
+  assert.match(block.text, /error_code:\s*"?vision_service_timeout"?/i);
+  assert.ok(progress.some((entry) => entry.details?.phase === 'image_vision_unavailable'));
+});
+
+test('V0.29.1 one recoverable image failure does not stop later images in the same request', async () => {
+  const original = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let calls = 0;
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'ollama', vllmVisionThink: false,
+    vllmVisionTimeoutMs: 120000,
+  }, undefined, undefined, {
+    normalizeImage: async () => ({ buffer: Buffer.from('normalized'), mediaType: 'image/png', width: 600, height: 180 }),
+    analyzeVisualAssets: async () => {
+      calls += 1;
+      if (calls === 2) throw Object.assign(new Error('timeout'), { code: 'vision_service_timeout', retryable: true });
+      return { markdown: `IMAGE ${calls} OBSERVED`, warnings: [], cropCount: 0 };
+    },
+  });
+  const imageBlock = (index) => ({
+    type: 'image',
+    source: {
+      type: 'base64', media_type: 'image/png', data: original.toString('base64'),
+      cache_key: String(index).repeat(64), media_sha256: String(index + 3).repeat(64),
+    },
+  });
+
+  const output = await adaptMessages([{ role: 'user', content: [imageBlock(1), imageBlock(2), imageBlock(3)] }], adapters);
+
+  assert.equal(calls, 3);
+  assert.match(output[0].content[0].text, /IMAGE 1 OBSERVED/);
+  assert.match(output[0].content[1].text, /evidence_available: false/i);
+  assert.match(output[0].content[2].text, /IMAGE 3 OBSERVED/);
 });
 
 test('V0.2.28.20 decodes large supported PDF and PNG Base64 without RegExp stack overflow', () => {

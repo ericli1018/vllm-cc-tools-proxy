@@ -366,7 +366,7 @@ test('V0.2.28.2 rejects persistent empty Vision output instead of returning cach
   assert.equal(calls, 2);
 });
 
-test('V0.2.28.3 retries weak short Vision evidence with thinking enabled and accepts recovered evidence', async (t) => {
+test('V0.29.1 retries weak short Vision evidence without changing configured thinking mode and accepts recovered evidence', async (t) => {
   const requests = [];
   const diagnostics = [];
   globalThis.fetch = async (_url, options) => {
@@ -390,7 +390,7 @@ test('V0.2.28.3 retries weak short Vision evidence with thinking enabled and acc
 
   assert.equal(requests.length, 2);
   assert.equal(requests[0].think, false);
-  assert.equal(requests[1].think, true);
+  assert.equal(requests[1].think, false);
   assert.match(result.markdown, /two anime-style characters/);
   assert.equal(result.markdown.includes('private visual reasoning'), false);
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
@@ -399,13 +399,14 @@ test('V0.2.28.3 retries weak short Vision evidence with thinking enabled and acc
     && entry.details.cacheable === false));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_quality_retry'
     && entry.details.from_think === false
-    && entry.details.to_think === true));
+    && entry.details.to_think === false
+    && entry.details.strict === true));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
     && entry.details.quality === 'good'
     && entry.details.cacheable === true));
 });
 
-test('V0.2.28.3 rejects persistent weak Vision evidence instead of accepting non-empty low-information text', async (t) => {
+test('V0.29.1 rejects persistent weak Vision evidence without changing configured thinking mode', async (t) => {
   const requests = [];
   const diagnostics = [];
   globalThis.fetch = async (_url, options) => {
@@ -426,8 +427,61 @@ test('V0.2.28.3 rejects persistent weak Vision evidence instead of accepting non
 
   assert.equal(requests.length, 2);
   assert.equal(requests[0].think, false);
-  assert.equal(requests[1].think, true);
+  assert.equal(requests[1].think, false);
   assert.ok(diagnostics.filter((entry) => entry.event === 'vision_output_quality' && entry.details.quality === 'weak').length >= 2);
+});
+
+test('V0.29.1 quality recovery preserves configured think=false and reports strict retry progress', async (t) => {
+  const requests = [];
+  const progress = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    const content = requests.length === 1 ? 'No useful details.' : 'A blue rectangular control panel is visible on the right side.';
+    return new Response(JSON.stringify({ message: { role: 'assistant', content, tool_calls: [] } }), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'image' });
+
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    onProgress: (message, details) => progress.push({ message, details }),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+
+  assert.equal(result.markdown, 'A blue rectangular control panel is visible on the right side.');
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0].think, false);
+  assert.equal(requests[1].think, false);
+  assert.ok(progress.some((entry) => entry.details?.phase === 'vision_quality_retry'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_quality_retry'
+    && entry.details.from_think === false
+    && entry.details.to_think === false));
+});
+
+test('V0.29.1 Vision timeout uses explicit deadline and returns vision_service_timeout', async (t) => {
+  globalThis.fetch = async (_url, options) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(Object.assign(new Error('unexpected slow fallback'), { code: 'SLOW_FETCH' })), 120);
+    options.signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(options.signal.reason);
+    }, { once: true });
+  });
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 640, height: 480, label: 'image' });
+  const startedAt = Date.now();
+
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
+    timeoutMs: 25,
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_service_timeout' && error?.retryable === true);
+  assert.ok(Date.now() - startedAt < 100, 'Vision deadline should abort before the slow fallback rejection');
 });
 
 test('V0.2.28.3 accepts concise concrete observable Vision evidence without adaptive retry', async (t) => {

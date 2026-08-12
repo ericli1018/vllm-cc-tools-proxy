@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.0 adds progressive PDF document reading so large manuals and schematics no longer need to be expanded into the Base model context in one pass, while retaining the V0.2.28.20 large-media safety boundary and V0.2.28.19 unified progress/statusLine telemetry.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.1 hardens Vision quality recovery so a weak image result cannot silently switch the configured thinking mode or stall one multi-image request for the HTTP client's five-minute default timeout, while retaining V0.29.0 progressive PDF reading and the V0.2.28.20 large-media safety boundary.
+
+## V0.29.1 Vision Recovery Safety
+
+V0.29.1 changes the Vision quality-recovery contract. A `weak` or `empty` terminal Vision response still receives exactly one strict recovery prompt, but the retry now **preserves the configured `VLLM_VISION_THINK` value**. `VLLM_VISION_THINK=false` therefore remains `think=false` for Ollama and non-thinking for vLLM on both the first attempt and the recovery attempt; the Proxy no longer changes model mode as a side effect of output quality.
+
+Every Vision upstream request now has an explicit deadline. `VLLM_VISION_TIMEOUT_MS` defaults to `120000` (120 seconds) and is optional to override. When that deadline expires, the Vision boundary raises `vision_service_timeout` with `transport_phase=deadline` instead of waiting for the underlying HTTP client's approximately five-minute headers timeout. The deadline is per Vision request, including the single quality-recovery retry and crop rounds.
+
+Recoverable image-analysis failures are isolated per image. A retryable `vision_service_error`, `vision_service_timeout`, `vision_empty_output`, `vision_output_invalid`, or `vision_invalid_response` is converted into a neutral `kind=image` evidence block with `evidence_available: false` and an `error_code`; that placeholder is **not written to Media Cache**, later images in the same Claude Code request continue to be analyzed, and the Base model is explicitly instructed not to infer unseen image content from the placeholder. Invalid/corrupt media, size-policy violations, programming errors, and non-retryable provider rejections still fail normally.
+
+Progress now exposes the recovery path instead of making the second attempt look like one long Vision call: `vision_quality_retry` reports that a strict retry is in progress, and `image_vision_unavailable` reports a recoverable image failure before processing continues. Because V0.29.0 could cache a successful recovery generated with `think=true` under a cache identity whose configured value was `think=false`, the Vision cache generation advances from `visual-v10` to `visual-v11`.
 
 ## V0.29.0 Progressive Document Read + Persistent Source Cache
 
@@ -1149,6 +1159,7 @@ VLLM_VISION_MODEL=Qwen/Qwen3.6-27B
 VLLM_VISION_API_KEY=
 VLLM_VISION_PROVIDER=vllm
 VLLM_VISION_THINK=false
+VLLM_VISION_TIMEOUT_MS=120000
 ```
 
 `VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. The proxy uses explicit upstream timeouts instead of Node.js fetch defaults:
@@ -1181,7 +1192,7 @@ VLLM_VISION_PROVIDER=ollama
   -> VLLM_VISION_THINK=false sends think=false
 ```
 
-`VLLM_VISION_THINK` accepts only `true` or `false`; invalid values stop startup. Visual reasoning remains internal to the visual tool loop and is never copied into the normalized document/image block or forwarded to the base vLLM. For an Ollama-hosted Qwen3.6 model, configure `VLLM_VISION_PROVIDER=ollama` explicitly.
+`VLLM_VISION_THINK` accepts only `true` or `false`; invalid values stop startup. Quality recovery preserves this value rather than switching thinking on. `VLLM_VISION_TIMEOUT_MS` defaults to 120000 ms and bounds each Vision upstream request; values below 1000 ms are rejected. Visual reasoning remains internal to the visual tool loop and is never copied into the normalized document/image block or forwarded to the base vLLM. For an Ollama-hosted Qwen3.6 model, configure `VLLM_VISION_PROVIDER=ollama` explicitly.
 
 
 ## Structured evidence contract
