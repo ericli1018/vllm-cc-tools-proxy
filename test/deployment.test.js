@@ -390,3 +390,12 @@ test('README documents V0.29.8 visual crop terminal recovery', () => {
   assert.match(readme, /visual-v18/);
   assert.match(readme, /evidence-v14/);
 });
+
+test('README documents V0.29.9 historical media continuation dedup', () => {
+  assert.match(readme, /V0\.29\.9 Historical Media Continuation Dedup/i);
+  assert.match(readme, /media_continuation_cache_hit/i);
+  assert.match(readme, /PARTIAL/i);
+  assert.match(readme, /tool_result/i);
+  assert.match(readme, /visual-v18/);
+  assert.match(readme, /evidence-v14/);
+});

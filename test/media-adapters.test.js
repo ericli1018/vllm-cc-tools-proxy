@@ -576,3 +576,73 @@ test('V0.29.7 one PARTIAL recovered zoom tile makes the composite non-cacheable 
   assert.equal(summary?.cacheable, false);
   assert.match(output.text, /partial=true/i);
 });
+
+test('V0.29.9 non-cacheable image evidence writes continuation evidence while persistent cache is skipped', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let persistentWrites = 0;
+  const continuationWrites = [];
+  const cacheEvents = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 5000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    cache: { pipelineVersion: 'media-v8', visualPromptVersion: 'visual-v18', evidenceContractVersion: 'evidence-v14' },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaCache: {
+      get: async () => null,
+      set: async () => { persistentWrites += 1; return true; },
+    },
+    analysisRegistry: new MediaAnalysisRegistry(),
+    continuationCacheWriter: (key, value) => continuationWrites.push({ key, value }),
+    onCacheEvent: (event, details) => cacheEvents.push({ event, details }),
+    normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180 }),
+    analyzeVisualAssets: async () => ({
+      markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Partial but useful evidence.',
+      warnings: [], cropCount: 0, needsZoom: false, visualCompleteness: 'partial', cacheable: false,
+    }),
+  });
+
+  const output = await adapters.adaptImage({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: png.toString('base64'), cache_key: 'c'.repeat(64), media_sha256: 'd'.repeat(64) },
+  });
+
+  assert.match(output.text, /Partial but useful evidence/);
+  assert.equal(persistentWrites, 0);
+  assert.equal(continuationWrites.length, 1);
+  assert.equal(continuationWrites[0].key, 'c'.repeat(64));
+  assert.deepEqual(continuationWrites[0].value.block, output);
+  assert.equal(continuationWrites[0].value.cacheable, false);
+  assert.ok(cacheEvents.some((entry) => entry.event === 'media_cache_skip'));
+});
+
+test('V0.29.9 terminal unavailable image evidence is continuation-reusable but never persistent-cacheable', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let persistentWrites = 0;
+  const continuationWrites = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 5000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaCache: { get: async () => null, set: async () => { persistentWrites += 1; return true; } },
+    analysisRegistry: new MediaAnalysisRegistry(),
+    continuationCacheWriter: (key, value) => continuationWrites.push({ key, value }),
+    normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180 }),
+    analyzeVisualAssets: async () => {
+      const error = new Error('vision failed');
+      error.code = 'vision_output_invalid';
+      error.retryable = true;
+      throw error;
+    },
+  });
+
+  const output = await adapters.adaptImage({
+    type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64'), cache_key: 'e'.repeat(64), media_sha256: 'f'.repeat(64) },
+  });
+
+  assert.match(output.text, /unavailable|vision_output_invalid/i);
+  assert.equal(persistentWrites, 0);
+  assert.equal(continuationWrites.length, 1);
+  assert.equal(continuationWrites[0].key, 'e'.repeat(64));
+  assert.deepEqual(continuationWrites[0].value.block, output);
+  assert.equal(continuationWrites[0].value.cacheable, false);
+});

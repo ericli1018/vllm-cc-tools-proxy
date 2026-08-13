@@ -1,3 +1,14 @@
+## 0.29.9 - 2026-08-13
+
+- Added same-session Historical Media Continuation Dedup for Claude Code tool-result continuations.
+- Historical media already analyzed earlier in the same workflow can reuse normalized continuation evidence without rerunning Vision/PDF processing.
+- Kept PARTIAL, unresolved, failed, and unavailable evidence out of the persistent Media Cache while allowing session-local continuation reuse.
+- Added terminal-unavailable image evidence to the continuation store so repeated Bash/Grep rounds do not repeat exhausted Vision recovery.
+- Reset continuation evidence on a new ordinary user turn and isolate it by Claude Code session id.
+- Media newly returned by the latest `tool_result` bypasses historical continuation reuse so a fresh Read can still be analyzed.
+- Added `media_continuation_cache_hit`, `media_continuation_cache_write`, and `media_continuation_cache_reset` diagnostics.
+- Kept cache generations at `media-v8` / `visual-v18` / `evidence-v14`; no new ENV variable was added.
+
 ## 0.29.8 - 2026-08-13
 
 - Converted `visual_crop_depth_limit` from a top-level fatal error into a controlled non-retryable Vision crop-tool result followed by bounded recovery.

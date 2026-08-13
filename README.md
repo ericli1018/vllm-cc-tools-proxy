@@ -1,11 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
 
 
+
+
+## V0.29.9 Historical Media Continuation Dedup
+
+V0.29.9 separates **same-workflow continuation reuse** from the persistent Media Cache. Claude Code normally resends the complete message history after client tools such as `Bash`, `Read`, or `Grep` return a `tool_result`. Historical images and PDFs therefore reappear in the next `/v1/messages` request even when the only new information is the tool result. V0.29.9 recognizes a continuation only when a stable Claude Code session id is present and the latest user message contains one or more blocks that are all `tool_result` blocks.
+
+The Proxy now keeps a bounded, in-memory continuation evidence store keyed by `(Claude Code session, effective media cache key)`. Normalized media evidence is written there after analysis even when it is `PARTIAL` or terminal-unavailable and therefore intentionally excluded from the persistent Media Cache. On the next same-session tool continuation, historical media can produce `media_continuation_cache_hit` and is transformed from the stored normalized evidence without another Vision/PDF pass. This directly prevents a Bash-only continuation from restarting `圖片 #1` through the complete zoom/retry pipeline.
+
+The long-term cache rule does **not** change: `COMPLETE` evidence may be persisted, while `PARTIAL`, unresolved, failed, or unavailable evidence remains non-persistent. A new ordinary user turn resets that session's continuation evidence before media processing. Different session ids never share continuation evidence. Media newly returned by the latest `tool_result` is not treated as historical continuation media; for example, a fresh `Read` image/PDF can still be analyzed under its current scope instead of being shadowed by an older PARTIAL result.
+
+Safe diagnostics are `media_continuation_cache_hit`, `media_continuation_cache_write`, and `media_continuation_cache_reset`; they log only bounded identifiers/status fields, not media bytes or evidence text. The continuation store is internally bounded and expires inactive sessions; no new ENV variable is added. Because the Vision prompt, evidence contract, and persistent cache representation are unchanged, cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.8 Visual Crop Terminal Recovery
 

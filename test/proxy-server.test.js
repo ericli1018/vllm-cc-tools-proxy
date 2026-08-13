@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.8', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.9', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -3088,7 +3088,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.8/);
+  assert.match(first, /VERSION\s+0\.29\.9/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3118,10 +3118,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.8');
+  assert.equal(payload.version, '0.29.9');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.8/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.9/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3333,4 +3333,162 @@ test('V0.29.0 Read.pages reuses the persistent original PDF source cache across 
   assert.match(JSON.stringify(upstreamPayloads[1]), /FOCUSED ORIGINAL PAGE 42/);
   assert.equal(JSON.stringify(upstreamPayloads).includes(original.toString('base64')), false);
   assert.equal(JSON.stringify(upstreamPayloads).includes(subset.toString('base64')), false);
+});
+
+test('V0.29.9 same-session tool continuation reuses non-persistent historical image evidence without a second Vision call', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let visionCalls = 0;
+  const logs = [];
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'cont',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    cache: { rootDir: await fs.mkdtemp(path.join(os.tmpdir(), 'v0299-cache-')), maxBytes: 0, retentionMs: 60_000, pipelineVersion: 'media-v8', visualPromptVersion: 'visual-v18', evidenceContractVersion: 'evidence-v14' },
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180 }),
+      analyzeVisualAssets: async () => {
+        visionCalls += 1;
+        return {
+          markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Historical partial evidence.',
+          warnings: [], cropCount: 0, needsZoom: false, visualCompleteness: 'partial', cacheable: false,
+        };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+
+  const imageBlock = { type:'image', source:{ type:'base64', media_type:'image/png', data:base64 } };
+  const headers = { 'content-type':'application/json', 'x-claude-code-session-id':'continuation-media-session' };
+
+  const first = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers,
+    body:JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[structuredClone(imageBlock),{type:'text',text:'analyze'}]}] }),
+  });
+  assert.equal(first.status, 200);
+
+  const second = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers,
+    body:JSON.stringify({ model:'m',stream:false,messages:[
+      {role:'user',content:[structuredClone(imageBlock),{type:'text',text:'analyze'}]},
+      {role:'assistant',content:[{type:'tool_use',id:'bash-1',name:'Bash',input:{command:'echo ok'}}]},
+      {role:'user',content:[{type:'tool_result',tool_use_id:'bash-1',content:'ok'}]},
+    ] }),
+  });
+  assert.equal(second.status, 200);
+  assert.equal(visionCalls, 1);
+  assert.ok(logs.some((entry) => entry.event === 'media_continuation_cache_hit'));
+});
+
+test('V0.29.9 media returned by the latest tool_result bypasses continuation reuse even when bytes match historical media', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let visionCalls = 0;
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'fresh-tool-media',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision',
+    cache: { rootDir: await fs.mkdtemp(path.join(os.tmpdir(), 'v0299-fresh-tool-cache-')), maxBytes: 0, retentionMs: 60_000, pipelineVersion: 'media-v8', visualPromptVersion: 'visual-v18', evidenceContractVersion: 'evidence-v14' },
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180 }),
+      analyzeVisualAssets: async () => {
+        visionCalls += 1;
+        return {
+          markdown: `VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- pass ${visionCalls}`,
+          warnings: [], cropCount: 0, needsZoom: false, visualCompleteness: 'partial', cacheable: false,
+        };
+      },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+  const headers = { 'content-type':'application/json', 'x-claude-code-session-id':'fresh-tool-media-session' };
+  const image = () => ({ type:'image', source:{ type:'base64', media_type:'image/png', data:base64 } });
+
+  const first = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers,
+    body:JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[image(),{type:'text',text:'analyze'}]}] }),
+  });
+  assert.equal(first.status, 200);
+
+  const second = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers,
+    body:JSON.stringify({ model:'m',stream:false,messages:[
+      {role:'user',content:[image(),{type:'text',text:'analyze'}]},
+      {role:'assistant',content:[{type:'tool_use',id:'read-2',name:'Read',input:{file_path:'board.pdf'}}]},
+      {role:'user',content:[{type:'tool_result',tool_use_id:'read-2',content:[image()]}]},
+    ] }),
+  });
+  assert.equal(second.status, 200);
+  assert.equal(visionCalls, 2);
+});
+
+test('V0.29.9 a new ordinary user turn resets same-session continuation evidence and reanalyzes PARTIAL media', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let visionCalls = 0;
+  const logs = [];
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'reset',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url, vllmVisionUrl:'http://vision.invalid', vllmVisionModel:'vision',
+    logLevel:'info', logSink:(entry)=>logs.push(entry),
+    cache:{ rootDir:await fs.mkdtemp(path.join(os.tmpdir(),'v0299-reset-cache-')), maxBytes:0, retentionMs:60_000, pipelineVersion:'media-v8', visualPromptVersion:'visual-v18', evidenceContractVersion:'evidence-v14' },
+  }), { mediaAdapterDependencies:{
+    normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}),
+    analyzeVisualAssets:async()=>{ visionCalls += 1; return { markdown:'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- partial', warnings:[], cropCount:0, needsZoom:false, visualCompleteness:'partial', cacheable:false }; },
+  }});
+  const proxyUrl=await listen(proxy); t.after(()=>upstream.server.close()); t.after(()=>proxy.close());
+  const headers={'content-type':'application/json','x-claude-code-session-id':'reset-media-session'};
+  const image=()=>({type:'image',source:{type:'base64',media_type:'image/png',data:base64}});
+
+  assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[image(),{type:'text',text:'first'}]}]})})).status,200);
+  assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[image(),{type:'text',text:'new user question'}]}]})})).status,200);
+  assert.equal(visionCalls,2);
+  assert.ok(logs.some((entry)=>entry.event==='media_continuation_cache_reset' && entry.removed_entries>=1));
+});
+
+test('V0.29.9 continuation media evidence never crosses Claude Code session ids', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let visionCalls = 0;
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'isolation',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'ok'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl:upstream.url,vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',
+    cache:{rootDir:await fs.mkdtemp(path.join(os.tmpdir(),'v0299-isolation-cache-')),maxBytes:0,retentionMs:60_000,pipelineVersion:'media-v8',visualPromptVersion:'visual-v18',evidenceContractVersion:'evidence-v14'},
+  }),{mediaAdapterDependencies:{
+    normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}),
+    analyzeVisualAssets:async()=>{visionCalls+=1;return{markdown:'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- partial',warnings:[],cropCount:0,needsZoom:false,visualCompleteness:'partial',cacheable:false};},
+  }});
+  const proxyUrl=await listen(proxy); t.after(()=>upstream.server.close()); t.after(()=>proxy.close());
+  const image=()=>({type:'image',source:{type:'base64',media_type:'image/png',data:base64}});
+  const messages=[{role:'user',content:[image(),{type:'text',text:'analyze'}]},{role:'assistant',content:[{type:'tool_use',id:'bash-cross',name:'Bash',input:{command:'true'}}]},{role:'user',content:[{type:'tool_result',tool_use_id:'bash-cross',content:'ok'}]}];
+
+  assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'session-a'},body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[image(),{type:'text',text:'seed'}]}]})})).status,200);
+  assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'session-b'},body:JSON.stringify({model:'m',stream:false,messages})})).status,200);
+  assert.equal(visionCalls,2);
 });

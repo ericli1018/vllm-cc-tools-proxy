@@ -22,6 +22,7 @@ import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '..
 import { inventoryProtocolTags, sanitizeProtocolHistory, sanitizeProtocolToolDefinitions } from '../proxy/protocol-sanitizer.js';
 import { AdmissionController } from '../concurrency/admission-controller.js';
 import { MediaCache } from '../cache/media-cache.js';
+import { MediaContinuationCache } from '../cache/media-continuation-cache.js';
 import { DocumentSourceCache } from '../cache/document-source-cache.js';
 import { scopeMediaCacheKey, scopePdfDocumentCacheKey } from '../cache/cache-key.js';
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
@@ -400,6 +401,15 @@ function claudeCodeSessionId(headers, request) {
   return '';
 }
 
+function isToolResultContinuation(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return false;
+  const last = messages[messages.length - 1];
+  return last?.role === 'user'
+    && Array.isArray(last.content)
+    && last.content.length > 0
+    && last.content.every((block) => block?.type === 'tool_result');
+}
+
 function findToolUseById(messages, toolUseId) {
   for (const message of Array.isArray(messages) ? messages : []) {
     if (message?.role !== 'assistant') continue;
@@ -481,6 +491,7 @@ export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
+  const mediaContinuationCache = dependencies.mediaContinuationCache || new MediaContinuationCache();
   const documentSourceCache = dependencies.documentSourceCache || new DocumentSourceCache({
     rootDir: config.cache?.rootDir || '',
     retentionMs: config.cache?.retentionMs,
@@ -1013,6 +1024,7 @@ export function createProxyServer(config, dependencies = {}) {
         { headers: req.headers, body: original },
       );
       const clientSessionId = claudeCodeSessionId(req.headers, original);
+      const toolResultContinuation = messagesPath === '/v1/messages' && isToolResultContinuation(original.messages);
       if (messagesPath === '/v1/messages') {
         releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
       }
@@ -1225,6 +1237,17 @@ export function createProxyServer(config, dependencies = {}) {
         });
         completed = true;
         return;
+      }
+
+      if (messagesPath === '/v1/messages' && clientSessionId && !toolResultContinuation) {
+        const removed = mediaContinuationCache.resetSession(clientSessionId);
+        if (removed > 0) {
+          log(config, 'info', 'media_continuation_cache_reset', {
+            requestId,
+            session_id: clientSessionId,
+            removed_entries: removed,
+          });
+        }
       }
 
       const maybeShowStartupBanner = async (stream) => {
@@ -1470,6 +1493,25 @@ export function createProxyServer(config, dependencies = {}) {
             ? scopePdfDocumentCacheKey(occurrence.key, pageScope)
             : scopeMediaCacheKey(occurrence.key, pageScope);
           const invalidScope = occurrence.mediaType === 'application/pdf' && Boolean(tracked?.pageScopeError);
+          const isCurrentToolResultMedia = toolResultContinuation
+            && Array.isArray(occurrence.path)
+            && occurrence.path[0] === 'messages'
+            && occurrence.path[1] === request.messages.length - 1;
+          const continuationCached = !invalidScope && !isCurrentToolResultMedia && toolResultContinuation && clientSessionId
+            ? mediaContinuationCache.get(clientSessionId, effectiveKey)
+            : null;
+          if (continuationCached?.block) {
+            cachedOccurrences += 1;
+            preloadedCache.set(effectiveKey, { __vccSource: 'continuation', __vccValue: continuationCached });
+            log(config, 'info', 'media_continuation_cache_hit', {
+              requestId,
+              session_id: clientSessionId,
+              cache_key_prefix: effectiveKey.slice(0, 12),
+              media_type: occurrence.mediaType,
+              ...(pageScope?.canonical ? { pdf_pages: pageScope.canonical } : {}),
+            });
+            continue;
+          }
           const cached = invalidScope ? null : await mediaCache.get(effectiveKey);
           if (cached?.block) {
             cachedOccurrences += 1;
@@ -1501,6 +1543,20 @@ export function createProxyServer(config, dependencies = {}) {
         analysisRegistry,
         preloadedCache,
         ...(dependencies.mediaAdapterDependencies || {}),
+        continuationFreshMessageIndex: toolResultContinuation ? request.messages.length - 1 : -1,
+        continuationCacheWriter: (key, value) => {
+          if (!clientSessionId || messagesPath !== '/v1/messages') return false;
+          const stored = mediaContinuationCache.set(clientSessionId, key, value);
+          if (stored) {
+            log(config, 'info', 'media_continuation_cache_write', {
+              requestId,
+              session_id: clientSessionId,
+              cache_key_prefix: String(key || '').slice(0, 12),
+              persistent_cacheable: value?.cacheable !== false,
+            });
+          }
+          return stored;
+        },
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
         onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
         onVisionEvent: (event, fields) => {

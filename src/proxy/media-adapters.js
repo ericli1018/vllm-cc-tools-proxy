@@ -21,6 +21,10 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const documentSourceCache = dependencies.documentSourceCache || null;
   const analysisRegistry = dependencies.analysisRegistry || null;
   const preloadedCache = dependencies.preloadedCache || new Map();
+  const continuationCacheWriter = dependencies.continuationCacheWriter || (() => false);
+  const continuationFreshMessageIndex = Number.isInteger(dependencies.continuationFreshMessageIndex)
+    ? dependencies.continuationFreshMessageIndex
+    : -1;
   const onCacheEvent = dependencies.onCacheEvent || (() => {});
   const onDiagnostic = dependencies.onDiagnostic || (() => {});
   const onVisionEvent = dependencies.onVisionEvent || (() => {});
@@ -84,31 +88,55 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
     'vision_invalid_response',
   ].includes(error?.code);
 
-  const cacheLookup = async (key) => {
+  const cacheLookup = async (key, { bypassContinuationPreload = false } = {}) => {
     if (!key || !mediaCache) return null;
     if (preloadedCache.has(key)) {
-      const value = preloadedCache.get(key);
-      onCacheEvent('media_cache_hit', { keyPrefix: key.slice(0, 12), source: 'preloaded' });
-      return value;
+      const preloaded = preloadedCache.get(key);
+      const isContinuation = preloaded?.__vccSource === 'continuation' && preloaded?.__vccValue?.block;
+      if (!(isContinuation && bypassContinuationPreload)) {
+        const value = isContinuation ? preloaded.__vccValue : preloaded;
+        onCacheEvent(isContinuation ? 'media_continuation_cache_hit' : 'media_cache_hit', {
+          keyPrefix: key.slice(0, 12), source: 'preloaded',
+        });
+        return value;
+      }
     }
     const value = await mediaCache.get(key);
     onCacheEvent(value ? 'media_cache_hit' : 'media_cache_miss', { keyPrefix: key.slice(0, 12) });
     return value;
   };
 
-  const cachedAnalysis = async (key, loadSource, producer) => {
-    const cached = await cacheLookup(key);
-    if (cached?.block) return structuredClone(cached.block);
+  const writeContinuation = (key, value) => {
+    if (!key || !value?.block) return false;
+    try { return continuationCacheWriter(key, structuredClone(value)); }
+    catch (error) {
+      onDiagnostic('media_continuation_cache_write_failed', { code: error?.code || error?.name || 'error' });
+      return false;
+    }
+  };
+
+  const cachedAnalysis = async (key, loadSource, producer, lookupOptions = {}) => {
+    const cached = await cacheLookup(key, lookupOptions);
+    if (cached?.block) {
+      writeContinuation(key, cached);
+      return structuredClone(cached.block);
+    }
     const source = await loadSource();
-    if (!key || !mediaCache) return (await producer(signal, source)).block;
+    if (!key || !mediaCache) {
+      const value = await producer(signal, source);
+      writeContinuation(key, value);
+      return structuredClone(value.block);
+    }
 
     const run = async ({ signal: sharedSignal }) => {
       const lateHit = await mediaCache.get(key);
       if (lateHit?.block) {
         onCacheEvent('media_cache_hit', { keyPrefix: key.slice(0, 12), source: 'singleflight_recheck' });
+        writeContinuation(key, lateHit);
         return lateHit;
       }
       const value = await producer(sharedSignal, source);
+      writeContinuation(key, value);
       if (value?.cacheable === false) {
         onCacheEvent('media_cache_skip', { keyPrefix: key.slice(0, 12), reason: 'non_cacheable_terminal_evidence' });
         return value;
@@ -206,7 +234,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             visualUsed: Boolean(result.visual_used), warnings, truncated: Boolean(result.truncated || bounded.truncated),
           },
         };
-      });
+      }, { bypassContinuationPreload: context.messageIndex === continuationFreshMessageIndex });
     },
 
     async adaptImage(block, context = {}) {
@@ -343,7 +371,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             truncated: bounded.truncated,
           },
         };
-        });
+        }, { bypassContinuationPreload: context.messageIndex === continuationFreshMessageIndex });
       } catch (error) {
         if (!recoverableVisionFailure(error)) throw error;
         const errorCode = String(error.code || 'vision_service_error').slice(0, 80);
@@ -362,7 +390,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           source_kind: provenance.sourceKind,
           read_source_ref: provenance.readSourceRef,
         });
-        return {
+        const unavailableBlock = {
           type: 'text',
           text: formatUnavailableImageEvidence({
             sourceSha256: block.source.media_sha256 || '',
@@ -374,6 +402,19 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             ...provenance,
           }),
         };
+        writeContinuation(key, {
+          block: unavailableBlock,
+          cacheable: false,
+          metadata: {
+            mediaType: fallback.mediaType,
+            width: fallback.width,
+            height: fallback.height,
+            visualModel: config.vllmVisionModel,
+            errorCode,
+            unavailable: true,
+          },
+        });
+        return unavailableBlock;
       }
     },
   };

@@ -107,8 +107,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.8'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.8'
+test "$(node -p "require('./package.json').version")" = '0.29.9'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.9'
 
 
 test -f src/i18n/response-language.js
@@ -537,7 +537,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.8'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.9'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -673,5 +673,22 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
  grep -Fq 'V0.29.8 zoom tile allows one precise crop round' test/vision-client.test.js
  grep -Fq 'V0.29.8 stubborn zoom tile crop request after budget exhaustion' test/vision-client.test.js
  grep -Fq 'README documents V0.29.8 visual crop terminal recovery' test/deployment.test.js
+
+
+# V0.29.9 Historical Media Continuation Dedup
+ test -f V0.29.9-更新說明.md
+ test -f V0.29.9-實作與驗證報告.md
+ test -f src/cache/media-continuation-cache.js
+ grep -Fq 'V0.29.9 Historical Media Continuation Dedup' README.md
+ grep -Fq 'media_continuation_cache_hit' src/services/proxy-server.js
+ grep -Fq 'media_continuation_cache_write' src/services/proxy-server.js
+ grep -Fq 'media_continuation_cache_reset' src/services/proxy-server.js
+ grep -Fq 'continuationCacheWriter' src/proxy/media-adapters.js
+ grep -Fq 'continuationFreshMessageIndex' src/proxy/media-adapters.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+ grep -Fq 'V0.29.9 same-session tool continuation reuses non-persistent historical image evidence' test/proxy-server.test.js
+ grep -Fq 'V0.29.9 terminal unavailable image evidence is continuation-reusable' test/media-adapters.test.js
+ grep -Fq 'README documents V0.29.9 historical media continuation dedup' test/deployment.test.js
 
 echo 'Verification complete.'
