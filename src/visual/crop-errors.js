@@ -14,6 +14,7 @@ const SAFE_CODES = new Set([
   'invalid_visual_crop_arguments',
   'unknown_visual_source',
   'visual_crop_round_limit',
+  'visual_crop_depth_limit',
   'invalid_visual_crop_coordinates',
   'invalid_visual_crop_rectangle',
   'crop_region_too_small',
@@ -26,11 +27,12 @@ const SAFE_CODES = new Set([
 export function cropToolError(error, fallbackCode = 'crop_processing_failed') {
   if (error?.name === 'AbortError') throw error;
   const code = SAFE_CODES.has(error?.code) ? error.code : fallbackCode;
-  const retryable = !['visual_crop_round_limit', 'visual_crop_count_limit', 'visual_crop_batch_limit', 'unsupported_visual_tool'].includes(code);
+  const retryable = !['visual_crop_round_limit', 'visual_crop_depth_limit', 'visual_crop_count_limit', 'visual_crop_batch_limit', 'unsupported_visual_tool'].includes(code);
   const messages = {
     invalid_visual_crop_arguments: 'Crop arguments were not valid JSON or did not match the required schema.',
     unknown_visual_source: 'The requested source_id is not available in this visual-analysis request.',
     visual_crop_round_limit: 'The crop correction round limit has been reached.',
+    visual_crop_depth_limit: 'The maximum visual crop depth has been reached. Continue from the existing images and crops.',
     invalid_visual_crop_coordinates: 'Crop coordinates must contain four integers in the range 0 through 1000.',
     invalid_visual_crop_rectangle: 'Crop coordinates must describe a rectangle with positive width and height.',
     crop_region_too_small: 'Requested crop region is smaller than the allowed minimum.',

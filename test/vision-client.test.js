@@ -996,3 +996,104 @@ test('V0.29.7 explicit PARTIAL CONTENT is usable terminal evidence but non-cache
   assert.equal(result.cacheable, false);
   assert.equal(result.needsZoom, false);
 });
+
+test('V0.29.8 crop depth exhaustion becomes non-fatal recovery with crop tools disabled', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'too-deep', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-3', bbox: [200,200,800,800], purpose: 'read deeper' }) } }] }
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Existing enlarged evidence remains partially readable.', tool_calls: [] };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const root = registry.add({ buffer: Buffer.from('root'), mediaType: 'image/png', width: 1000, height: 1000, label: 'root' });
+  const auth1 = registry.authorizeCrop(root.sourceId, [100,100,900,900], 1);
+  const crop1 = registry.registerCrop(root.sourceId, { buffer: Buffer.from('crop1'), mediaType: 'image/png', width: 800, height: 800 }, auth1);
+  const auth2 = registry.authorizeCrop(crop1.sourceId, [100,100,900,900], 2);
+  const crop2 = registry.registerCrop(crop1.sourceId, { buffer: Buffer.from('crop2'), mediaType: 'image/png', width: 640, height: 640 }, auth2);
+
+  const result = await analyzeVisualAssets([crop2], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', think: false, registry,
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => assert.fail('depth-limited crop must not reach image processor'),
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].tools, undefined);
+  assert.match(result.markdown, /Existing enlarged evidence remains partially readable/);
+  assert.equal(result.visualCompleteness, 'partial');
+  assert.equal(result.cacheable, false);
+  assert.equal(diagnostics.some((entry) => entry.event === 'vision_crop_budget_exhausted' && entry.details.reason === 'visual_crop_depth_limit'), true);
+  assert.equal(diagnostics.some((entry) => entry.event === 'vision_retry_started' && entry.details.reason === 'crop_exhausted'), true);
+  const overlay = requests[1].messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '';
+  assert.match(overlay, /Crop tools are exhausted|No further crop is allowed/i);
+});
+
+test('V0.29.8 zoom tile allows one precise crop round then removes crop tools', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'crop-once', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [200,200,800,800], purpose: 'read the small label' }) } }] }
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- The requested local label is now readable.', tool_calls: [] };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const tile = registry.add({ buffer: Buffer.from('tile'), mediaType: 'image/png', width: 968, height: 572, label: 'zoom tile' });
+  let crops = 0;
+
+  const result = await analyzeVisualAssets([tile], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', think: false, registry,
+    recoveryContext: 'zoom_tile',
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { crops += 1; return { buffer: Buffer.from('precise'), mediaType: 'image/png', width: 500, height: 300 }; },
+  });
+
+  assert.equal(crops, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(Array.isArray(requests[0].tools), true);
+  assert.equal(requests[1].tools, undefined, 'zoom tile must not expose crop tools after its first precise crop round');
+  assert.match(result.markdown, /requested local label is now readable/);
+  assert.equal(diagnostics.some((entry) => entry.event === 'vision_crop_budget_exhausted' && entry.details.reason === 'zoom_tile_crop_round_limit'), true);
+});
+
+test('V0.29.8 stubborn zoom tile crop request after budget exhaustion is recovered without recropping', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    let message;
+    if (requests.length === 1) {
+      message = { content: '', tool_calls: [{ id: 'first-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [150,150,850,850], purpose: 'first and only crop' }) } }] };
+    } else if (requests.length === 2) {
+      message = { content: '', tool_calls: [{ id: 'forbidden-second-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-2', bbox: [200,200,800,800], purpose: 'try again' }) } }] };
+    } else {
+      message = { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Existing crop contains a readable identifier.', tool_calls: [] };
+    }
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const tile = registry.add({ buffer: Buffer.from('tile'), mediaType: 'image/png', width: 968, height: 572, label: 'zoom tile' });
+  let crops = 0;
+  const result = await analyzeVisualAssets([tile], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', think: false, registry,
+    recoveryContext: 'zoom_tile',
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { crops += 1; return { buffer: Buffer.from('precise'), mediaType: 'image/png', width: 560, height: 320 }; },
+  });
+
+  assert.equal(crops, 1, 'crop processor must run exactly once for a zoom tile');
+  assert.equal(requests.length, 3);
+  assert.equal(requests[1].tools, undefined);
+  assert.equal(requests[2].tools, undefined);
+  assert.match(result.markdown, /readable identifier/);
+  assert.equal(diagnostics.some((entry) => entry.event === 'vision_retry_started' && entry.details.recovery_context === 'zoom_tile'), true);
+  const overlay = requests[2].messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '';
+  assert.match(overlay, /Crop tools are exhausted|do not request another crop/i);
+});

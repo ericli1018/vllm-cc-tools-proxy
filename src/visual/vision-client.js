@@ -59,7 +59,7 @@ const CONTENT_ADAPTIVE_EXTRACTION = `Adapt extraction to the content actually vi
 - photo/scene/object: visible objects, text, state, actions and spatial relationships
 - mixed/unknown: only facts that are directly visible.`;
 
-function recoveryPromptFor({ reason, retryIndex, outputContract, recoveryContext }) {
+function recoveryPromptFor({ reason, retryIndex, outputContract, recoveryContext, cropAvailable = true }) {
   const strategy = RECOVERY_STRATEGIES[Math.max(0, Math.min(RECOVERY_STRATEGIES.length - 1, retryIndex - 1))];
   if (outputContract === 'raw') {
     const rawPrefix = retryIndex === 1
@@ -73,11 +73,18 @@ function recoveryPromptFor({ reason, retryIndex, outputContract, recoveryContext
     return { strategy, prompt: `${rawPrefix}\n${reasonText}\nDo not change the original output schema or invent unreadable content.` };
   }
 
+  const cropConstraint = cropAvailable
+    ? ''
+    : ' Crop tools are exhausted for this visual attempt. Do not request another crop. Use only the current images and successful crops; return reliable partial evidence and uncertainty when needed.';
   const reasonText = reason === 'timeout'
-    ? `The previous request timed out. Prioritize speed over completeness. Do not reason about the entire image. Prefer short factual bullets and ignore details that cannot be read reliably.`
+    ? `The previous request timed out. Prioritize speed over completeness. Do not reason about the entire image. Prefer short factual bullets and ignore details that cannot be read reliably.${cropConstraint}`
+    : reason === 'crop_exhausted'
+      ? `The maximum useful crop budget has been reached. No further crop is allowed.${cropConstraint} Recover all reliable evidence already visible instead of rejecting the whole image.`
     : reason === 'zoom_unresolved'
-      ? `This is already a magnified or enlarged visual region. Do not request another generic zoom. Do not reject the entire region merely because some details remain small. Recover all reliable evidence already visible. If one precise smaller area is essential and can be identified accurately, request only that precise crop. Otherwise return partial reliable evidence and mark the remaining uncertainty.`
-      : `The previous response was empty, malformed, unreadable, contaminated by control tags, or otherwise unusable. Recover directly visible evidence without inventing content.`;
+      ? cropAvailable
+        ? `This is already a magnified or enlarged visual region. Do not request another generic zoom. Do not reject the entire region merely because some details remain small. Recover all reliable evidence already visible. If one precise smaller area is essential and can be identified accurately, request only that precise crop. Otherwise return partial reliable evidence and mark the remaining uncertainty.`
+        : `This is already a magnified or enlarged visual region. Do not request another generic zoom or precise crop.${cropConstraint} Do not reject the entire region merely because some details remain small. Recover all reliable evidence already visible and mark the remaining uncertainty.`
+      : `The previous response was empty, malformed, unreadable, contaminated by control tags, or otherwise unusable. Recover directly visible evidence without inventing content.${cropConstraint}`;
 
   const contract = `Use exactly one final status: VISUAL_STATUS: CONTENT | BLANK | NEEDS_ZOOM | UNREADABLE. For CONTENT use exactly: VISUAL_STATUS: CONTENT, then VISUAL_DETAIL: SUFFICIENT | NEEDS_ZOOM, then VISUAL_COMPLETENESS: COMPLETE | PARTIAL, then VISUAL_EVIDENCE: with one or more \"- \" bullets. BLANK is valid and must not invent content. For UNREADABLE do not guess. Do not emit XML/HTML/tool-call wrappers.`;
 
@@ -403,6 +410,8 @@ export async function analyzeVisualAssets(assets, {
   let toolsEnabled = Boolean(allowCrops);
   let qualityRecoveryRetries = 0;
   let currentThink = Boolean(think);
+  let cropBudgetExhausted = false;
+  const cropRoundLimit = recoveryContext === 'zoom_tile' ? Math.min(maxCropRounds, 1) : maxCropRounds;
   const transmittedAssets = [...assets];
 
   const scheduleRecovery = async (reason, { quality = null } = {}) => {
@@ -416,7 +425,7 @@ export async function analyzeVisualAssets(assets, {
       return false;
     }
     qualityRecoveryRetries += 1;
-    const recovery = recoveryPromptFor({ reason, retryIndex: qualityRecoveryRetries, outputContract, recoveryContext });
+    const recovery = recoveryPromptFor({ reason, retryIndex: qualityRecoveryRetries, outputContract, recoveryContext, cropAvailable: toolsEnabled && !cropBudgetExhausted });
     await onDiagnostic('vision_retry_started', {
       attempt: qualityRecoveryRetries,
       max_retries: MAX_VISION_RECOVERY_RETRIES,
@@ -454,6 +463,25 @@ export async function analyzeVisualAssets(assets, {
     });
     messages.push({ role: 'user', content: recovery.prompt });
     return true;
+  };
+
+  const exhaustCropBudget = async (reason) => {
+    if (cropBudgetExhausted) return;
+    cropBudgetExhausted = true;
+    toolsEnabled = false;
+    await onDiagnostic('vision_crop_budget_exhausted', {
+      reason,
+      round: cropRound,
+      recovery_context: recoveryContext,
+      crop_count: cropCount,
+    });
+    await onProgress('已達目前圖片的局部放大上限，將使用現有畫面繼續分析…', {
+      phase: 'vision_crop_budget_exhausted',
+      reason,
+      round: cropRound,
+      recovery_context: recoveryContext,
+      crop_count: cropCount,
+    });
   };
 
   while (true) {
@@ -651,6 +679,9 @@ export async function analyzeVisualAssets(assets, {
         } catch (error) {
           const recovered = recoverableCropToolError(error, { processing });
           if (!recovered) throw error;
+          if (error?.code === 'visual_crop_depth_limit') {
+            await exhaustCropBudget('visual_crop_depth_limit');
+          }
           result = recovered;
         }
       }
@@ -666,23 +697,36 @@ export async function analyzeVisualAssets(assets, {
       messages.push(toolResultMessage(provider, call, result));
     }
 
+    if (!cropBudgetExhausted && cropRound >= cropRoundLimit) {
+      await exhaustCropBudget(recoveryContext === 'zoom_tile' ? 'zoom_tile_crop_round_limit' : 'visual_crop_round_limit');
+    }
+
     if (cropAssets.length > 0) {
       await onProgress(`視覺模型要求檢視 ${cropAssets.length} 個局部區域…`, { phase: 'vision_crop', round: cropRound, count: cropAssets.length });
       transmittedAssets.push(...cropAssets);
-      messages.push(userMessageForAssets(provider, cropAssets, 'Here are the requested high-resolution crops. Continue the analysis and return final Markdown, or request another precise crop only if still essential.'));
+      messages.push(userMessageForAssets(provider, cropAssets, cropBudgetExhausted
+        ? 'Here are the requested high-resolution crops. Crop tools are now exhausted for this visual attempt. Analyze these crops and the existing images, return reliable evidence, and state uncertainty instead of requesting another crop.'
+        : 'Here are the requested high-resolution crops. Continue the analysis and return final Markdown, or request another precise crop only if still essential.'));
     } else if (rejected > 0) {
       messages.push({
         role: 'user',
-        content: 'Review the crop tool error results. Correct the crop request only if a precise crop remains essential; otherwise finish the analysis from the existing evidence.',
+        content: cropBudgetExhausted
+          ? 'Review the crop tool error results. Crop tools are exhausted. Finish from the existing images and successful crops; preserve reliable partial evidence and state uncertainty.'
+          : 'Review the crop tool error results. Correct the crop request only if a precise crop remains essential; otherwise finish the analysis from the existing evidence.',
       });
     }
 
-    if (batchTooLarge || cropRound >= maxCropRounds) {
-      toolsEnabled = false;
+    if (batchTooLarge && !cropBudgetExhausted) {
+      await exhaustCropBudget('visual_crop_batch_limit');
+    }
+    if (cropBudgetExhausted) {
       messages.push({
         role: 'user',
         content: 'Crop tools are now unavailable. Complete the structured Markdown analysis using the original images, native text, successful crops, and available evidence. State uncertainty instead of requesting another crop.',
       });
+      if (cropAssets.length === 0 && rejected > 0) {
+        if (await scheduleRecovery('crop_exhausted')) continue;
+      }
     }
   }
 }

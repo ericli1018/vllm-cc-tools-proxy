@@ -1,3 +1,14 @@
+## 0.29.8 - 2026-08-13
+
+- Converted `visual_crop_depth_limit` from a top-level fatal error into a controlled non-retryable Vision crop-tool result followed by bounded recovery.
+- Kept `VisualAssetRegistry` maximum crop depth at 2; the release fixes terminal behavior rather than increasing recursive zoom depth.
+- Limited every `recoveryContext=zoom_tile` analysis to one precise crop round, then removed `request_image_crop` from subsequent Vision requests.
+- Made recovery prompts crop-budget aware so exhausted tiles salvage current evidence/uncertainty instead of asking for another crop.
+- Applied the shared rule to generic IMAGE zoom tiles plus PDF DIAGRAM/DENSE_PAGE and SCHEMATIC tile workers.
+- Added `vision_crop_budget_exhausted` diagnostics and regression coverage for depth exhaustion, one-round tile crops, and stubborn second crop calls.
+- Advanced cache generations to `visual-v18` / `evidence-v14`; media pipeline remains `media-v8`.
+- Added no ENV variables.
+
 ## 0.29.7 - 2026-08-13
 
 - Added failure-aware Vision recovery: one original request plus up to three retries using `focused_recovery`, `structured_extraction`, and `last_chance_salvage`.

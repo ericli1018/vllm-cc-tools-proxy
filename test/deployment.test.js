@@ -379,3 +379,14 @@ test('README documents V0.29.7 failure-aware Vision recovery', () => {
   assert.match(readme, /visual-v17/);
   assert.match(readme, /evidence-v13/);
 });
+
+
+test('README documents V0.29.8 visual crop terminal recovery', () => {
+  assert.match(readme, /V0\.29\.8.*Visual Crop Terminal Recovery|Visual Crop Terminal Recovery.*V0\.29\.8/is);
+  assert.match(readme, /visual_crop_depth_limit/i);
+  assert.match(readme, /maximum crop depth at 2|max.*crop depth.*2/is);
+  assert.match(readme, /one precise crop round/i);
+  assert.match(readme, /vision_crop_budget_exhausted/i);
+  assert.match(readme, /visual-v18/);
+  assert.match(readme, /evidence-v14/);
+});

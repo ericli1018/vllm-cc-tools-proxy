@@ -1,10 +1,21 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
 
+
+
+## V0.29.8 Visual Crop Terminal Recovery
+
+V0.29.8 keeps the VisualAssetRegistry maximum crop depth at 2 but changes crop exhaustion from a request-fatal condition into a bounded Vision recovery condition. `visual_crop_depth_limit` is returned as a controlled non-retryable crop-tool result; the Vision worker disables crop tools for that visual attempt and continues with the existing `focused_recovery` → `structured_extraction` → `last_chance_salvage` policy instead of aborting `/v1/messages`.
+
+Any call using `recoveryContext=zoom_tile` may perform at most one precise crop round. After that first precise crop round, subsequent Vision requests no longer expose `request_image_crop`. If the model nevertheless emits a stale/undeclared crop call, it is treated as unusable output and recovered from the already available images/crops; the crop processor is not invoked a second time. This applies centrally to generic IMAGE zoom tiles and to PDF `DIAGRAM`/`DENSE_PAGE` and `SCHEMATIC` tiles.
+
+Recovery prompts are crop-budget aware. When a precise crop is still available, an already enlarged tile may request one accurately identified smaller region. Once the budget is exhausted, the overlay explicitly states that no further crop is allowed and asks for reliable partial evidence plus uncertainty from the current images. `PARTIAL` and failed evidence remain non-cacheable.
+
+Safe diagnostics include `vision_crop_budget_exhausted` with the exhaustion reason, crop round/count, and recovery context. The media pipeline remains `media-v8`; cache generations advance to `visual-v18` and `evidence-v14`. No new ENV variable is added.
 
 ## V0.29.7 Failure-Aware Vision Recovery
 
