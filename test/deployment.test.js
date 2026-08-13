@@ -356,3 +356,14 @@ test('README documents V0.29.5 two-dimensional Visual Detail contract', () => {
   assert.match(readme, /visual-v15/);
   assert.match(readme, /evidence-v11/);
 });
+
+
+test('README documents V0.29.6 terminal generic zoom and cache correctness', () => {
+  assert.match(readme, /V0\.29\.6.*Terminal|Terminal.*V0\.29\.6/is);
+  assert.match(readme, /terminal_status:\s*(resolved|partial|unreadable)/i);
+  assert.match(readme, /media_cache_skip/i);
+  assert.match(readme, /30 second|30-second/i);
+  assert.match(readme, /control_tag_leak/i);
+  assert.match(readme, /visual-v16/);
+  assert.match(readme, /evidence-v12/);
+});

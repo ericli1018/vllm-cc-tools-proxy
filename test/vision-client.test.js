@@ -180,31 +180,54 @@ test('unexpected proxy programming errors are not hidden as crop validation fail
   }), /programming defect/);
 });
 
-test('visual worker prompt forbids protocol markup and reports control tags without exposing content', async (t) => {
-  let observed;
+test('V0.29.6 persistent literal Vision control tags are rejected instead of entering evidence', async (t) => {
+  const requests = [];
   const diagnostics = [];
   const server = http.createServer(async (req, res) => {
-    observed = await read(req);
+    requests.push(await read(req));
     res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>', tool_calls: [] } }));
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call><arg_key>x</arg_key>', tool_calls: [] } }));
+  });
+  const url = await listen(server); t.after(() => server.close());
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: false, registry,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_output_invalid' && error?.details?.reasons?.includes('control_tag_leak'));
+  assert.equal(requests.length, 2, 'control-tag leak gets one strict recovery attempt');
+  assert.match(requests[0].messages[0].content, /Return Markdown only/i);
+  assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
+    && entry.details.tags.includes('function_result')
+    && entry.details.tags.includes('tool_call')
+    && entry.details.tags.includes('arg_key')));
+  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
+    && entry.details.quality === 'weak'
+    && entry.details.reasons.includes('control_tag_leak')
+    && entry.details.cacheable === false));
+});
+
+test('V0.29.6 one literal Vision control-tag leak can recover to clean evidence', async (t) => {
+  let count = 0;
+  const server = http.createServer(async (_req, res) => {
+    count += 1;
+    const content = count === 1
+      ? 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- leaked <tool_call>'
+      : 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- clean evidence';
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content, tool_calls: [] } }] }));
   });
   const url = await listen(server); t.after(() => server.close());
   const registry = new VisualAssetRegistry();
   const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
   const result = await analyzeVisualAssets([asset], {
-    baseUrl: url, model: 'qwen3.6:27b', provider: 'ollama', think: false, registry,
-    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    baseUrl: url, model: 'vision', provider: 'vllm', think: false, registry,
     cropImage: async () => { throw new Error('not expected'); },
   });
-  assert.match(observed.messages[0].content, /Return Markdown only/i);
-  assert.match(observed.messages[0].content, /Do not emit.*tool-call/i);
-  assert.equal(result.markdown, 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_EVIDENCE:\n- text </function_result> <tool_call>');
-  assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
-    && entry.details.tagCount === 2
-    && entry.details.tags.includes('function_result')
-    && entry.details.tags.includes('tool_call')));
-  assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_observed'
-    && entry.details.usable_content === true));
+  assert.equal(count, 2);
+  assert.match(result.markdown, /clean evidence/);
+  assert.doesNotMatch(result.markdown, /tool_call/);
 });
 
 test('V0.2.26 Vision worker can crop a crop using the registered derived source id', async (t) => {

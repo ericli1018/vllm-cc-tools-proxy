@@ -53,8 +53,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
     buffer,
     mediaType,
     pipelineVersion: config.cache?.pipelineVersion || 'media-v8',
-    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v15',
-    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v11',
+    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v16',
+    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v12',
     visionModel: config.vllmVisionModel || '',
     visionProvider: config.vllmVisionProvider || 'vllm',
     visionApiProtocol: config.vllmVisionApiProtocol || 'openai-chat',
@@ -109,6 +109,10 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         return lateHit;
       }
       const value = await producer(sharedSignal, source);
+      if (value?.cacheable === false) {
+        onCacheEvent('media_cache_skip', { keyPrefix: key.slice(0, 12), reason: 'non_cacheable_terminal_evidence' });
+        return value;
+      }
       const stored = await mediaCache.set(key, value);
       onCacheEvent(stored ? 'media_cache_write' : 'media_cache_write_failed', { keyPrefix: key.slice(0, 12) });
       return value;
@@ -276,17 +280,28 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             analyzeTile: async (tileAsset, tile) => analyzeWithAdmission([tileAsset], {
               baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
               provider: config.vllmVisionProvider, think: config.vllmVisionThink,
-              registry, signal: analysisSignal, onProgress: reportProgress, allowNeedsZoomFallback: true,
-              prompt: `Analyze generic zoom tile ${tile.index}. This region overlaps adjacent tiles by 15 percent. Extract only directly visible text, labels, components, arrows, nets, table cells and relationships. Repeated content near boundaries is a continuity anchor. If one precise smaller region remains necessary, use request_image_crop. Do not answer the final user task.`,
+              registry, signal: analysisSignal, onProgress: reportProgress, allowNeedsZoomFallback: false,
+              timeoutMs: Math.min(config.vllmVisionTimeoutMs ?? 120000, 30000),
+              prompt: `Analyze generic zoom tile ${tile.index}. This is the terminal deterministic zoom layer and overlaps adjacent tiles by 15 percent. Extract only directly visible text, labels, components, arrows, nets, table cells and relationships. Repeated content near boundaries is a continuity anchor. If one precise smaller region remains necessary, use request_image_crop. If the required detail still cannot be resolved, return UNREADABLE without guessing. Do not return NEEDS_ZOOM as a final tile state. Do not answer the final user task.`,
               cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
             }),
+          });
+          onDiagnostic('vision_zoom_summary', {
+            tile_count: zoom.tileCount,
+            resolved_count: zoom.resolvedCount,
+            unresolved_count: zoom.unresolvedCount,
+            failed_count: zoom.failedCount,
+            terminal_status: zoom.terminalStatus,
+            cacheable: zoom.cacheable,
           });
           result = {
             ...result,
             markdown: `${result.markdown}\n\n${zoom.markdown}`,
             warnings: [...(result.warnings || []), ...(zoom.warnings || []), 'vision_generic_zoom_fallback'],
             cropCount: Number(result.cropCount || 0) + Number(zoom.cropCount || 0),
-            needsZoom: false,
+            needsZoom: zoom.unresolvedCount > 0,
+            cacheable: zoom.cacheable,
+            zoomTerminalStatus: zoom.terminalStatus,
           };
         }
         await reportProgress('圖片分析已完成。', { phase: 'image_complete', completed: 1, total: 1 });
@@ -311,6 +326,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         };
         return {
           block: normalizedBlock,
+          cacheable: result.cacheable !== false,
           metadata: {
             mediaType: normalized.mediaType,
             width: normalized.width,

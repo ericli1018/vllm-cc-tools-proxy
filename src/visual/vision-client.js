@@ -1,7 +1,7 @@
 import { HttpError } from '../lib/http.js';
 import { fetchJson } from '../lib/media.js';
 import { cropToolError, asCropHttpError, recoverableCropToolError } from './crop-errors.js';
-import { scanControlTags } from '../proxy/protocol-sanitizer.js';
+import { controlTagName, scanControlTags } from '../proxy/protocol-sanitizer.js';
 
 const CROP_TOOL = Object.freeze({
   type: 'function',
@@ -151,13 +151,19 @@ function repairVisionEvidenceContract(content) {
   };
 }
 
-function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence' } = {}) {
+function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence', controlTagCount = 0 } = {}) {
   const text = String(content || '').trim();
   if (toolCallCount > 0) {
     return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, visualDetail: null, contractValid: true };
   }
   if (!text) {
     return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, visualDetail: null, contractValid: false };
+  }
+  if (controlTagCount > 0) {
+    const contract = outputContract === 'evidence'
+      ? parseVisionEvidenceContract(text)
+      : { visualStatus: null, visualDetail: null, contractValid: false };
+    return { ...contract, quality: 'weak', reasons: ['control_tag_leak'], cacheable: false };
   }
   if (outputContract === 'raw') {
     return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, visualDetail: null, contractValid: true };
@@ -398,19 +404,28 @@ export async function analyzeVisualAssets(assets, {
       });
     }
     const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
-    const repair = outputContract === 'evidence' && calls.length === 0
+    const evidenceControlTags = scanControlTags(sanitized.content || '');
+    const evidenceControlTagNames = [...new Set(evidenceControlTags.map(controlTagName))];
+    if (evidenceControlTags.length > 0) {
+      await onDiagnostic('visual_evidence_control_tag_leak', {
+        tagCount: evidenceControlTags.length,
+        tags: evidenceControlTagNames,
+      });
+    }
+    const repair = outputContract === 'evidence' && calls.length === 0 && evidenceControlTags.length === 0
       ? repairVisionEvidenceContract(sanitized.content)
       : { content: sanitized.content, repaired: false, reason: '' };
     const visibleContent = repair.content;
     if (repair.repaired) {
       await onDiagnostic('vision_contract_repaired', { reason: repair.reason, visual_status: 'content' });
     }
-    const quality = classifyVisionOutputQuality(visibleContent, { toolCallCount: calls.length, outputContract });
+    const quality = classifyVisionOutputQuality(visibleContent, { toolCallCount: calls.length, outputContract, controlTagCount: evidenceControlTags.length });
     await onDiagnostic('vision_output_observed', {
       content_chars: visibleContent.length,
       thinking_chars: typeof message?.thinking === 'string' ? message.thinking.length : 0,
       tool_call_count: calls.length,
       control_tag_count: controlTags.length,
+      evidence_control_tag_count: evidenceControlTags.length,
       usable_content: quality.quality === 'good',
       output_contract: outputContract,
       visual_status: quality.visualStatus,
@@ -436,6 +451,7 @@ export async function analyzeVisualAssets(assets, {
           needsZoom: false,
           visualStatus: quality.visualStatus,
           visualDetail: quality.visualDetail,
+          cacheable: true,
         };
       }
       if (quality.quality === 'needs_zoom') {
@@ -458,6 +474,7 @@ export async function analyzeVisualAssets(assets, {
             needsZoom: true,
             visualStatus: quality.visualStatus,
             visualDetail: quality.visualDetail,
+            cacheable: false,
           };
         }
         if (toolsEnabled && qualityRecoveryRetries < 1) {

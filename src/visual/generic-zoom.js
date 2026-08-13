@@ -70,26 +70,46 @@ export async function analyzeGenericZoomFallback(rootAsset, {
       const result = await analyzeTile(asset, tile);
       cropCount += Number(result?.cropCount || 0);
       warnings.push(...(result?.warnings || []));
-      regions.push({ tile, sourceId: asset.sourceId, markdown: String(result?.markdown || ''), unresolved: Boolean(result?.needsZoom) });
+      regions.push({ tile, sourceId: asset.sourceId, markdown: String(result?.markdown || ''), status: result?.needsZoom ? 'unresolved' : 'resolved' });
     } catch (error) {
       if (!isRecoverable(error)) throw error;
       warnings.push(`image_zoom_tile_unavailable:${tile.index}`);
-      regions.push({ tile, sourceId: '', markdown: `VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: zoom tile ${tile.index} unavailable (${String(error?.code || 'vision_service_error')}).`, unresolved: true });
+      regions.push({ tile, sourceId: '', markdown: `VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: zoom tile ${tile.index} unavailable (${String(error?.code || 'vision_service_error')}).`, status: 'failed' });
       await onProgress(`放大區塊 ${tile.index}/${tiles.length} 分析失敗，已略過並繼續…`, {
         phase: 'image_zoom_tile_failed', tile: tile.index, completed: tile.index, total: tiles.length, error_code: error?.code || 'vision_service_error',
       });
     }
   }
 
+  const resolvedCount = regions.filter((region) => region.status === 'resolved').length;
+  const unresolvedCount = regions.filter((region) => region.status === 'unresolved').length;
+  const failedCount = regions.filter((region) => region.status === 'failed').length;
+  const cacheable = unresolvedCount === 0 && failedCount === 0;
+  const terminalStatus = cacheable ? 'resolved' : (resolvedCount > 0 ? 'partial' : 'unreadable');
+  if (unresolvedCount > 0) warnings.push(`vision_generic_zoom_unresolved:${unresolvedCount}`);
+  if (failedCount > 0) warnings.push(`vision_generic_zoom_failed:${failedCount}`);
+
   const markdown = [
     '# Generic zoom evidence',
     `overlap: ${Math.round(overlap * 100)}%`,
-    ...regions.flatMap(({ tile, sourceId, markdown: region, unresolved }) => [
+    `terminal_status: ${terminalStatus}`,
+    `resolved: ${resolvedCount}/${tiles.length}; unresolved: ${unresolvedCount}; failed: ${failedCount}`,
+    ...regions.flatMap(({ tile, sourceId, markdown: region, status }) => [
       '',
-      `## Tile ${tile.index}/${tiles.length} bbox=${JSON.stringify(tile.bbox)}${sourceId ? ` source_id=${sourceId}` : ''}${unresolved ? ' unresolved=true' : ''}`,
+      `## Tile ${tile.index}/${tiles.length} bbox=${JSON.stringify(tile.bbox)}${sourceId ? ` source_id=${sourceId}` : ''}${status === 'unresolved' ? ' unresolved=true' : ''}${status === 'failed' ? ' failed=true' : ''}`,
       region,
     ]),
   ].join('\n');
 
-  return { markdown, warnings, cropCount, tileCount: tiles.length };
+  return {
+    markdown,
+    warnings,
+    cropCount,
+    tileCount: tiles.length,
+    resolvedCount,
+    unresolvedCount,
+    failedCount,
+    cacheable,
+    terminalStatus,
+  };
 }

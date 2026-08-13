@@ -1,3 +1,12 @@
+## 0.29.6 - 2026-08-13
+
+- Made deterministic generic zoom a terminal recovery layer: child tiles no longer return actionable whole-tile `NEEDS_ZOOM` through the generic fallback path.
+- Added generic zoom resolution accounting (`resolved_count`, `unresolved_count`, `failed_count`, `terminal_status`) and safe `vision_zoom_summary` diagnostics.
+- Fixed composite Media Cache correctness: partial/unresolved/failed zoom evidence emits `media_cache_skip` and is not persisted.
+- Bounded generic zoom tile Vision requests to `min(VLLM_VISION_TIMEOUT_MS, 30000)` without adding ENV settings.
+- Reject literal Vision control-protocol leakage (`tool_call`, `function_result`, `arg_key`, `arg_value`, etc.) from evidence with one strict recovery attempt.
+- Advanced cache generations to `visual-v16` / `evidence-v12`; media pipeline remains `media-v8`.
+
 # Changelog
 
 ## 0.29.5 - 2026-08-12

@@ -1,8 +1,30 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
+
+
+## V0.29.6 Generic Zoom Terminal Convergence
+
+V0.29.6 keeps the V0.29.5 `VISUAL_STATUS + VISUAL_DETAIL` detection contract unchanged, but makes generic-image zoom a bounded terminal recovery layer. The deterministic generic fallback still uses the existing 15% overlap and at most 6 automatic tiles; each zoom tile now runs with `allowNeedsZoomFallback=false`. A tile may use one precise `request_image_crop` when a smaller region can resolve the missing detail, but it must otherwise finish as readable evidence or `UNREADABLE` instead of returning another actionable whole-tile `NEEDS_ZOOM` state.
+
+Every generic zoom pass now produces a resolution summary:
+
+```text
+terminal_status: resolved | partial | unreadable
+resolved: N/T; unresolved: N; failed: N
+```
+
+`resolved` means every deterministic tile completed terminal evidence. `partial` means at least one tile resolved but one or more tiles remained unresolved or failed. `unreadable` means no tile resolved. The Proxy also emits the safe `vision_zoom_summary` diagnostic with `tile_count`, `resolved_count`, `unresolved_count`, `failed_count`, `terminal_status`, and `cacheable`.
+
+Composite Media Cache writes now respect producer cacheability. Any generic zoom result with unresolved or failed tiles is returned to the current request as partial evidence but is **not** persisted; the cache lifecycle emits `media_cache_skip` with reason `non_cacheable_terminal_evidence`. Only fully resolved terminal composite evidence may be cached. This prevents a later Claude Code turn from reusing an incomplete zoom result containing timeout gaps or unresolved tiles.
+
+Generic zoom tile calls also use an internal **30-second** upper bound: `min(VLLM_VISION_TIMEOUT_MS, 30000)`. The root Vision request keeps the configured Vision timeout. This avoids the 120-second pathological stall observed in v0.29.5 from multiplying across several best-effort zoom tiles, while adding no new ENV variable.
+
+Literal visual control-protocol markup is no longer accepted as evidence. After native/inline `<think>` removal, remaining tags such as `<tool_call>`, `<function_result>`, `<arg_key>`, and `<arg_value>` produce `quality=weak`, reason `control_tag_leak`, and `cacheable=false`. The Vision worker receives one existing strict recovery attempt; persistent leakage ends as `vision_output_invalid` and, for a generic tile, becomes a failed terminal tile rather than entering Base-model evidence.
+
+Because terminal zoom semantics and cache eligibility changed, cache generations advance to `visual-v16` and `evidence-v12`; the media pipeline remains `media-v8`. No new required ENV variable is added.
 
 ## V0.29.5 Visual Detail Contract
 
