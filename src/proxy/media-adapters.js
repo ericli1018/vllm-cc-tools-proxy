@@ -53,8 +53,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
     buffer,
     mediaType,
     pipelineVersion: config.cache?.pipelineVersion || 'media-v8',
-    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v16',
-    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v12',
+    visualPromptVersion: config.cache?.visualPromptVersion || 'visual-v17',
+    evidenceContractVersion: config.cache?.evidenceContractVersion || 'evidence-v13',
     visionModel: config.vllmVisionModel || '',
     visionProvider: config.vllmVisionProvider || 'vllm',
     visionApiProtocol: config.vllmVisionApiProtocol || 'openai-chat',
@@ -162,7 +162,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           limits: config.limits, signal: analysisSignal, onProgress: reportProgress, pageScope,
           documentMapPageThreshold: config.limits?.documentMapPageThreshold ?? 20,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
-          vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink,
+          vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink, vllmVisionTimeoutMs: config.vllmVisionTimeoutMs,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
         });
         const bounded = boundedText(result.markdown || '', maxOutputChars);
@@ -281,8 +281,9 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
               baseUrl: config.vllmVisionUrl, model: config.vllmVisionModel, apiKey: config.vllmVisionApiKey,
               provider: config.vllmVisionProvider, think: config.vllmVisionThink,
               registry, signal: analysisSignal, onProgress: reportProgress, allowNeedsZoomFallback: false,
+              recoveryContext: 'zoom_tile',
               timeoutMs: Math.min(config.vllmVisionTimeoutMs ?? 120000, 30000),
-              prompt: `Analyze generic zoom tile ${tile.index}. This is the terminal deterministic zoom layer and overlaps adjacent tiles by 15 percent. Extract only directly visible text, labels, components, arrows, nets, table cells and relationships. Repeated content near boundaries is a continuity anchor. If one precise smaller region remains necessary, use request_image_crop. If the required detail still cannot be resolved, return UNREADABLE without guessing. Do not return NEEDS_ZOOM as a final tile state. Do not answer the final user task.`,
+              prompt: `Analyze generic zoom tile ${tile.index}. This is the terminal deterministic zoom layer and overlaps adjacent tiles by 15 percent. Adapt to the visible content type. Extract directly visible text, labels, objects, controls, table cells, chart axes or values, diagram nodes or arrows, technical identifiers or connections, states and spatial relationships relevant to the original visual task. Repeated content near boundaries is a continuity anchor. If one precise smaller region remains necessary, use request_image_crop. If some details remain unresolved, preserve reliable partial evidence and uncertainty instead of guessing. Do not request another generic zoom. Do not answer the final user task.`,
               cropImage: (original, authorization, callOptions) => cropImage(original, authorization, { ...config.limits, ...callOptions }),
             }),
           });
@@ -290,6 +291,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             tile_count: zoom.tileCount,
             resolved_count: zoom.resolvedCount,
             unresolved_count: zoom.unresolvedCount,
+            partial_count: zoom.partialCount,
             failed_count: zoom.failedCount,
             terminal_status: zoom.terminalStatus,
             cacheable: zoom.cacheable,

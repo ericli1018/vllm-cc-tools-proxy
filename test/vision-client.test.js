@@ -196,7 +196,7 @@ test('V0.29.6 persistent literal Vision control tags are rejected instead of ent
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_output_invalid' && error?.details?.reasons?.includes('control_tag_leak'));
-  assert.equal(requests.length, 2, 'control-tag leak gets one strict recovery attempt');
+  assert.equal(requests.length, 4, 'persistent control-tag leak gets the original request plus three recovery attempts');
   assert.match(requests[0].messages[0].content, /Return Markdown only/i);
   assert.ok(diagnostics.some((entry) => entry.event === 'visual_control_tags_detected'
     && entry.details.tags.includes('function_result')
@@ -387,7 +387,7 @@ test('V0.2.28.2 rejects persistent empty Vision output instead of returning cach
     baseUrl: 'http://vision.local', model: 'glm-4.6v-flash', provider: 'ollama', think: false, registry,
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_empty_output');
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
 });
 
 test('V0.29.1 retries weak short Vision evidence without changing configured thinking mode and accepts recovered evidence', async (t) => {
@@ -449,10 +449,9 @@ test('V0.29.1 rejects persistent weak Vision evidence without changing configure
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_output_invalid');
 
-  assert.equal(requests.length, 2);
-  assert.equal(requests[0].think, false);
-  assert.equal(requests[1].think, false);
-  assert.ok(diagnostics.filter((entry) => entry.event === 'vision_output_quality' && entry.details.quality === 'weak').length >= 2);
+  assert.equal(requests.length, 4);
+  assert.ok(requests.every((request) => request.think === false));
+  assert.ok(diagnostics.filter((entry) => entry.event === 'vision_output_quality' && entry.details.quality === 'weak').length >= 4);
 });
 
 test('V0.29.1 quality recovery preserves configured think=false and reports strict retry progress', async (t) => {
@@ -505,7 +504,7 @@ test('V0.29.1 Vision timeout uses explicit deadline and returns vision_service_t
     timeoutMs: 25,
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_service_timeout' && error?.retryable === true);
-  assert.ok(Date.now() - startedAt < 100, 'Vision deadline should abort before the slow fallback rejection');
+  assert.ok(Date.now() - startedAt < 180, 'four bounded Vision attempts should finish well before four slow fallback rejections');
 });
 
 test('V0.2.28.3 accepts concise concrete observable Vision evidence without adaptive retry', async (t) => {
@@ -682,7 +681,7 @@ test('V0.29.2 treats UNREADABLE as explicit weak evidence and CONTENT without ev
     cropImage: async () => { throw new Error('not expected'); },
   }), (error) => error?.code === 'vision_output_invalid');
 
-  assert.equal(requests.length, 2);
+  assert.equal(requests.length, 4);
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
     && entry.details.reasons.includes('visual_status_unreadable')));
   assert.ok(diagnostics.some((entry) => entry.event === 'vision_output_quality'
@@ -891,4 +890,109 @@ test('V0.29.5 CONTENT missing VISUAL_DETAIL is contract-invalid and recovery nev
   const recovery = requests[1].messages.at(-1)?.content || '';
   assert.match(recovery, /VISUAL_DETAIL: SUFFICIENT \| NEEDS_ZOOM/);
   assert.equal(result.visualDetail, 'sufficient');
+});
+
+test('V0.29.7 timeout recovery uses three distinct overlays and can succeed on the fourth request', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    if (requests.length <= 3) {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => resolve(new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'late', tool_calls: [] } }] }), { status: 200, headers: { 'content-type': 'application/json' } })), 80);
+        options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal.reason); }, { once: true });
+      });
+    }
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: COMPLETE\nVISUAL_EVIDENCE:\n- A readable label was recovered.', tool_calls: [] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('same-image-bytes'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry, timeoutMs: 15,
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(requests.length, 4);
+  const overlays = requests.slice(1).map((payload) => payload.messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '');
+  assert.match(overlays[0], /focused|prioritize speed/i);
+  assert.match(overlays[1], /structured|TEXT:|ENTITIES:/i);
+  assert.match(overlays[2], /final recovery|salvage/i);
+  assert.equal(new Set(overlays).size, 3);
+  assert.ok(requests.every((payload) => JSON.stringify(payload).includes(Buffer.from('same-image-bytes').toString('base64'))));
+  assert.equal(result.visualCompleteness, 'complete');
+  assert.equal(result.cacheable, true);
+  assert.equal(diagnostics.filter((entry) => entry.event === 'vision_retry_started').length, 3);
+  assert.deepEqual(diagnostics.filter((entry) => entry.event === 'vision_retry_started').map((entry) => entry.details.prompt_strategy), ['focused_recovery', 'structured_extraction', 'last_chance_salvage']);
+});
+
+test('V0.29.7 persistent timeout exhausts only after original plus three retries', async (t) => {
+  let requests = 0;
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    requests += 1;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => resolve(new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } })), 80);
+      options.signal?.addEventListener('abort', () => { clearTimeout(timer); reject(options.signal.reason); }, { once: true });
+    });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  await assert.rejects(() => analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry, timeoutMs: 12,
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('not expected'); },
+  }), (error) => error?.code === 'vision_service_timeout');
+  assert.equal(requests, 4);
+  const exhausted = diagnostics.find((entry) => entry.event === 'vision_retry_exhausted');
+  assert.equal(exhausted?.details?.attempts, 4);
+  assert.equal(exhausted?.details?.final_reason, 'timeout');
+});
+
+test('V0.29.7 already-zoomed tile retries NEEDS_ZOOM and UNREADABLE then preserves recovered PARTIAL evidence', async (t) => {
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    const contents = [
+      'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: NEEDS_ZOOM\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Some labels are visible.',
+      'VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: Fine details remain difficult.',
+      'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Two labels and one numeric value are directly readable.',
+    ];
+    const content = contents[Math.min(requests.length - 1, contents.length - 1)];
+    return new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content, tool_calls: [] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('zoom-tile'), mediaType: 'image/png', width: 968, height: 572, label: 'zoom tile' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    allowNeedsZoomFallback: false, recoveryContext: 'zoom_tile',
+    prompt: 'Analyze this region according to the original task.',
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(requests.length, 3);
+  const firstRecovery = requests[1].messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '';
+  const secondRecovery = requests[2].messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '';
+  assert.match(firstRecovery, /already.*magnified|already.*enlarged/i);
+  assert.match(firstRecovery, /do not request another generic zoom/i);
+  assert.notEqual(firstRecovery, secondRecovery);
+  assert.equal(result.needsZoom, false);
+  assert.equal(result.visualCompleteness, 'partial');
+  assert.equal(result.cacheable, false);
+  assert.match(result.markdown, /Two labels and one numeric value/);
+});
+
+test('V0.29.7 explicit PARTIAL CONTENT is usable terminal evidence but non-cacheable', async (t) => {
+  globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- A visible heading is readable.\nVISUAL_UNCERTAINTY:\n- Small body text cannot be confirmed.', tool_calls: [] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('image'), mediaType: 'image/png', width: 100, height: 100, label: 'image' });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    cropImage: async () => { throw new Error('not expected'); },
+  });
+  assert.equal(result.visualCompleteness, 'partial');
+  assert.equal(result.cacheable, false);
+  assert.equal(result.needsZoom, false);
 });

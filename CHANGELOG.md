@@ -1,3 +1,14 @@
+## 0.29.7 - 2026-08-13
+
+- Added failure-aware Vision recovery: one original request plus up to three retries using `focused_recovery`, `structured_extraction`, and `last_chance_salvage`.
+- Timeout retries reduce task scope and prioritize short factual extraction instead of repeating the same prompt.
+- Added explicit `zoom_tile` recovery context for generic IMAGE zoom, PDF DIAGRAM/DENSE_PAGE zoom tiles, and PDF SCHEMATIC tiles; retries reuse the already-rendered tile and do not create another generic tiling layer.
+- Bounded PDF visual tile requests to 30 seconds while preserving the configured root/overview Vision timeout.
+- Added backward-compatible `VISUAL_COMPLETENESS: COMPLETE | PARTIAL`; explicit PARTIAL evidence is usable but non-cacheable.
+- Generic zoom summaries now expose partial tile counts and keep any partial/unresolved/failed composite out of Media Cache.
+- Added `vision_retry_started`, `vision_retry_exhausted`, `prompt_strategy`, and `visual_completeness` diagnostics.
+- Advanced cache generations to `visual-v17` / `evidence-v13`; media pipeline remains `media-v8`.
+
 ## 0.29.6 - 2026-08-13
 
 - Made deterministic generic zoom a terminal recovery layer: child tiles no longer return actionable whole-tile `NEEDS_ZOOM` through the generic fallback path.

@@ -252,15 +252,17 @@ test('V0.2.28.4 isolates every schematic tile into one sequential Vision request
   await parsePdf(buffer, {
     limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
     classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'electronic schematic with reference designators and nets' }),
-    analyzeVisualAssets: async (assets) => {
-      calls.push(assets);
+    analyzeVisualAssets: async (assets, options) => {
+      calls.push({ assets, options });
       return { markdown: assets[0].regionKind === 'schematic_tile' ? `Tile evidence ${assets[0].sourceId}` : 'Overview schematic', warnings: [], cropCount: 0 };
     },
   });
-  const tileCalls = calls.filter((assets) => assets[0]?.regionKind === 'schematic_tile');
+  const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'schematic_tile');
   assert.ok(tileCalls.length >= 2);
-  assert.equal(tileCalls.every((assets) => assets.length === 1), true);
-  assert.equal(tileCalls.every((assets) => assets[0].sourceMetadata?.overlap === 0.20), true);
+  assert.equal(tileCalls.every((entry) => entry.assets.length === 1), true);
+  assert.equal(tileCalls.every((entry) => entry.assets[0].sourceMetadata?.overlap === 0.20), true);
+  assert.ok(tileCalls.every((entry) => entry.options.recoveryContext === 'zoom_tile'));
+  assert.ok(tileCalls.every((entry) => entry.options.timeoutMs === 30000));
 });
 
 test('V0.2.28.4 contains an expected schematic tile Vision failure and continues later tiles', async () => {
@@ -498,6 +500,8 @@ test('V0.29.3 DIAGRAM NEEDS_ZOOM falls back to sequential overlapping PDF tiles 
   });
   const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'zoom_tile');
   assert.ok(tileCalls.length >= 2 && tileCalls.length <= 12);
+  assert.ok(tileCalls.every((entry) => entry.options.recoveryContext === 'zoom_tile'), 'PDF zoom tiles must use the shared already-zoomed recovery policy');
+  assert.ok(tileCalls.every((entry) => entry.options.timeoutMs === 30000), 'PDF zoom tiles must use the bounded 30 second child timeout');
   assert.ok(renders.some((args) => args.includes('-x')), 'fallback tiles must render PDF regions from the original page');
   const boxes = tileCalls.map((entry) => entry.assets[0].rootBox);
   const hasOverlap = boxes.some((a, i) => boxes.some((b, j) => i !== j

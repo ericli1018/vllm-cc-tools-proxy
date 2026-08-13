@@ -545,3 +545,34 @@ test('V0.29.6 recoverable zoom tile timeout yields partial evidence and skips Me
   assert.equal(summary?.cacheable, false);
   assert.match(output.text, /terminal_status: partial/i);
 });
+
+test('V0.29.7 one PARTIAL recovered zoom tile makes the composite non-cacheable without requesting another tiling layer', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let cacheWrites = 0;
+  let callCount = 0;
+  const diagnostics = [];
+  const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 20_000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision', vllmVisionApiKey: '', vllmVisionProvider: 'vllm', vllmVisionThink: false,
+    vllmVisionTimeoutMs: 120000,
+  }, undefined, undefined, {
+    mediaCache: { get: async () => null, set: async () => { cacheWrites += 1; return true; } },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    normalizeImage: async () => ({ buffer: png, mediaType: 'image/png', width: 1170, height: 827, originalWidth: 1170, originalHeight: 827 }),
+    cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 640, height: 480 }),
+    analyzeVisualAssets: async (_assets, options) => {
+      callCount += 1;
+      if (callCount === 1) return { markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: NEEDS_ZOOM\nVISUAL_EVIDENCE:\n- Dense mixed content.', warnings: ['vision_needs_zoom'], cropCount: 0, needsZoom: true, cacheable: false };
+      if (callCount === 2) return { markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Some tile evidence was recovered.', warnings: [], cropCount: 0, needsZoom: false, visualCompleteness: 'partial', cacheable: false };
+      return { markdown: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: COMPLETE\nVISUAL_EVIDENCE:\n- Tile resolved.', warnings: [], cropCount: 0, needsZoom: false, visualCompleteness: 'complete', cacheable: true };
+    },
+  });
+  const output = await adapters.adaptImage({
+    type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64'), cache_key: '7'.repeat(64) },
+  });
+  assert.equal(cacheWrites, 0);
+  const summary = diagnostics.find((entry) => entry.event === 'vision_zoom_summary')?.details;
+  assert.equal(summary?.partial_count, 1);
+  assert.equal(summary?.cacheable, false);
+  assert.match(output.text, /partial=true/i);
+});

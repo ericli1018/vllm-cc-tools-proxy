@@ -31,7 +31,10 @@ VISUAL_STATUS: UNREADABLE
 If status is CONTENT, the next required contract line MUST be exactly one of:
 VISUAL_DETAIL: SUFFICIENT
 VISUAL_DETAIL: NEEDS_ZOOM
+Then include:
+VISUAL_COMPLETENESS: COMPLETE | PARTIAL
 Then include the exact line VISUAL_EVIDENCE: followed by one or more Markdown bullet lines beginning with "- " that state concrete visible evidence.
+Use COMPLETE when the returned evidence covers the relevant visible content required by the current visual task. Use PARTIAL when useful reliable evidence is recovered but important visible regions or details remain unresolved. PARTIAL is valid evidence but must not be treated as complete or cacheable.
 Use VISUAL_DETAIL: SUFFICIENT only when the current image scale is sufficient to read the details needed for reliable evidence.
 Use VISUAL_DETAIL: NEEDS_ZOOM when real content is visible but labels, values, relationships, table cells, nets, pins, or other required details are too small or dense to read reliably. Prefer request_image_crop when a precise region can be identified. If no reliable region can be selected, keep CONTENT + NEEDS_ZOOM so the caller can use deterministic overlapping tiles.
 Concise evidence is valid; do not pad the answer to satisfy a length target.
@@ -43,21 +46,66 @@ Do not return file metadata, image dimensions, or access-limit disclaimers as vi
 const SYSTEM_PROMPT = `${BASE_SYSTEM_PROMPT}\n\n${EVIDENCE_OUTPUT_CONTRACT}`;
 const RAW_SYSTEM_PROMPT = BASE_SYSTEM_PROMPT;
 
-const VISION_RECOVERY_PROMPT = `The previous final visual response was empty, unreadable, or violated the required output contract. Inspect the supplied image directly and follow this contract exactly:
-VISUAL_STATUS: CONTENT | BLANK | NEEDS_ZOOM | UNREADABLE
-For CONTENT, immediately include VISUAL_DETAIL: SUFFICIENT | NEEDS_ZOOM, then the exact line VISUAL_EVIDENCE: followed by one or more "- " evidence bullets.
-Never infer or omit VISUAL_DETAIL for CONTENT. Use SUFFICIENT only when the current scale supports reliable detail reading; use NEEDS_ZOOM when visible content exists but required details remain too small or dense.
-For BLANK, do not invent content; the status line alone is valid.
-Legacy VISUAL_STATUS: NEEDS_ZOOM is accepted. Use request_image_crop if a precise region is identifiable; otherwise keep the zoom-needed state and explain why whole-frame scale is insufficient.
-For UNREADABLE, do not guess; you may add VISUAL_REASON:.
-Concise valid evidence is acceptable. Do not discuss image access limitations, file metadata, resolution, or inability to view the image. Use request_image_crop only if a precise region is genuinely required.`;
+const MAX_VISION_RECOVERY_RETRIES = 3;
+const RECOVERY_STRATEGIES = Object.freeze(['focused_recovery', 'structured_extraction', 'last_chance_salvage']);
 
-const RAW_RECOVERY_PROMPT = 'The previous response was empty or invalid. Inspect the supplied image directly and follow the requested output format exactly. Do not add unrelated commentary.';
+const CONTENT_ADAPTIVE_EXTRACTION = `Adapt extraction to the content actually visible. Do not assume the media type.
+- document/text: readable text, headings, labels, numbers and key statements
+- table/form: headers, row/column relationships and readable cell values
+- chart/plot: axes, legends, labels, values, trends and annotations
+- diagram/flowchart: nodes, labels, arrows and explicit relationships
+- technical drawing/schematic: identifiers, labels, values, pins, nets and explicit connections
+- UI/screenshot: visible controls, labels, messages, values and state
+- photo/scene/object: visible objects, text, state, actions and spatial relationships
+- mixed/unknown: only facts that are directly visible.`;
+
+function recoveryPromptFor({ reason, retryIndex, outputContract, recoveryContext }) {
+  const strategy = RECOVERY_STRATEGIES[Math.max(0, Math.min(RECOVERY_STRATEGIES.length - 1, retryIndex - 1))];
+  if (outputContract === 'raw') {
+    const rawPrefix = retryIndex === 1
+      ? 'FOCUSED RECOVERY PASS. Continue the ORIGINAL visual task and prioritize a short direct answer.'
+      : retryIndex === 2
+        ? 'STRUCTURED RECOVERY PASS. Extract only the minimum visible facts needed to satisfy the ORIGINAL requested raw output format.'
+        : 'FINAL RECOVERY PASS. Salvage the smallest reliable answer that still follows the ORIGINAL requested raw output format exactly.';
+    const reasonText = reason === 'timeout'
+      ? 'The previous request timed out. Prioritize speed over completeness and avoid long reasoning.'
+      : 'The previous response was invalid or unusable. Do not add unrelated commentary.';
+    return { strategy, prompt: `${rawPrefix}\n${reasonText}\nDo not change the original output schema or invent unreadable content.` };
+  }
+
+  const reasonText = reason === 'timeout'
+    ? `The previous request timed out. Prioritize speed over completeness. Do not reason about the entire image. Prefer short factual bullets and ignore details that cannot be read reliably.`
+    : reason === 'zoom_unresolved'
+      ? `This is already a magnified or enlarged visual region. Do not request another generic zoom. Do not reject the entire region merely because some details remain small. Recover all reliable evidence already visible. If one precise smaller area is essential and can be identified accurately, request only that precise crop. Otherwise return partial reliable evidence and mark the remaining uncertainty.`
+      : `The previous response was empty, malformed, unreadable, contaminated by control tags, or otherwise unusable. Recover directly visible evidence without inventing content.`;
+
+  const contract = `Use exactly one final status: VISUAL_STATUS: CONTENT | BLANK | NEEDS_ZOOM | UNREADABLE. For CONTENT use exactly: VISUAL_STATUS: CONTENT, then VISUAL_DETAIL: SUFFICIENT | NEEDS_ZOOM, then VISUAL_COMPLETENESS: COMPLETE | PARTIAL, then VISUAL_EVIDENCE: with one or more \"- \" bullets. BLANK is valid and must not invent content. For UNREADABLE do not guess. Do not emit XML/HTML/tool-call wrappers.`;
+
+  if (retryIndex === 1) {
+    return {
+      strategy,
+      prompt: `FOCUSED RECOVERY PASS. Continue serving the ORIGINAL visual-analysis task. Do not try to completely interpret the whole image before returning useful evidence.\n${reasonText}\n${CONTENT_ADAPTIVE_EXTRACTION}\nReturn the most relevant directly visible evidence.\n${contract}`,
+    };
+  }
+  if (retryIndex === 2) {
+    return {
+      strategy,
+      prompt: `STRUCTURED EXTRACTION RECOVERY. Do not attempt a complete interpretation. Extract only categories that actually exist in the image:\nTEXT: readable words, labels and numbers\nENTITIES: visible objects, components, controls, blocks, symbols or items\nVALUES: readable quantities, measurements, dates, identifiers or other values\nRELATIONSHIPS: explicit arrows, connections, containment, sequence, alignment or spatial relationships\nSTATE: visible status, warning, selection, condition or configuration\nUNCERTAINTY: important areas that cannot be read reliably\n${reasonText}\nA partial but reliable extraction is preferable to rejecting the whole image.\n${contract}`,
+    };
+  }
+  return {
+    strategy,
+    prompt: `FINAL RECOVERY PASS. Salvage reliable evidence; do not attempt a complete analysis and do not produce a long explanation. Return every directly visible fact you can read with confidence, even if only a small amount is recoverable. Acceptable evidence includes readable text, labels, numbers, identifiers, objects, symbols, visible states, explicit connections, arrows, table cells, chart values and spatial relationships. Omit or mark uncertain anything that cannot be confirmed.\n${reasonText}\nThe goal is to salvage reliable evidence, not to fully solve the image. Keep the evidence concise.\n${contract}`,
+  };
+}
+
 
 const VISUAL_STATUS_LINE_PATTERN = /^VISUAL_STATUS:\s*(CONTENT|BLANK|NEEDS_ZOOM|UNREADABLE)\s*$/i;
 const VISUAL_STATUS_PREFIX_PATTERN = /^VISUAL_STATUS:/i;
 const VISUAL_DETAIL_LINE_PATTERN = /^VISUAL_DETAIL:\s*(SUFFICIENT|NEEDS_ZOOM)\s*$/i;
 const VISUAL_DETAIL_PREFIX_PATTERN = /^VISUAL_DETAIL:/i;
+const VISUAL_COMPLETENESS_LINE_PATTERN = /^VISUAL_COMPLETENESS:\s*(COMPLETE|PARTIAL)\s*$/i;
+const VISUAL_COMPLETENESS_PREFIX_PATTERN = /^VISUAL_COMPLETENESS:/i;
 const VISUAL_EVIDENCE_LINE_PATTERN = /^VISUAL_EVIDENCE:\s*$/i;
 const EVIDENCE_BULLET_PATTERN = /^\s*-\s+\S/;
 
@@ -65,7 +113,7 @@ function parseVisionEvidenceContract(content) {
   const text = String(content || '').trim();
   const lines = text.split(/\r?\n/);
   const firstIndex = lines.findIndex((line) => line.trim().length > 0);
-  if (firstIndex < 0) return { visualStatus: null, visualDetail: null, contractValid: false, reasons: ['empty'] };
+  if (firstIndex < 0) return { visualStatus: null, visualDetail: null, visualCompleteness: null, contractValid: false, reasons: ['empty'] };
 
   const firstLine = lines[firstIndex].trim();
   const statusMatch = firstLine.match(VISUAL_STATUS_LINE_PATTERN);
@@ -73,42 +121,53 @@ function parseVisionEvidenceContract(content) {
     return {
       visualStatus: null,
       visualDetail: null,
+      visualCompleteness: null,
       contractValid: false,
       reasons: [VISUAL_STATUS_PREFIX_PATTERN.test(firstLine) ? 'visual_status_invalid' : 'visual_status_missing'],
     };
   }
 
   const visualStatus = statusMatch[1].toLowerCase();
-  if (visualStatus === 'blank') return { visualStatus, visualDetail: null, contractValid: true, reasons: [] };
+  if (visualStatus === 'blank') return { visualStatus, visualDetail: null, visualCompleteness: null, contractValid: true, reasons: [] };
   if (visualStatus === 'needs_zoom') {
-    return { visualStatus, visualDetail: 'needs_zoom', contractValid: true, reasons: ['visual_status_needs_zoom'] };
+    return { visualStatus, visualDetail: 'needs_zoom', visualCompleteness: 'partial', contractValid: true, reasons: ['visual_status_needs_zoom'] };
   }
   if (visualStatus === 'unreadable') {
-    return { visualStatus, visualDetail: null, contractValid: true, reasons: ['visual_status_unreadable'] };
+    return { visualStatus, visualDetail: null, visualCompleteness: 'partial', contractValid: true, reasons: ['visual_status_unreadable'] };
   }
 
   const detailIndex = lines.findIndex((line, index) => index > firstIndex && VISUAL_DETAIL_PREFIX_PATTERN.test(line.trim()));
   if (detailIndex < 0) {
-    return { visualStatus, visualDetail: null, contractValid: false, reasons: ['visual_detail_missing'] };
+    return { visualStatus, visualDetail: null, visualCompleteness: null, contractValid: false, reasons: ['visual_detail_missing'] };
   }
   const detailMatch = lines[detailIndex].trim().match(VISUAL_DETAIL_LINE_PATTERN);
   if (!detailMatch) {
-    return { visualStatus, visualDetail: null, contractValid: false, reasons: ['visual_detail_invalid'] };
+    return { visualStatus, visualDetail: null, visualCompleteness: null, contractValid: false, reasons: ['visual_detail_invalid'] };
   }
   const visualDetail = detailMatch[1].toLowerCase();
+  const completenessIndex = lines.findIndex((line, index) => index > detailIndex && VISUAL_COMPLETENESS_PREFIX_PATTERN.test(line.trim()));
+  let visualCompleteness = 'complete';
+  if (completenessIndex >= 0) {
+    const completenessMatch = lines[completenessIndex].trim().match(VISUAL_COMPLETENESS_LINE_PATTERN);
+    if (!completenessMatch) {
+      return { visualStatus, visualDetail, visualCompleteness: null, contractValid: false, reasons: ['visual_completeness_invalid'] };
+    }
+    visualCompleteness = completenessMatch[1].toLowerCase();
+  }
 
-  const evidenceMarkerIndex = lines.findIndex((line, index) => index > detailIndex && VISUAL_EVIDENCE_LINE_PATTERN.test(line.trim()));
+  const evidenceAfterIndex = completenessIndex >= 0 ? completenessIndex : detailIndex;
+  const evidenceMarkerIndex = lines.findIndex((line, index) => index > evidenceAfterIndex && VISUAL_EVIDENCE_LINE_PATTERN.test(line.trim()));
   if (evidenceMarkerIndex < 0) {
-    return { visualStatus, visualDetail, contractValid: false, reasons: ['content_evidence_missing'] };
+    return { visualStatus, visualDetail, visualCompleteness, contractValid: false, reasons: ['content_evidence_missing'] };
   }
   const hasEvidenceBullet = lines.slice(evidenceMarkerIndex + 1).some((line) => EVIDENCE_BULLET_PATTERN.test(line));
   if (!hasEvidenceBullet) {
-    return { visualStatus, visualDetail, contractValid: false, reasons: ['content_evidence_missing'] };
+    return { visualStatus, visualDetail, visualCompleteness, contractValid: false, reasons: ['content_evidence_missing'] };
   }
   if (visualDetail === 'needs_zoom') {
-    return { visualStatus, visualDetail, contractValid: true, reasons: ['visual_detail_needs_zoom'] };
+    return { visualStatus, visualDetail, visualCompleteness: 'partial', contractValid: true, reasons: ['visual_detail_needs_zoom'] };
   }
-  return { visualStatus, visualDetail, contractValid: true, reasons: [] };
+  return { visualStatus, visualDetail, visualCompleteness, contractValid: true, reasons: [] };
 }
 
 function repairVisionEvidenceContract(content) {
@@ -135,6 +194,7 @@ function repairVisionEvidenceContract(content) {
     .filter((line) => line
       && !VISUAL_DETAIL_PREFIX_PATTERN.test(line)
       && !VISUAL_EVIDENCE_LINE_PATTERN.test(line)
+      && !VISUAL_COMPLETENESS_PREFIX_PATTERN.test(line)
       && !/^VISUAL_REASON:/i.test(line));
   if (body.length === 0) return { content: text, repaired: false, reason: '' };
   const bullets = body.map((line) => EVIDENCE_BULLET_PATTERN.test(line) ? line : `- ${line.replace(/^#+\s*/, '')}`);
@@ -142,6 +202,7 @@ function repairVisionEvidenceContract(content) {
     content: [
       'VISUAL_STATUS: CONTENT',
       lines[detailIndex].trim(),
+      ...(lines.find((line, index) => index > detailIndex && VISUAL_COMPLETENESS_LINE_PATTERN.test(line.trim())) ? [lines.find((line, index) => index > detailIndex && VISUAL_COMPLETENESS_LINE_PATTERN.test(line.trim())).trim()] : []),
       'VISUAL_EVIDENCE:',
       ...bullets,
       ...reasonLines,
@@ -154,19 +215,19 @@ function repairVisionEvidenceContract(content) {
 function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContract = 'evidence', controlTagCount = 0 } = {}) {
   const text = String(content || '').trim();
   if (toolCallCount > 0) {
-    return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, visualDetail: null, contractValid: true };
+    return { quality: 'tool_call', reasons: [], cacheable: false, visualStatus: null, visualDetail: null, visualCompleteness: null, contractValid: true };
   }
   if (!text) {
-    return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, visualDetail: null, contractValid: false };
+    return { quality: 'empty', reasons: ['empty'], cacheable: false, visualStatus: null, visualDetail: null, visualCompleteness: null, contractValid: false };
   }
   if (controlTagCount > 0) {
     const contract = outputContract === 'evidence'
       ? parseVisionEvidenceContract(text)
-      : { visualStatus: null, visualDetail: null, contractValid: false };
+      : { visualStatus: null, visualDetail: null, visualCompleteness: null, contractValid: false };
     return { ...contract, quality: 'weak', reasons: ['control_tag_leak'], cacheable: false };
   }
   if (outputContract === 'raw') {
-    return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, visualDetail: null, contractValid: true };
+    return { quality: 'good', reasons: [], cacheable: true, visualStatus: null, visualDetail: null, visualCompleteness: null, contractValid: true };
   }
 
   const contract = parseVisionEvidenceContract(text);
@@ -174,7 +235,7 @@ function classifyVisionOutputQuality(content, { toolCallCount = 0, outputContrac
     return { quality: 'good', reasons: [], cacheable: true, ...contract };
   }
   if (contract.visualStatus === 'content' && contract.visualDetail === 'sufficient' && contract.contractValid) {
-    return { quality: 'good', reasons: [], cacheable: true, ...contract };
+    return { quality: 'good', reasons: [], cacheable: contract.visualCompleteness !== 'partial', ...contract };
   }
   if (contract.contractValid && (
     contract.visualStatus === 'needs_zoom'
@@ -325,6 +386,7 @@ export async function analyzeVisualAssets(assets, {
   maxCropRounds = 3,
   allowCrops = true,
   allowNeedsZoomFallback = false,
+  recoveryContext = 'default',
   outputContract = 'evidence',
   timeoutMs = 120000,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
@@ -342,6 +404,57 @@ export async function analyzeVisualAssets(assets, {
   let qualityRecoveryRetries = 0;
   let currentThink = Boolean(think);
   const transmittedAssets = [...assets];
+
+  const scheduleRecovery = async (reason, { quality = null } = {}) => {
+    if (qualityRecoveryRetries >= MAX_VISION_RECOVERY_RETRIES) {
+      await onDiagnostic('vision_retry_exhausted', {
+        attempts: 1 + qualityRecoveryRetries,
+        max_retries: MAX_VISION_RECOVERY_RETRIES,
+        final_reason: reason,
+        recovery_context: recoveryContext,
+      });
+      return false;
+    }
+    qualityRecoveryRetries += 1;
+    const recovery = recoveryPromptFor({ reason, retryIndex: qualityRecoveryRetries, outputContract, recoveryContext });
+    await onDiagnostic('vision_retry_started', {
+      attempt: qualityRecoveryRetries,
+      max_retries: MAX_VISION_RECOVERY_RETRIES,
+      reason,
+      prompt_strategy: recovery.strategy,
+      recovery_context: recoveryContext,
+    });
+    if (quality) {
+      if (quality.quality === 'empty') {
+        await onDiagnostic('vision_empty_output_retry', {
+          attempt: qualityRecoveryRetries,
+          max_retries: MAX_VISION_RECOVERY_RETRIES,
+          tool_call_count: 0,
+        });
+      }
+      await onDiagnostic('vision_quality_retry', {
+        attempt: qualityRecoveryRetries,
+        max_retries: MAX_VISION_RECOVERY_RETRIES,
+        quality: quality.quality,
+        reasons: quality.reasons,
+        from_think: currentThink,
+        to_think: currentThink,
+        strict: true,
+        prompt_strategy: recovery.strategy,
+      });
+    }
+    await onProgress(reason === 'timeout'
+      ? '圖片分析逾時，正在以縮小任務範圍的提示重試…'
+      : '圖片分析內容不足，正在以不同策略重試…', {
+      phase: 'vision_quality_retry',
+      attempt: qualityRecoveryRetries,
+      max_retries: MAX_VISION_RECOVERY_RETRIES,
+      reason,
+      prompt_strategy: recovery.strategy,
+    });
+    messages.push({ role: 'user', content: recovery.prompt });
+    return true;
+  };
 
   while (true) {
     const summary = visionRequestSummary(endpoint, provider, model, transmittedAssets);
@@ -375,6 +488,7 @@ export async function analyzeVisualAssets(assets, {
           transport_phase: 'deadline',
           timeout_ms: requestTimeoutMs,
         });
+        if (await scheduleRecovery('timeout')) continue;
         throw timeoutError;
       }
       await emitEvent(onEvent, 'vision_upstream_response', {
@@ -430,6 +544,7 @@ export async function analyzeVisualAssets(assets, {
       output_contract: outputContract,
       visual_status: quality.visualStatus,
       visual_detail: quality.visualDetail,
+      visual_completeness: quality.visualCompleteness,
       contract_valid: quality.contractValid,
     });
     await onDiagnostic('vision_output_quality', {
@@ -439,6 +554,7 @@ export async function analyzeVisualAssets(assets, {
       output_contract: outputContract,
       visual_status: quality.visualStatus,
       visual_detail: quality.visualDetail,
+      visual_completeness: quality.visualCompleteness,
       contract_valid: quality.contractValid,
     });
 
@@ -451,7 +567,8 @@ export async function analyzeVisualAssets(assets, {
           needsZoom: false,
           visualStatus: quality.visualStatus,
           visualDetail: quality.visualDetail,
-          cacheable: true,
+          visualCompleteness: quality.visualCompleteness,
+          cacheable: quality.cacheable !== false,
         };
       }
       if (quality.quality === 'needs_zoom') {
@@ -474,46 +591,17 @@ export async function analyzeVisualAssets(assets, {
             needsZoom: true,
             visualStatus: quality.visualStatus,
             visualDetail: quality.visualDetail,
+            visualCompleteness: quality.visualCompleteness,
             cacheable: false,
           };
         }
-        if (toolsEnabled && qualityRecoveryRetries < 1) {
-          qualityRecoveryRetries += 1;
-          messages.push({
-            role: 'user',
-            content: 'You declared that the current visual detail NEEDS_ZOOM. If a precise region can resolve the missing detail, call request_image_crop now using normalized 0-1000 coordinates. Otherwise return UNREADABLE without guessing.',
-          });
-          continue;
-        }
+        if (await scheduleRecovery(recoveryContext === 'zoom_tile' ? 'zoom_unresolved' : 'output_invalid', { quality })) continue;
       }
-      if (qualityRecoveryRetries < 1) {
-        qualityRecoveryRetries += 1;
-        const previousThink = currentThink;
-        if (quality.quality === 'empty') {
-          await onDiagnostic('vision_empty_output_retry', {
-            attempt: qualityRecoveryRetries,
-            max_retries: 1,
-            tool_call_count: calls.length,
-          });
-        }
-        await onDiagnostic('vision_quality_retry', {
-          attempt: qualityRecoveryRetries,
-          max_retries: 1,
-          quality: quality.quality,
-          reasons: quality.reasons,
-          from_think: previousThink,
-          to_think: currentThink,
-          strict: true,
-        });
-        await onProgress('圖片分析內容不足，正在以嚴格提示重試…', {
-          phase: 'vision_quality_retry',
-          attempt: qualityRecoveryRetries,
-          max_retries: 1,
-          reason: quality.reasons[0] || quality.quality,
-        });
-        messages.push({ role: 'user', content: outputContract === 'raw' ? RAW_RECOVERY_PROMPT : VISION_RECOVERY_PROMPT });
-        continue;
-      }
+      const recoveryReason = recoveryContext === 'zoom_tile'
+        && (quality.quality === 'needs_zoom' || quality.visualStatus === 'unreadable')
+        ? 'zoom_unresolved'
+        : (quality.reasons?.[0] || 'output_invalid');
+      if (await scheduleRecovery(recoveryReason, { quality })) continue;
       if (quality.quality === 'empty') {
         throw new HttpError(502, 'Visual service returned no usable visible content.', {
           code: 'vision_empty_output',

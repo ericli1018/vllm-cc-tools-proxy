@@ -367,3 +367,15 @@ test('README documents V0.29.6 terminal generic zoom and cache correctness', () 
   assert.match(readme, /visual-v16/);
   assert.match(readme, /evidence-v12/);
 });
+
+
+test('README documents V0.29.7 failure-aware Vision recovery', () => {
+  assert.match(readme, /V0\.29\.7.*Failure-Aware|Failure-Aware.*V0\.29\.7/is);
+  assert.match(readme, /original.*3 retr|1.*original.*3.*retr/is);
+  assert.match(readme, /focused_recovery/i);
+  assert.match(readme, /structured_extraction/i);
+  assert.match(readme, /last_chance_salvage/i);
+  assert.match(readme, /VISUAL_COMPLETENESS:\s*COMPLETE\s*\|\s*PARTIAL/i);
+  assert.match(readme, /visual-v17/);
+  assert.match(readme, /evidence-v13/);
+});

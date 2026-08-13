@@ -283,7 +283,7 @@ function resolvePdfPagePlan(sourcePageCount, pageScope, maxPdfPages) {
 }
 
 function visionCallOptions({
-  vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
+  vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink, vllmVisionTimeoutMs = 120000,
   registry, signal, onProgress, cropImage, limits, runner,
 }) {
   return {
@@ -292,6 +292,7 @@ function visionCallOptions({
     apiKey: vllmVisionApiKey,
     provider: vllmVisionProvider,
     think: vllmVisionThink,
+    timeoutMs: vllmVisionTimeoutMs,
     registry,
     signal,
     onProgress,
@@ -305,7 +306,7 @@ export async function parsePdf(buffer, options) {
   const {
     limits, onProgress = () => {}, signal, runner = runCommand,
     vllmVisionUrl = '', vllmVisionModel = '', vllmVisionApiKey = '',
-    vllmVisionProvider = 'vllm', vllmVisionThink = false,
+    vllmVisionProvider = 'vllm', vllmVisionThink = false, vllmVisionTimeoutMs = 120000,
     analyzeVisualAssets = defaultAnalyzeVisualAssets, cropImage = defaultCropImage,
     classifyPage = defaultClassifyPdfPage, pageScope = null,
     documentMapPageThreshold = 20,
@@ -438,7 +439,7 @@ export async function parsePdf(buffer, options) {
         phase: 'pdf_zoom_tile', page: entry.page, route, count: tiles.length, overlap: 0.15,
       });
       const commonOptions = visionCallOptions({
-        vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
+        vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink, vllmVisionTimeoutMs,
         registry: analysisRegistry, signal, onProgress, cropImage, limits, runner,
       });
       const regionEvidence = [];
@@ -460,6 +461,8 @@ export async function parsePdf(buffer, options) {
         try {
           const result = await analyzeVisualAssets([asset], {
             ...commonOptions,
+            recoveryContext: 'zoom_tile',
+            timeoutMs: Math.min(vllmVisionTimeoutMs, 30000),
             prompt: `Analyze zoom tile ${tile.index}/${tiles.length} for PDF page ${entry.page} (${route}). Extract only observable text, labels, arrows, table cells, nodes and relationships. This tile overlaps neighboring regions by 15 percent; use repeated labels and structures as continuity anchors. Preserve source_id and uncertainty. If an essential smaller region remains unreadable, use request_image_crop. Do not answer the final user task.`,
           });
           visualBatchCount += 1;
@@ -499,7 +502,7 @@ export async function parsePdf(buffer, options) {
         await onProgress(`正在分析 ${route} 頁面 ${index + 1}/${batches.length}…`, { phase: 'pdf_visual_batch', route, batch: index + 1, batches: batches.length });
         const result = await analyzeVisualAssets(batch.map((entry) => entry.asset), {
           ...visionCallOptions({
-            vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
+            vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink, vllmVisionTimeoutMs,
             registry: analysisRegistry, signal, onProgress, cropImage, limits, runner,
           }),
           allowNeedsZoomFallback: route === 'DIAGRAM' || route === 'DENSE_PAGE',
@@ -534,7 +537,7 @@ export async function parsePdf(buffer, options) {
         },
       });
       const commonOptions = visionCallOptions({
-        vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink,
+        vllmVisionUrl, vllmVisionModel, vllmVisionApiKey, vllmVisionProvider, vllmVisionThink, vllmVisionTimeoutMs,
         registry: analysisRegistry, signal, onProgress, cropImage, limits, runner,
       });
       const overviewResult = await analyzeVisualAssets([root], {
@@ -574,6 +577,8 @@ export async function parsePdf(buffer, options) {
         try {
           const result = await analyzeVisualAssets([entry.asset], {
             ...commonOptions,
+            recoveryContext: 'zoom_tile',
+            timeoutMs: Math.min(vllmVisionTimeoutMs, 30000),
             prompt: `Analyze schematic tile ${entry.tile.index}/${tileEntries.length} for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve source_id. The tile overlaps neighboring regions; do not invent off-tile continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.`,
           });
           visualBatchCount += 1;

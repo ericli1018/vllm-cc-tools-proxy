@@ -1,9 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
+
+
+## V0.29.7 Failure-Aware Vision Recovery
+
+V0.29.7 adds a shared recovery policy for IMAGE analysis and PDF visual workers. A failed visual request gets the original attempt plus at most 3 retries. Recovery stops immediately on success and uses a different prompt strategy on each retry: `focused_recovery`, `structured_extraction`, then `last_chance_salvage`. The original visual task remains in context; the recovery text is an overlay that changes recovery strategy rather than assuming the media is a circuit diagram.
+
+The recovery prompts are content-agnostic. They can salvage visible evidence from ordinary documents, tables/forms, charts/plots, diagrams/flowcharts, technical drawings/schematics, UI/screenshots, photos/scenes/objects, and mixed/unknown images. A timeout recovery explicitly prioritizes speed and short factual extraction. An already enlarged zoom tile is told not to request another generic zoom; it should preserve readable partial evidence and uncertainty, using `request_image_crop` only when one precise smaller region can be identified.
+
+The CONTENT evidence contract now asks the Vision worker to emit `VISUAL_COMPLETENESS: COMPLETE | PARTIAL` after `VISUAL_DETAIL`. The parser remains backward-compatible with older valid CONTENT evidence that omits completeness. Explicit `PARTIAL` evidence is usable but non-cacheable. Generic zoom summaries count partial tiles separately, and any partial/unresolved/failed tile keeps the composite non-cacheable.
+
+PDF `DIAGRAM`/`DENSE_PAGE` zoom tiles and `SCHEMATIC` tiles use the same `zoom_tile` recovery context and a bounded 30-second child timeout. Whole-page/overview analysis retains the configured root Vision timeout. Retries reuse the same rendered tile bytes; they do not re-render or create another generic tiling layer.
+
+Safe diagnostics include `vision_retry_started` with retry reason and `prompt_strategy`, `vision_retry_exhausted` after four total failed requests, and `visual_completeness` on Vision output diagnostics. No prompt body or image bytes are logged. Cache generations advance to `visual-v17` and `evidence-v13`; the media pipeline remains `media-v8`. No new ENV variable is added.
 
 ## V0.29.6 Generic Zoom Terminal Convergence
 

@@ -70,7 +70,8 @@ export async function analyzeGenericZoomFallback(rootAsset, {
       const result = await analyzeTile(asset, tile);
       cropCount += Number(result?.cropCount || 0);
       warnings.push(...(result?.warnings || []));
-      regions.push({ tile, sourceId: asset.sourceId, markdown: String(result?.markdown || ''), status: result?.needsZoom ? 'unresolved' : 'resolved' });
+      const status = result?.needsZoom ? 'unresolved' : (result?.cacheable === false || result?.visualCompleteness === 'partial' ? 'partial' : 'resolved');
+      regions.push({ tile, sourceId: asset.sourceId, markdown: String(result?.markdown || ''), status });
     } catch (error) {
       if (!isRecoverable(error)) throw error;
       warnings.push(`image_zoom_tile_unavailable:${tile.index}`);
@@ -83,20 +84,22 @@ export async function analyzeGenericZoomFallback(rootAsset, {
 
   const resolvedCount = regions.filter((region) => region.status === 'resolved').length;
   const unresolvedCount = regions.filter((region) => region.status === 'unresolved').length;
+  const partialCount = regions.filter((region) => region.status === 'partial').length;
   const failedCount = regions.filter((region) => region.status === 'failed').length;
-  const cacheable = unresolvedCount === 0 && failedCount === 0;
-  const terminalStatus = cacheable ? 'resolved' : (resolvedCount > 0 ? 'partial' : 'unreadable');
+  const cacheable = unresolvedCount === 0 && partialCount === 0 && failedCount === 0;
+  const terminalStatus = cacheable ? 'resolved' : ((resolvedCount + partialCount) > 0 ? 'partial' : 'unreadable');
   if (unresolvedCount > 0) warnings.push(`vision_generic_zoom_unresolved:${unresolvedCount}`);
+  if (partialCount > 0) warnings.push(`vision_generic_zoom_partial:${partialCount}`);
   if (failedCount > 0) warnings.push(`vision_generic_zoom_failed:${failedCount}`);
 
   const markdown = [
     '# Generic zoom evidence',
     `overlap: ${Math.round(overlap * 100)}%`,
     `terminal_status: ${terminalStatus}`,
-    `resolved: ${resolvedCount}/${tiles.length}; unresolved: ${unresolvedCount}; failed: ${failedCount}`,
+    `resolved: ${resolvedCount}/${tiles.length}; partial: ${partialCount}; unresolved: ${unresolvedCount}; failed: ${failedCount}`,
     ...regions.flatMap(({ tile, sourceId, markdown: region, status }) => [
       '',
-      `## Tile ${tile.index}/${tiles.length} bbox=${JSON.stringify(tile.bbox)}${sourceId ? ` source_id=${sourceId}` : ''}${status === 'unresolved' ? ' unresolved=true' : ''}${status === 'failed' ? ' failed=true' : ''}`,
+      `## Tile ${tile.index}/${tiles.length} bbox=${JSON.stringify(tile.bbox)}${sourceId ? ` source_id=${sourceId}` : ''}${status === 'partial' ? ' partial=true' : ''}${status === 'unresolved' ? ' unresolved=true' : ''}${status === 'failed' ? ' failed=true' : ''}`,
       region,
     ]),
   ].join('\n');
@@ -108,6 +111,7 @@ export async function analyzeGenericZoomFallback(rootAsset, {
     tileCount: tiles.length,
     resolvedCount,
     unresolvedCount,
+    partialCount,
     failedCount,
     cacheable,
     terminalStatus,
