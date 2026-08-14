@@ -108,3 +108,100 @@ test('managed detector distinguishes native web tools that require schema normal
     mediaCount: { documents: 0, images: 0 },
   });
 });
+
+test('V0.29.10 forwardTransparent overrides JSON model only for the Base upstream copy', async (t) => {
+  let observedBody;
+  const upstream = http.createServer(async (req, res) => {
+    observedBody = await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+
+  const proxy = http.createServer(async (req, res) => {
+    const rawBody = await read(req);
+    await forwardTransparent(req, res, {
+      vllmBaseUrl: upstreamUrl,
+      vllmBaseModel: 'Laguna-S-2.1-NVFP4',
+      vllmBaseApiKey: '',
+    }, { rawBody });
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const clientBody = { model: 'claude-opus-4-1', messages: [{ role: 'user', content: 'hi' }] };
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(clientBody),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(observedBody.toString()).model, 'Laguna-S-2.1-NVFP4');
+  assert.equal(clientBody.model, 'claude-opus-4-1');
+});
+
+test('V0.29.10 forwardTransparent preserves the client model when VLLM_BASE_MODEL is unset', async (t) => {
+  let observedBody;
+  const upstream = http.createServer(async (req, res) => {
+    observedBody = await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+
+  const proxy = http.createServer(async (req, res) => {
+    const rawBody = await read(req);
+    await forwardTransparent(req, res, {
+      vllmBaseUrl: upstreamUrl,
+      vllmBaseModel: '',
+      vllmBaseApiKey: '',
+    }, { rawBody });
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'client-model', messages: [] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(JSON.parse(observedBody.toString()).model, 'client-model');
+});
+
+test('V0.29.10 forwardTransparent emits safe Base model selection telemetry', async (t) => {
+  const logs = [];
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+
+  const proxy = http.createServer(async (req, res) => {
+    const rawBody = await read(req);
+    await forwardTransparent(req, res, {
+      vllmBaseUrl: upstreamUrl,
+      vllmBaseModel: 'base-model',
+      vllmBaseApiKey: 'secret-not-for-logs',
+      logLevel: 'info',
+      logSink: (entry) => logs.push(entry),
+    }, { rawBody });
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+
+  await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'client-model', messages: [] }),
+  });
+  const selected = logs.find((entry) => entry.event === 'base_model_selected');
+  assert.ok(selected);
+  assert.equal(selected.client_model, 'client-model');
+  assert.equal(selected.upstream_model, 'base-model');
+  assert.equal(selected.source, 'vllm_base_model');
+  assert.doesNotMatch(JSON.stringify(selected), /secret-not-for-logs/);
+});

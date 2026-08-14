@@ -29,7 +29,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_MODEL','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -40,6 +40,7 @@ test('ENV example preserves base, timeout, vision and managed fetch variables', 
   assert.doesNotMatch(envExample, /^MANAGED_MAX_QUEUE=/m);
   assert.doesNotMatch(envExample, /^MANAGED_QUEUE_TIMEOUT_MS=/m);
   assert.match(envExample, /^MEDIA_CACHE_MAX_MB=0$/m);
+  assert.match(envExample, /^VLLM_BASE_MODEL=$/m);
   assert.match(envExample, /^VLLM_BASE_CONNECT_TIMEOUT_MS=10000$/m);
   assert.match(envExample, /^VLLM_BASE_HEADERS_TIMEOUT_MS=900000$/m);
   assert.match(envExample, /^VLLM_BASE_BODY_TIMEOUT_MS=900000$/m);
@@ -51,6 +52,7 @@ test('Compose exposes no Base/Managed Proxy queue settings and keeps only auxili
   assert.doesNotMatch(compose, /MANAGED_MAX_CONCURRENCY:/);
   assert.doesNotMatch(compose, /MANAGED_MAX_QUEUE:/);
   assert.doesNotMatch(compose, /MANAGED_QUEUE_TIMEOUT_MS:/);
+  assert.match(compose, /VLLM_BASE_MODEL:\s*\$\{VLLM_BASE_MODEL:-\}/);
   assert.match(compose, /MANAGED_TASK_TIMEOUT_MS:\s*\$\{MANAGED_TASK_TIMEOUT_MS:-\}/);
   assert.match(compose, /MANAGED_MODEL_ROUND_TIMEOUT_MS:\s*\$\{MANAGED_MODEL_ROUND_TIMEOUT_MS:-360000\}/);
   assert.match(compose, /VISION_MAX_CONCURRENCY:\s*\$\{VISION_MAX_CONCURRENCY:-\}/);
@@ -398,4 +400,13 @@ test('README documents V0.29.9 historical media continuation dedup', () => {
   assert.match(readme, /tool_result/i);
   assert.match(readme, /visual-v18/);
   assert.match(readme, /evidence-v14/);
+});
+
+
+test('README documents V0.29.10 authoritative VLLM_BASE_MODEL routing', () => {
+  assert.match(readme, /V0\.29\.10.*VLLM_BASE_MODEL|VLLM_BASE_MODEL.*V0\.29\.10/is);
+  assert.match(readme, /authoritative/i);
+  assert.match(readme, /client.*model.*upstream.*model|upstream.*model.*client.*model/is);
+  assert.match(readme, /base_model_selected/i);
+  assert.match(readme, /WEB_FETCH_PROCESSOR_MODEL.*VLLM_BASE_MODEL|VLLM_BASE_MODEL.*WEB_FETCH_PROCESSOR_MODEL/is);
 });

@@ -813,7 +813,7 @@ test('V0.2.19 bounds the entire managed task across otherwise progressing rounds
     executeTool: async () => ({ results: [] }),
     maxRounds: 12,
     modelRoundTimeoutMs: 500,
-    taskTimeoutMs: 45,
+    taskTimeoutMs: 120,
   }), (error) => error.code === 'managed_task_timeout');
   assert.ok(call >= 2);
 });

@@ -1,6 +1,28 @@
 import http from 'node:http';
 import https from 'node:https';
 import { HttpError } from '../lib/http.js';
+import { rewriteBaseJsonBody, selectBaseModel } from './base-model.js';
+
+
+function emitBaseModelSelected(config, rawBody, targetPath) {
+  if (!rawBody?.length) return;
+  let parsed;
+  try { parsed = JSON.parse(rawBody.toString('utf8')); } catch { return; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+  const selected = selectBaseModel(parsed.model, config.vllmBaseModel);
+  const ranks = { debug: 10, info: 20, warn: 30, error: 40 };
+  if ((ranks.info || 20) < (ranks[config.logLevel] || 20)) return;
+  const entry = {
+    timestamp: new Date().toISOString(),
+    level: 'info',
+    event: 'base_model_selected',
+    client_model: String(parsed.model || ''),
+    upstream_model: selected.model,
+    source: selected.source,
+    path: targetPath,
+  };
+  if (typeof config.logSink === 'function') config.logSink(entry);
+}
 
 const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -48,7 +70,9 @@ export async function forwardTransparent(req, res, config, { rawBody = Buffer.al
   const target = new URL(buildUpstreamUrl(config.vllmBaseUrl, req.url || '/'));
   const transport = target.protocol === 'https:' ? https : http;
   const headers = filterRequestHeaders(req.headers, config.vllmBaseApiKey);
-  if (rawBody.length > 0) headers['content-length'] = String(rawBody.length);
+  emitBaseModelSelected(config, rawBody, target.pathname);
+  const upstreamBody = rewriteBaseJsonBody(rawBody, config.vllmBaseModel);
+  if (upstreamBody.length > 0) headers['content-length'] = String(upstreamBody.length);
 
   await new Promise((resolve, reject) => {
     let settled = false;
@@ -81,7 +105,7 @@ export async function forwardTransparent(req, res, config, { rawBody = Buffer.al
         code: 'vllm_unavailable', retryable: true, details: error.message,
       }));
     });
-    if (rawBody.length > 0 && req.method !== 'GET' && req.method !== 'HEAD') upstreamReq.write(rawBody);
+    if (upstreamBody.length > 0 && req.method !== 'GET' && req.method !== 'HEAD') upstreamReq.write(upstreamBody);
     upstreamReq.end();
   });
 }

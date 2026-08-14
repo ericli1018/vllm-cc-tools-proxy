@@ -28,7 +28,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.9', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.10', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
@@ -3088,7 +3088,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.9/);
+  assert.match(first, /VERSION\s+0\.29\.10/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3118,10 +3118,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.9');
+  assert.equal(payload.version, '0.29.10');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.9/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.10/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3491,4 +3491,40 @@ test('V0.29.9 continuation media evidence never crosses Claude Code session ids'
   assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'session-a'},body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[image(),{type:'text',text:'seed'}]}]})})).status,200);
   assert.equal((await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'session-b'},body:JSON.stringify({model:'m',stream:false,messages})})).status,200);
   assert.equal(visionCalls,2);
+});
+
+test('V0.29.10 managed Base upstream overrides client model and emits selection diagnostic', async (t) => {
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  let observedModel = '';
+  const logs = [];
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    observedModel = payload.model;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'base-model-test',type:'message',role:'assistant',model:'base-model',content:[{type:'text',text:'done'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllm.url,
+    vllmBaseModel: 'base-model',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'claude-opus-4-1', stream: false,
+      messages: [{ role:'user', content:[{ type:'document', source:{ type:'base64', media_type:'application/pdf', data:pdf.toString('base64') } }] }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal(observedModel, 'base-model');
+  const selected = logs.find((entry) => entry.event === 'base_model_selected');
+  assert.ok(selected);
+  assert.equal(selected.client_model, 'claude-opus-4-1');
+  assert.equal(selected.upstream_model, 'base-model');
+  assert.equal(selected.source, 'vllm_base_model');
 });

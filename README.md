@@ -1,12 +1,31 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
 
 
 
+
+
+## V0.29.10 Authoritative VLLM_BASE_MODEL Routing
+
+V0.29.10 adds optional `VLLM_BASE_MODEL` configuration for deployments where Claude Code sends a client-facing model alias that is different from the model id actually served by the Base vLLM endpoint. When `VLLM_BASE_MODEL` is non-empty, it is authoritative for requests sent to `VLLM_BASE_URL`; when it is blank or unset, V0.29.9 behavior is preserved and the client request model is forwarded unchanged.
+
+The Proxy keeps the client model and upstream model as separate concepts. It does not mutate the original Claude Code request object. Immediately before a request leaves through either the structured Base upstream path or the transparent Base bypass path, the Proxy creates/re-encodes only the upstream copy with `model=VLLM_BASE_MODEL`. This applies to managed model rounds, Base language-repair requests, count-token calls, ordinary Messages bypass, and Context Compact fallback routed back to Base.
+
+WebFetch Processor inheritance follows a strict priority when its URL is derived from `VLLM_BASE_URL`: explicit `WEB_FETCH_PROCESSOR_MODEL` > `VLLM_BASE_MODEL` > current client request model. If `WEB_FETCH_PROCESSOR_URL` is explicitly configured as a separate backend, `VLLM_BASE_MODEL` is not implicitly imposed on that backend. Vision remains independently configured through `VLLM_VISION_MODEL`; V0.29.10 does not make Vision inherit the Base model.
+
+Safe `base_model_selected` diagnostics record only `client_model`, `upstream_model`, `source` (`vllm_base_model` or `client_model`), and the Base path. API keys, prompts, and request contents are not logged by this event. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14` because this release changes routing metadata rather than media/evidence semantics.
+
+Recommended single-Base-model configuration:
+
+```env
+VLLM_BASE_URL=http://192.168.100.10:1234
+VLLM_BASE_MODEL=Laguna-S-2.1-NVFP4
+VLLM_BASE_API_KEY=sk-local
+```
 
 ## V0.29.9 Historical Media Continuation Dedup
 
@@ -1139,7 +1158,7 @@ WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
 WEB_FETCH_PROCESSOR_TIMEOUT_MS=300000
 ```
 
-`WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama` and defaults to `vllm`. A Processor base URL such as `http://192.168.10.169:11434` is normalized to `/v1/chat/completions`; an already complete `/v1/chat/completions` endpoint is preserved. A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
+`WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama` and defaults to `vllm`. A Processor base URL such as `http://192.168.10.169:11434` is normalized to `/v1/chat/completions`; an already complete `/v1/chat/completions` endpoint is preserved. A blank Processor URL derives `/v1/chat/completions` from `VLLM_BASE_URL`. A blank Processor MODEL uses `VLLM_BASE_MODEL` when the Processor URL is derived from Base and that variable is configured; otherwise it uses the current Base request model. `VLLM_BASE_API_KEY` is inherited only when the Processor URL is also derived from Base; an explicitly configured Processor URL requires its own `WEB_FETCH_PROCESSOR_API_KEY` when authentication is needed.
 
 ### Activity-aware managed timeouts
 
@@ -1292,6 +1311,7 @@ It also deletes the persistent media-analysis cache.
 
 ```env
 VLLM_BASE_URL=http://host.docker.internal:8000
+VLLM_BASE_MODEL=
 VLLM_BASE_API_KEY=
 VLLM_BASE_CONNECT_TIMEOUT_MS=10000
 VLLM_BASE_HEADERS_TIMEOUT_MS=900000
@@ -1305,7 +1325,7 @@ VLLM_VISION_THINK=false
 VLLM_VISION_TIMEOUT_MS=120000
 ```
 
-`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. The proxy sends the base key only to this endpoint. The proxy uses explicit upstream timeouts instead of Node.js fetch defaults:
+`VLLM_BASE_URL` points to an Anthropic Messages-compatible vLLM endpoint. Optional `VLLM_BASE_MODEL` is authoritative for the upstream model id when configured; blank preserves the client request model. The proxy sends the base key only to this endpoint. The proxy uses explicit upstream timeouts instead of Node.js fetch defaults:
 
 ```text
 VLLM_BASE_CONNECT_TIMEOUT_MS
@@ -1916,7 +1936,7 @@ WEB_FETCH_PROCESSOR_THINK=false
 - The awesome-web-fetch request uses `{ "urls": [targetUrl] }`. An optional `WEB_FETCH_API_KEY` is sent only to that backend as a Bearer token.
 - Array responses using `page_content` and `metadata` are normalized; the older object response shape remains accepted.
 - Raw page content is deterministically cleaned and protocol-neutralized, then an isolated WebFetch Processor applies the tool's `prompt` through `/v1/chat/completions` with no tools or Claude Code history.
-- `WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama`. A root/base Processor URL automatically receives `/v1/chat/completions`; `/v1` receives `/chat/completions`; an already complete endpoint is unchanged. Blank Processor URL and MODEL inherit the Base vLLM endpoint and current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. For provider `vllm`, `WEB_FETCH_PROCESSOR_THINK` maps to `chat_template_kwargs.enable_thinking`. For provider `ollama`, it maps to OpenAI-compatible `reasoning_effort` (`none` when false, `high` when true). `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`. `WEB_FETCH_PROCESSOR_CONCURRENCY` defaults to 3 and is bounded to 1..3; `WEB_FETCH_PROCESSOR_TIMEOUT_MS` defaults to 300000 ms.
+- `WEB_FETCH_PROCESSOR_PROVIDER` accepts `vllm` or `ollama`. A root/base Processor URL automatically receives `/v1/chat/completions`; `/v1` receives `/chat/completions`; an already complete endpoint is unchanged. Blank Processor URL derives the Base vLLM endpoint; blank MODEL inherits `VLLM_BASE_MODEL` when configured, otherwise the current request model. The API key inherits `VLLM_BASE_API_KEY` only while the Processor URL is also derived from Base; an explicit Processor URL requires `WEB_FETCH_PROCESSOR_API_KEY`. For provider `vllm`, `WEB_FETCH_PROCESSOR_THINK` maps to `chat_template_kwargs.enable_thinking`. For provider `ollama`, it maps to OpenAI-compatible `reasoning_effort` (`none` when false, `high` when true). `WEB_FETCH_PROCESSOR_THINK` is a strict boolean and defaults to `false`. `WEB_FETCH_PROCESSOR_CONCURRENCY` defaults to 3 and is bounded to 1..3; `WEB_FETCH_PROCESSOR_TIMEOUT_MS` defaults to 300000 ms.
 - Successful WebSearch/WebFetch results are readable multiline VCC evidence blocks rather than JSON-stringified objects. One short idempotent System supplement explains the result fields to the Base model.
 - Processor timeout, HTTP failure, invalid response, tool-call output or protocol-tag leakage degrades to a bounded cleaned excerpt; the complete raw page is not forwarded as fallback.
 - HTTP rejection, robots denial and other expected fetch-service failures become correlated `tool_result` blocks with `is_error: true`. The Base model may choose another source instead of terminating the complete Claude Code request.

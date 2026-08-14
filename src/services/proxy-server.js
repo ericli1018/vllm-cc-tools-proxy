@@ -15,6 +15,7 @@ import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
+import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
@@ -87,6 +88,14 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
   onBusyEvent = null,
 } = {}) {
   const retryBusy = path === '/v1/messages';
+  const selectedBaseModel = selectBaseModel(request?.model, config.vllmBaseModel);
+  const upstreamRequest = rewriteBaseRequest(request, config.vllmBaseModel);
+  log(config, 'info', 'base_model_selected', {
+    client_model: String(request?.model || ''),
+    upstream_model: selectedBaseModel.model,
+    source: selectedBaseModel.source,
+    path,
+  });
   const retryIntervalMs = Number.isFinite(Number(config.vllmBusyRetryIntervalMs))
     ? Math.max(1, Number(config.vllmBusyRetryIntervalMs))
     : 15_000;
@@ -102,7 +111,7 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
       response = await requestBaseUpstream(upstreamEndpoint(config.vllmBaseUrl, path), {
         method: 'POST',
         headers: upstreamHeaders(incomingHeaders, config),
-        body: JSON.stringify(request),
+        body: JSON.stringify(upstreamRequest),
         signal,
         onResponseChunk: typeof onResponseChunk === 'function'
           ? (bytes) => { if (forwardChunks) onResponseChunk(bytes); }

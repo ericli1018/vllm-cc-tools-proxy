@@ -1,3 +1,14 @@
+## 0.29.10 - 2026-08-15
+
+- Added optional authoritative `VLLM_BASE_MODEL` routing for the Base vLLM endpoint.
+- When configured, rewrites only the upstream request copy; the Claude Code/client model value remains intact in the Proxy request lifecycle.
+- Applied Base-model selection to both structured and transparent Base exits, covering managed rounds, count_tokens, Base language repair, ordinary bypass, and Context Compact fallback.
+- WebFetch Processor now inherits `VLLM_BASE_MODEL` only when its endpoint is derived from Base and no explicit Processor model is configured.
+- Explicit `WEB_FETCH_PROCESSOR_MODEL` remains highest priority; explicit independent Processor URLs do not implicitly inherit the Base model.
+- Added safe `base_model_selected` diagnostics with client model, upstream model, selection source, and path.
+- Vision remains separately configured through `VLLM_VISION_MODEL`.
+- Kept cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.9 - 2026-08-13
 
 - Added same-session Historical Media Continuation Dedup for Claude Code tool-result continuations.

@@ -417,3 +417,34 @@ test('V0.29.0 enables progressive PDF document maps without adding a new ENV kno
   assert.equal(config.cache.visualPromptVersion, 'visual-v18');
   assert.equal(config.cache.evidenceContractVersion, 'evidence-v14');
 });
+
+test('V0.29.10 VLLM_BASE_MODEL is optional authoritative Base model metadata', () => {
+  const legacy = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(legacy.vllmBaseModel, '');
+  assert.equal(legacy.webFetchProcessor.model, '');
+
+  const configured = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_MODEL: '  Laguna-S-2.1-NVFP4  ',
+  });
+  assert.equal(configured.vllmBaseModel, 'Laguna-S-2.1-NVFP4');
+  assert.equal(configured.webFetchProcessor.model, 'Laguna-S-2.1-NVFP4');
+});
+
+test('V0.29.10 explicit WebFetch Processor model overrides VLLM_BASE_MODEL', () => {
+  const config = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_MODEL: 'base-model',
+    WEB_FETCH_PROCESSOR_MODEL: 'processor-model',
+  });
+  assert.equal(config.webFetchProcessor.model, 'processor-model');
+});
+
+test('V0.29.10 explicit WebFetch Processor URL does not implicitly inherit VLLM_BASE_MODEL', () => {
+  const config = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VLLM_BASE_MODEL: 'base-model',
+    WEB_FETCH_PROCESSOR_URL: 'http://processor:9000/v1/chat/completions',
+  });
+  assert.equal(config.webFetchProcessor.model, '');
+});

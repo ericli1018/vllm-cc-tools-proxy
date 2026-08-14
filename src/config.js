@@ -114,6 +114,7 @@ export function loadConfig(env = process.env) {
 
   const vllmBaseUrl = normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true });
   const vllmBaseApiKey = env.VLLM_BASE_API_KEY || '';
+  const vllmBaseModel = String(env.VLLM_BASE_MODEL || '').trim();
   const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
   const webToolDiagnostic = Object.freeze({
     enabled: booleanValue(env.DIAGNOSTIC_WEB_TOOL_PASSTHROUGH, false, 'DIAGNOSTIC_WEB_TOOL_PASSTHROUGH'),
@@ -131,7 +132,7 @@ export function loadConfig(env = process.env) {
       derivedChatCompletionsUrl(vllmBaseUrl),
       'WEB_FETCH_PROCESSOR_URL',
     ),
-    model: env.WEB_FETCH_PROCESSOR_MODEL || '',
+    model: env.WEB_FETCH_PROCESSOR_MODEL || (hasExplicitWebFetchProcessorUrl ? '' : vllmBaseModel),
     apiKey: env.WEB_FETCH_PROCESSOR_API_KEY || (hasExplicitWebFetchProcessorUrl ? '' : vllmBaseApiKey),
     think: booleanValue(env.WEB_FETCH_PROCESSOR_THINK, false, 'WEB_FETCH_PROCESSOR_THINK'),
     concurrency: intValue(env.WEB_FETCH_PROCESSOR_CONCURRENCY, 3, 'WEB_FETCH_PROCESSOR_CONCURRENCY', { min: 1, max: 3 }),
@@ -222,6 +223,7 @@ export function loadConfig(env = process.env) {
     concurrency,
     cache,
     vllmBaseUrl,
+    vllmBaseModel,
     vllmBaseApiKey,
     vllmBaseTimeouts: Object.freeze({
       connectTimeoutMs: intValue(env.VLLM_BASE_CONNECT_TIMEOUT_MS, 10000, 'VLLM_BASE_CONNECT_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
