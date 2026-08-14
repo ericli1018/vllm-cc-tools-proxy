@@ -176,7 +176,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onBusyEvent = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onBusyEvent = null, onResponseMode = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk, onBusyEvent });
   if (!response.ok) {
     const text = await response.text();
@@ -187,6 +187,19 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
     });
   }
   const contentType = (response.headers.get('content-type') || '').toLowerCase();
+  const configuredResponseMode = ['streaming', 'buffered'].includes(config.vllmBaseResponseMode)
+    ? config.vllmBaseResponseMode
+    : 'auto';
+  const observedResponseMode = contentType.includes('text/event-stream') ? 'streaming' : 'buffered';
+  const effectiveResponseMode = configuredResponseMode === 'auto' ? observedResponseMode : configuredResponseMode;
+  if (typeof onResponseMode === 'function') {
+    await onResponseMode({
+      configuredMode: configuredResponseMode,
+      observedMode: observedResponseMode,
+      effectiveMode: effectiveResponseMode,
+      contentType,
+    });
+  }
   if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
     ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
     ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
@@ -621,6 +634,9 @@ export function createProxyServer(config, dependencies = {}) {
     let initialStreamUsage = usageFromTokenCount({});
     let baseResponseBytes = 0; // raw upstream wire bytes; timeout/stall diagnostics only
     let lastBaseResponseChunkAt = 0;
+    let effectiveBaseResponseMode = ['streaming', 'buffered'].includes(config.vllmBaseResponseMode)
+      ? config.vllmBaseResponseMode
+      : '';
     let modelOutputBytes = 0; // semantic thinking/text/tool JSON payload bytes only
     let lastModelOutputDeltaAt = 0;
     const modelRoundProgress = {
@@ -722,6 +738,16 @@ export function createProxyServer(config, dependencies = {}) {
         });
       }
     };
+    const onBaseResponseMode = async ({ configuredMode = 'auto', observedMode = '', effectiveMode = '', contentType = '' } = {}) => {
+      effectiveBaseResponseMode = ['streaming', 'buffered'].includes(effectiveMode) ? effectiveMode : effectiveBaseResponseMode;
+      log(config, 'info', 'base_response_mode_selected', {
+        requestId,
+        configured_mode: configuredMode,
+        observed_mode: observedMode,
+        effective_mode: effectiveBaseResponseMode || 'auto',
+        content_type: String(contentType || '').slice(0, 160),
+      });
+    };
     const getBaseResponseBytes = () => baseResponseBytes;
     const getCurrentRoundResponseBytes = () => {
       const snapshot = runtimeTelemetry.snapshotRequest(requestId);
@@ -750,6 +776,7 @@ export function createProxyServer(config, dependencies = {}) {
         recentBytesPerSecond: snapshot?.known ? snapshot.throughputBps : undefined,
         stalled,
         idleSeconds: Math.floor(idleMs / 1000),
+        responseMode: effectiveBaseResponseMode || config.vllmBaseResponseMode || 'auto',
         pulseIndex: snapshot?.known ? snapshot.pulseIndex : 0,
       };
     };
@@ -759,6 +786,7 @@ export function createProxyServer(config, dependencies = {}) {
       lastByteAt: lastBaseResponseChunkAt,
       busyWaiting: baseBusyState.waiting,
       busyAcceptedAt: baseBusyState.acceptedAt,
+      responseMode: effectiveBaseResponseMode,
     });
     const progressTiming = { mode: 'initial', startedAt: Date.now(), position: 0 };
     const onBaseBusyEvent = async (event, fields = {}) => {
@@ -1372,6 +1400,7 @@ export function createProxyServer(config, dependencies = {}) {
               onStreamPhase: onManagedModelStreamPhase,
               onSemanticDelta: onModelSemanticDelta,
               onBusyEvent: onBaseBusyEvent,
+              onResponseMode: onBaseResponseMode,
             },
           );
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
@@ -1612,7 +1641,7 @@ export function createProxyServer(config, dependencies = {}) {
           await progress.open();
           await maybeShowStartupBanner(progress);
           let response = await callUpstreamManagedStream(
-            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent },
+            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent, onResponseMode: onBaseResponseMode },
           );
           response = await applyFinalPresentationLanguage(response, request);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
@@ -1784,6 +1813,7 @@ export function createProxyServer(config, dependencies = {}) {
         onStreamPhase: onManagedModelStreamPhase,
         onSemanticDelta: onModelSemanticDelta,
         onBusyEvent: onBaseBusyEvent,
+        onResponseMode: onBaseResponseMode,
       });
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
@@ -1805,7 +1835,8 @@ export function createProxyServer(config, dependencies = {}) {
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: config.managedModelRoundTimeoutMs || 360000,
-          modelStallTimeoutMs: 90000,
+          modelStallTimeoutMs: config.managedModelStallTimeoutMs ?? 90000,
+          modelResponseMode: config.vllmBaseResponseMode || 'auto',
           getUpstreamActivity: getBaseUpstreamActivity,
           onModelRoundState: async ({ phase, round, startedAt, endedAt, startBytes }) => {
             if (phase === 'start') {
@@ -1993,6 +2024,15 @@ export function createProxyServer(config, dependencies = {}) {
         .slice(0, 8)
         .join(' | ')
         .slice(0, 4000);
+      const managedTimeoutDetails = ['managed_model_timeout', 'managed_model_stall_timeout'].includes(String(error?.code || ''))
+        ? {
+            response_mode: String(error?.details?.response_mode || effectiveBaseResponseMode || config.vllmBaseResponseMode || 'auto'),
+            idle_ms: Number(error?.details?.idle_ms || 0),
+            received_bytes: Number(error?.details?.received_bytes || baseResponseBytes || 0),
+            model_phase: modelRoundProgress.phase || 'waiting',
+            timeout_ms: Number(error?.details?.timeout_ms || 0),
+          }
+        : {};
       log(config, failureLevel, 'request_failed', {
         requestId,
         method: req.method,
@@ -2001,6 +2041,7 @@ export function createProxyServer(config, dependencies = {}) {
         message: error.message,
         request_stage: requestStage,
         error_name: String(error?.name || 'Error'),
+        ...managedTimeoutDetails,
         ...(errorStack ? { error_stack: errorStack } : {}),
       });
       if (progress) await emitSseError(progress, error);

@@ -38,7 +38,7 @@ function managedActionSignature(toolUses) {
   })));
 }
 
-function managedTimeoutError(code, timeoutMs, phase) {
+function managedTimeoutError(code, timeoutMs, phase, extraDetails = {}) {
   const message = code === 'managed_task_timeout'
     ? 'Managed task exceeded its total execution deadline.'
     : code === 'managed_model_stall_timeout'
@@ -47,7 +47,7 @@ function managedTimeoutError(code, timeoutMs, phase) {
   return new HttpError(504, message, {
     code,
     retryable: true,
-    details: { timeout_ms: timeoutMs, phase },
+    details: { timeout_ms: timeoutMs, phase, ...extraDetails },
   });
 }
 
@@ -96,6 +96,7 @@ async function runModelWithActivityDeadline(operation, {
   timeoutMs,
   timeoutCode = 'managed_model_timeout',
   stallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  responseMode = 'auto',
   getUpstreamActivity = null,
   onRoundState = () => {},
   round = 0,
@@ -110,27 +111,29 @@ async function runModelWithActivityDeadline(operation, {
   let stallTimer;
   let settled = false;
   let rejectStall;
+  const configuredResponseMode = ['streaming', 'buffered'].includes(responseMode) ? responseMode : 'auto';
   const currentRoundActivity = () => {
-    if (typeof getUpstreamActivity !== 'function') return { started: false, bytes: startBytes, lastByteAt: 0 };
-    const activity = getUpstreamActivity() || {};
-    const bytes = Number(activity.receivedBytes) || 0;
+    const activity = typeof getUpstreamActivity === 'function' ? (getUpstreamActivity() || {}) : {};
+    const bytes = Number(activity.receivedBytes) || startBytes;
     const lastByteAt = Number(activity.lastByteAt) || 0;
+    const observedResponseMode = ['streaming', 'buffered'].includes(activity.responseMode) ? activity.responseMode : '';
     return {
       started: bytes > startBytes && lastByteAt >= startedAt,
       bytes,
       lastByteAt,
+      responseMode: configuredResponseMode === 'auto' ? (observedResponseMode || (bytes > startBytes ? 'streaming' : 'auto')) : configuredResponseMode,
     };
   };
-  const hardError = managedTimeoutError(timeoutCode, timeoutMs, 'model');
   let rejectHard;
   const hardPromise = new Promise((_, reject) => { rejectHard = reject; });
   const armHardDeadline = (delayMs) => {
     hardTimer = setTimeout(() => {
-      // With activity telemetry, this deadline only bounds time-to-first-byte.
-      // Explicit upstream busy rejection is request-local waiting, not model
-      // execution time. While busy, keep the round alive; after vLLM accepts
-      // the retry, restart the first-byte deadline from that acceptance point.
-      if (currentRoundActivity().started) return;
+      // Streaming responses use this as a first-byte deadline and then switch
+      // to inactivity protection. Buffered responses keep this as an absolute
+      // model-round completion deadline because silence after initial bytes is
+      // expected and does not prove the model has stalled.
+      const roundActivity = currentRoundActivity();
+      if (roundActivity.started && roundActivity.responseMode === 'streaming') return;
       const rawActivity = typeof getUpstreamActivity === 'function' ? (getUpstreamActivity() || {}) : {};
       if (rawActivity.busyWaiting) {
         armHardDeadline(Math.max(5, Math.min(1000, timeoutMs)));
@@ -143,8 +146,14 @@ async function runModelWithActivityDeadline(operation, {
         armHardDeadline(remainingMs);
         return;
       }
-      controller.abort(hardError);
-      rejectHard(hardError);
+      const activity = currentRoundActivity();
+      const error = managedTimeoutError(timeoutCode, timeoutMs, 'model', {
+        response_mode: activity.responseMode,
+        received_bytes: activity.bytes,
+        idle_ms: activity.lastByteAt > 0 ? Math.max(0, Date.now() - activity.lastByteAt) : 0,
+      });
+      controller.abort(error);
+      rejectHard(error);
     }, Math.max(1, delayMs));
   };
   armHardDeadline(timeoutMs);
@@ -163,8 +172,14 @@ async function runModelWithActivityDeadline(operation, {
     stallTimer = setInterval(() => {
       if (settled) return;
       const activity = currentRoundActivity();
-      if (!activity.started || Date.now() - activity.lastByteAt < stallTimeoutMs) return;
-      const error = managedTimeoutError('managed_model_stall_timeout', stallTimeoutMs, 'model');
+      if (activity.responseMode !== 'streaming') return;
+      const idleMs = activity.lastByteAt > 0 ? Math.max(0, Date.now() - activity.lastByteAt) : 0;
+      if (!activity.started || idleMs < stallTimeoutMs) return;
+      const error = managedTimeoutError('managed_model_stall_timeout', stallTimeoutMs, 'model', {
+        response_mode: activity.responseMode,
+        received_bytes: activity.bytes,
+        idle_ms: idleMs,
+      });
       controller.abort(error);
       rejectStall(error);
     }, pollMs);
@@ -510,6 +525,7 @@ export async function runManagedLoop(initialRequest, {
   locale = 'zh-TW',
   releaseForcedManagedToolChoiceAfterUse = false,
   modelStallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  modelResponseMode = 'auto',
   getUpstreamActivity = null,
   onModelRoundState = () => {},
   compressContinuationWindow = null,
@@ -553,6 +569,7 @@ export async function runManagedLoop(initialRequest, {
         timeoutMs: modelRoundTimeoutMs,
         timeoutCode: 'managed_model_timeout',
         stallTimeoutMs: modelStallTimeoutMs,
+        responseMode: modelResponseMode,
         getUpstreamActivity,
         onRoundState: onModelRoundState,
         round: activeRound,

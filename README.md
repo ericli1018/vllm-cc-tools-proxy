@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
@@ -8,6 +8,35 @@
 
 
 
+
+
+## V0.29.11 Base Response Mode-aware Timeout
+
+V0.29.11 separates **streaming liveness** from **buffered/coarse completion** for the Base endpoint. The new optional setting is:
+
+```env
+VLLM_BASE_RESPONSE_MODE=auto|streaming|buffered
+MANAGED_MODEL_ROUND_TIMEOUT_MS=360000
+MANAGED_MODEL_STALL_TIMEOUT_MS=90000
+```
+
+`auto` is the default. For managed Base responses it maps `text/event-stream` to `streaming` and other response content types to `buffered`. Operators may force `buffered` when a backend uses SSE-compatible framing but does not deliver model output continuously. This is useful for an Ollama deployment whose effective delivery is coarse or non-token-streaming even though the endpoint is Anthropic-compatible. Ollama itself supports streaming, so V0.29.11 does not guess response mode from the provider name, hostname, port, or model id.
+
+In `streaming` mode, `MANAGED_MODEL_ROUND_TIMEOUT_MS` remains the first-byte deadline. After upstream bytes begin, `MANAGED_MODEL_STALL_TIMEOUT_MS` protects against a truly stalled stream; its default remains 90000 ms and `0` disables inactivity detection. In `buffered` mode, post-first-byte silence is expected: the stall detector is not used, and `MANAGED_MODEL_ROUND_TIMEOUT_MS` remains the **absolute model-round completion deadline** even after initial response bytes arrive.
+
+The Proxy emits `base_response_mode_selected` with configured, observed, and effective modes plus bounded Content-Type metadata. Managed timeout errors also expose safe `response_mode`, `idle_ms`, `received_bytes`, `model_phase`, and `timeout_ms` diagnostics. No prompt, API key, or response content is included.
+
+For the Ollama/coarse-response case that motivated this release:
+
+```env
+VLLM_BASE_URL=http://192.168.100.10:11434
+VLLM_BASE_MODEL=your-model
+VLLM_BASE_RESPONSE_MODE=buffered
+MANAGED_MODEL_ROUND_TIMEOUT_MS=360000
+MANAGED_MODEL_STALL_TIMEOUT_MS=90000
+```
+
+The stall timeout value may remain at its default because buffered mode does not use it; the absolute round timeout still prevents an indefinitely hung Base request. `VLLM_BASE_MODEL` routing, Vision, external Compact/Language Processor behavior, and media cache contracts are unchanged. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.10 Authoritative VLLM_BASE_MODEL Routing
 

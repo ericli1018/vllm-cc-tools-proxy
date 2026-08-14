@@ -1118,3 +1118,65 @@ test('V0.2.28.5 continuation compression failure falls back to deterministic sta
   assert.ok(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'
     && entry.details.compressed === false));
 });
+
+test('V0.29.11 buffered Base response may stay silent after first bytes until the round completes', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0, responseMode: 'buffered' };
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'buffered response' }] }, {
+    upstream: async () => {
+      setTimeout(() => {
+        activity.receivedBytes = 64;
+        activity.lastByteAt = Date.now();
+      }, 5);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      return { id: 'ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'buffered complete' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } };
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 120,
+    modelStallTimeoutMs: 20,
+    modelResponseMode: 'buffered',
+    getUpstreamActivity: () => ({ ...activity }),
+  });
+  assert.equal(result.content[0].text, 'buffered complete');
+});
+
+test('V0.29.11 buffered Base response keeps the absolute round deadline after first bytes', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0, responseMode: 'buffered' };
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'buffered hung response' }] }, {
+    upstream: async (_body, signal) => {
+      setTimeout(() => {
+        activity.receivedBytes = 64;
+        activity.lastByteAt = Date.now();
+      }, 5);
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 60,
+    modelStallTimeoutMs: 20,
+    modelResponseMode: 'buffered',
+    getUpstreamActivity: () => ({ ...activity }),
+  }), (error) => {
+    assert.equal(error.code, 'managed_model_timeout');
+    return true;
+  });
+});
+
+test('V0.29.11 streaming Base response still raises stall timeout after post-start inactivity', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0, responseMode: 'streaming' };
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'stream stalls' }] }, {
+    upstream: async (_body, signal) => {
+      setTimeout(() => {
+        activity.receivedBytes = 64;
+        activity.lastByteAt = Date.now();
+      }, 5);
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 120,
+    modelStallTimeoutMs: 20,
+    modelResponseMode: 'streaming',
+    getUpstreamActivity: () => ({ ...activity }),
+  }), (error) => {
+    assert.equal(error.code, 'managed_model_stall_timeout');
+    return true;
+  });
+});

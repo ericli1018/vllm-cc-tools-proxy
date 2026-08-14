@@ -448,3 +448,29 @@ test('V0.29.10 explicit WebFetch Processor URL does not implicitly inherit VLLM_
   });
   assert.equal(config.webFetchProcessor.model, '');
 });
+
+test('V0.29.11 Base response mode defaults to auto and validates explicit modes', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://base:8000' });
+  assert.equal(defaults.vllmBaseResponseMode, 'auto');
+  assert.equal(defaults.managedModelStallTimeoutMs, 90000);
+
+  for (const mode of ['auto', 'streaming', 'buffered']) {
+    assert.equal(loadConfig({ VLLM_BASE_URL: 'http://base:8000', VLLM_BASE_RESPONSE_MODE: mode }).vllmBaseResponseMode, mode);
+  }
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://base:8000', VLLM_BASE_RESPONSE_MODE: 'ollama' }), /VLLM_BASE_RESPONSE_MODE/);
+});
+
+test('V0.29.11 managed model stall timeout is configurable and zero disables inactivity detection', () => {
+  assert.equal(loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    MANAGED_MODEL_STALL_TIMEOUT_MS: '0',
+  }).managedModelStallTimeoutMs, 0);
+  assert.equal(loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    MANAGED_MODEL_STALL_TIMEOUT_MS: '180000',
+  }).managedModelStallTimeoutMs, 180000);
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://base:8000',
+    MANAGED_MODEL_STALL_TIMEOUT_MS: '-1',
+  }), /MANAGED_MODEL_STALL_TIMEOUT_MS/);
+});

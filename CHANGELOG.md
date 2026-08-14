@@ -1,3 +1,13 @@
+## 0.29.11 - 2026-08-15
+
+- Added `VLLM_BASE_RESPONSE_MODE=auto|streaming|buffered` for Base response delivery semantics.
+- `buffered` mode keeps `MANAGED_MODEL_ROUND_TIMEOUT_MS` as an absolute round completion deadline and disables post-first-byte stall classification.
+- `streaming` mode preserves the existing first-byte deadline plus inactivity protection.
+- `auto` maps SSE response Content-Type to streaming and non-SSE responses to buffered; operators can force buffered for coarse SSE-framed backends.
+- Added configurable `MANAGED_MODEL_STALL_TIMEOUT_MS` with default `90000`; `0` disables streaming inactivity detection.
+- Added safe `base_response_mode_selected` diagnostics and richer managed timeout fields (`response_mode`, `idle_ms`, `received_bytes`, `model_phase`, `timeout_ms`).
+- Preserved V0.29.10 `VLLM_BASE_MODEL` routing and cache generations `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.10 - 2026-08-15
 
 - Added optional authoritative `VLLM_BASE_MODEL` routing for the Base vLLM endpoint.

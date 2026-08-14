@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.10'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.10'
+test "$(node -p "require('./package.json').version")" = '0.29.11'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.11'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.10'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.11'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -712,3 +712,22 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 echo 'Verification complete.'
+
+
+# V0.29.11 Base Response Mode-aware Timeout
+ test -f V0.29.11-更新說明.md
+ test -f V0.29.11-實作與驗證報告.md
+ grep -Fq 'VLLM_BASE_RESPONSE_MODE=auto' .env.example
+ grep -Fq 'MANAGED_MODEL_STALL_TIMEOUT_MS=90000' .env.example
+ grep -Fq 'VLLM_BASE_RESPONSE_MODE: ${VLLM_BASE_RESPONSE_MODE:-auto}' compose.yaml
+ grep -Fq 'MANAGED_MODEL_STALL_TIMEOUT_MS: ${MANAGED_MODEL_STALL_TIMEOUT_MS:-90000}' compose.yaml
+ grep -Fq 'V0.29.11 Base Response Mode-aware Timeout' README.md
+ grep -Fq 'VLLM_BASE_RESPONSE_MODE' src/config.js
+ grep -Fq 'MANAGED_MODEL_STALL_TIMEOUT_MS' src/config.js
+ grep -Fq 'base_response_mode_selected' src/services/proxy-server.js
+ grep -Fq 'V0.29.11 Base response mode defaults to auto and validates explicit modes' test/config.test.js
+ grep -Fq 'V0.29.11 buffered Base response may stay silent after first bytes until the round completes' test/managed-loop.test.js
+ grep -Fq 'V0.29.11 forced buffered Base mode does not treat SSE-framed coarse silence as a stall' test/proxy-server.test.js
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
