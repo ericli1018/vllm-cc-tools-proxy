@@ -1025,6 +1025,7 @@ export function createProxyServer(config, dependencies = {}) {
           version: VERSION,
           session_id: sessionId,
           locale: config.responseLanguage,
+          status_owner: 'main',
           active: snapshot.active,
           phase: snapshot.phase,
           round: snapshot.round || 0,
@@ -1112,7 +1113,7 @@ export function createProxyServer(config, dependencies = {}) {
       // clientSessionId resolved before Agent-context binding so child requests can reuse Parent handoff metadata.
       const toolResultContinuation = messagesPath === '/v1/messages' && isToolResultContinuation(original.messages);
       if (messagesPath === '/v1/messages') {
-        releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
+        releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId, agentContext: claudeAgentRequestContext?.context || 'main' });
       }
       const webFetchProcessorChild = messagesPath === '/v1/messages'
         ? parseClaudeCodeWebFetchProcessorChild(original)

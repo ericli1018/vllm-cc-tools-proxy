@@ -1,3 +1,10 @@
+## 0.29.20 - 2026-08-15
+
+- Main and Sub Agent `/v1/messages` turns now share the same visible Proxy progress policy; Agent context no longer suppresses, prefixes, or otherwise changes semantic progress.
+- Runtime telemetry records `agentContext` and makes the session status phase Main-owned. Sub Agent activity remains included in global sessions/active/wait counters but cannot replace the Main phase/bytes/elapsed state.
+- Retires the V0.29.19 `subagentStatusLine` renderer and host-side row override. Claude Code native Sub Agent task rows remain untouched.
+- Keeps WebSearch/tool-result continuation progress regression coverage and backward-compatible stripping of historical V0.29.17/18 title-anchored progress blocks.
+
 ## 0.29.19 - 2026-08-15
 
 - Move collapsed Sub Agent row ownership to Claude Code native `subagentStatusLine` instead of modifying assistant `text_delta` content.

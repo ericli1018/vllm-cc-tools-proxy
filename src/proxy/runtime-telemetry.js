@@ -23,6 +23,10 @@ function safeText(value, max = 120) {
   return typeof value === 'string' ? value.trim().slice(0, max) : '';
 }
 
+function safeAgentContext(value) {
+  return String(value || '').trim().toLowerCase() === 'subagent' ? 'subagent' : 'main';
+}
+
 export class RuntimeTelemetry {
   constructor({ startedAt, maxRememberedSessions = 4096, throughputWindowMs = 5000, clock = () => Date.now() } = {}) {
     this.clock = typeof clock === 'function' ? clock : (() => Date.now());
@@ -48,15 +52,17 @@ export class RuntimeTelemetry {
     }
   }
 
-  beginRequest({ requestId, sessionId = '' } = {}) {
+  beginRequest({ requestId, sessionId = '', agentContext = 'main' } = {}) {
     const id = String(requestId || '');
     const session = String(sessionId || '').trim();
     const now = this.clock();
+    const context = safeAgentContext(agentContext);
     if (id) {
       this.activeRequests.add(id);
       this.requestStates.set(id, {
         requestId: id,
         sessionId: session,
+        agentContext: context,
         phase: 'waiting',
         startedAt: now,
         phaseStartedAt: now,
@@ -79,7 +85,7 @@ export class RuntimeTelemetry {
     }
     if (session) {
       this.activeSessions.set(session, (this.activeSessions.get(session) || 0) + 1);
-      this.#rememberSession(session, { phase: 'waiting', updatedAt: now });
+      if (context === 'main') this.#rememberSession(session, { phase: 'waiting', updatedAt: now });
     }
     let released = false;
     return () => {
@@ -88,7 +94,7 @@ export class RuntimeTelemetry {
       const releasedAt = this.clock();
       if (id) {
         const state = this.requestStates.get(id);
-        if (state?.sessionId) {
+        if (state?.sessionId && state.agentContext === 'main') {
           this.#rememberSession(state.sessionId, {
             phase: 'idle',
             active: false,
@@ -126,7 +132,7 @@ export class RuntimeTelemetry {
     state.toolName = '';
     state.detail = '';
     state.updatedAt = now;
-    if (state.sessionId) this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
+    if (state.sessionId && state.agentContext === 'main') this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
     return true;
   }
 
@@ -153,7 +159,7 @@ export class RuntimeTelemetry {
     if (patch.toolName !== undefined) state.toolName = safeText(patch.toolName, 80);
     if (patch.detail !== undefined) state.detail = safeText(patch.detail, 120);
     state.updatedAt = now;
-    if (state.sessionId) this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
+    if (state.sessionId && state.agentContext === 'main') this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
     return true;
   }
 
@@ -259,6 +265,7 @@ export class RuntimeTelemetry {
       active: true,
       requestId: state.requestId,
       sessionId: state.sessionId,
+      agentContext: state.agentContext,
       phase,
       underlyingPhase: basePhase,
       round: state.round,
@@ -280,7 +287,7 @@ export class RuntimeTelemetry {
     const session = String(sessionId || '').trim();
     if (!session) return { known: false, active: false, phase: 'idle' };
     const active = [...this.requestStates.values()]
-      .filter((state) => state.sessionId === session)
+      .filter((state) => state.sessionId === session && state.agentContext === 'main')
       .sort((a, b) => b.startedAt - a.startedAt)[0];
     if (active) return this.snapshotRequest(active.requestId, now);
     const remembered = this.lastSessionStates.get(session);
@@ -288,6 +295,7 @@ export class RuntimeTelemetry {
     return {
       known: true,
       active: false,
+      agentContext: 'main',
       phase: 'idle',
       lastPhase: safePhase(remembered?.lastPhase || remembered?.phase || 'idle'),
       elapsedMs: 0,

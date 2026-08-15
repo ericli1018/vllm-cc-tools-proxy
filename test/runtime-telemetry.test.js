@@ -123,3 +123,53 @@ test('V0.2.28.19 non-model phases do not expose stale previous-round bytes or th
 
   release();
 });
+
+
+test('V0.29.20 session status is owned by Main request while Sub Agent still counts as active work', () => {
+  const time = clock(50_000);
+  const telemetry = new RuntimeTelemetry({ clock: time.now });
+  const releaseMain = telemetry.beginRequest({ requestId: 'main-r', sessionId: 'shared-s', agentContext: 'main' });
+  telemetry.beginModelRound('main-r', { round: 1, startedAt: time.now() });
+  telemetry.updateRequest('main-r', { phase: 'thinking' });
+  telemetry.observeModelDelta('main-r', 100);
+
+  time.advance(1000);
+  const releaseSub = telemetry.beginRequest({ requestId: 'sub-r', sessionId: 'shared-s', agentContext: 'subagent' });
+  telemetry.beginModelRound('sub-r', { round: 1, startedAt: time.now() });
+  telemetry.updateRequest('sub-r', { phase: 'response' });
+  telemetry.observeModelDelta('sub-r', 999);
+
+  const status = telemetry.snapshotSession('shared-s');
+  assert.equal(status.requestId, 'main-r');
+  assert.equal(status.agentContext, 'main');
+  assert.equal(status.phase, 'thinking');
+  assert.equal(status.receivedBytes, 100);
+  assert.deepEqual(telemetry.snapshot(), { uptimeMs: 1000, sessions: 1, active: 2, waiting: 0 });
+
+  releaseMain();
+  const afterMain = telemetry.snapshotSession('shared-s');
+  assert.equal(afterMain.active, false);
+  assert.equal(afterMain.phase, 'idle');
+  assert.equal(afterMain.lastPhase, 'thinking');
+
+  releaseSub();
+});
+
+test('V0.29.20 Sub Agent state never overwrites remembered Main session state', () => {
+  const time = clock(80_000);
+  const telemetry = new RuntimeTelemetry({ clock: time.now });
+  const releaseMain = telemetry.beginRequest({ requestId: 'main-r2', sessionId: 'shared-s2', agentContext: 'main' });
+  telemetry.updateRequest('main-r2', { phase: 'tool', toolName: 'Agent' });
+  releaseMain();
+
+  const releaseSub = telemetry.beginRequest({ requestId: 'sub-r2', sessionId: 'shared-s2', agentContext: 'subagent' });
+  telemetry.updateRequest('sub-r2', { phase: 'thinking' });
+  const duringSub = telemetry.snapshotSession('shared-s2');
+  assert.equal(duringSub.active, false);
+  assert.equal(duringSub.phase, 'idle');
+  assert.equal(duringSub.lastPhase, 'tool');
+  releaseSub();
+
+  const afterSub = telemetry.snapshotSession('shared-s2');
+  assert.equal(afterSub.lastPhase, 'tool');
+});

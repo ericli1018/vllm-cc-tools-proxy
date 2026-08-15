@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.19', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.20', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3093,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.19/);
+  assert.match(first, /VERSION\s+0\.29\.20/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.19');
+  assert.equal(payload.version, '0.29.20');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.19/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.20/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3258,6 +3258,38 @@ test('V0.2.28.19 status endpoint combines current-round semantic telemetry with 
   assert.match(payload.display, /思考中/);
   assert.match(payload.display, /59s/);
   assert.doesNotMatch(payload.display, /59\.\d+s/);
+});
+
+
+test('V0.29.20 status endpoint renders Main phase while aggregate counters include Sub Agent requests', async (t) => {
+  const RuntimeTelemetryClass = (await import('../src/proxy/runtime-telemetry.js')).RuntimeTelemetry;
+  const runtimeTelemetry = new RuntimeTelemetryClass();
+  const releaseMain = runtimeTelemetry.beginRequest({ requestId: 'main-status-r', sessionId: 'shared-status-s', agentContext: 'main' });
+  runtimeTelemetry.beginModelRound('main-status-r', { round: 1, startedAt: Date.now() - 12_000 });
+  runtimeTelemetry.updateRequest('main-status-r', { phase: 'thinking' });
+  runtimeTelemetry.observeModelDelta('main-status-r', 321);
+
+  const releaseSub = runtimeTelemetry.beginRequest({ requestId: 'sub-status-r', sessionId: 'shared-status-s', agentContext: 'subagent' });
+  runtimeTelemetry.beginModelRound('sub-status-r', { round: 1, startedAt: Date.now() - 5_000 });
+  runtimeTelemetry.updateRequest('sub-status-r', { phase: 'response' });
+  runtimeTelemetry.observeModelDelta('sub-status-r', 9999);
+
+  const upstream = http.createServer((_req, res) => { res.writeHead(500); res.end(); });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, responseLanguage: 'zh-TW' }), { runtimeTelemetry });
+  const proxyUrl = await listen(proxy);
+  t.after(() => { releaseMain(); releaseSub(); upstream.close(); proxy.close(); });
+
+  const response = await fetch(`${proxyUrl}/cc-tool-proxy/status/shared-status-s`);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.status_owner, 'main');
+  assert.equal(payload.phase, 'thinking');
+  assert.equal(payload.received_bytes, 321);
+  assert.deepEqual(payload.proxy, { sessions: 1, active: 2, waiting: 0 });
+  assert.match(payload.display, /思考中/);
+  assert.match(payload.display, /▦ 1\s+▶ 2\s+⋯ 0/);
+  assert.doesNotMatch(payload.display, /回應中/);
 });
 
 test('V0.2.28.20 request_failed identifies media preflight stage and keeps a bounded error stack', async (t) => {
@@ -3820,7 +3852,7 @@ test('V0.29.16 records Agent UI lifecycle diagnostics while preserving V0.29.12 
   assert.doesNotMatch(serializedLogs, /child-agent-secret-id|parent-agent-secret-id|Analyze memory lifecycle|toolu-agent-secret/);
 });
 
-test('V0.29.19 keeps Main and Sub Agent semantic progress clean across a WebSearch-style continuation', async (t) => {
+test('V0.29.20 keeps Main and Sub Agent semantic progress identical across a WebSearch-style continuation', async (t) => {
   const logs = [];
   let calls = 0;
   const vllm = await startJsonServer(async (req, res) => {

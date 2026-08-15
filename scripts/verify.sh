@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.19'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.19'
+test "$(node -p "require('./package.json').version")" = '0.29.20'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.20'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.19'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.20'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -784,22 +784,27 @@ echo 'Verification complete.'
  ! grep -Fq 'progressTitle:' src/services/proxy-server.js
  ! grep -Fq 'this.progressTitle' src/proxy/progress.js
 
-# V0.29.19 Claude Code Native Sub Agent Row Isolation
+# V0.29.19 historical native Sub Agent row experiment (superseded in V0.29.20)
  test -f V0.29.19-更新說明.md
  test -f V0.29.19-實作與驗證報告.md
- test -f scripts/cc-tool-proxy-subagent-statusline.js
- test -x scripts/cc-tool-proxy-subagent-statusline.js
- grep -Fq 'V0.29.19 Claude Code Native Sub Agent Row Isolation' README.md
- grep -Fq 'subagentStatusLine' README.md
- grep -Fq 'cc-tool-proxy-subagent-statusline.js' README.md
- grep -Fq 'task.description' README.md
- grep -Fq 'V0.29.19 subagentStatusLine renders the Claude Code task description for each visible row' test/subagent-statusline-client.test.js
- grep -Fq 'V0.29.19 semantic progress ignores the retired progressTitle compatibility option' test/progress.test.js
- grep -Fq 'V0.29.19 keeps Main and Sub Agent semantic progress clean across a WebSearch-style continuation' test/proxy-server.test.js
- grep -Fq 'V0.29.19 documents native subagentStatusLine row isolation alongside existing Proxy statusLine' test/deployment.test.js
- ! grep -Fq 'fetch(' scripts/cc-tool-proxy-subagent-statusline.js
- ! grep -Fq 'CC_TOOL_PROXY_URL' scripts/cc-tool-proxy-subagent-statusline.js
- ! grep -Fq 'ANTHROPIC_BASE_URL' scripts/cc-tool-proxy-subagent-statusline.js
+ test ! -f scripts/cc-tool-proxy-subagent-statusline.js
+ test ! -f test/subagent-statusline-client.test.js
+ grep -Fq 'V0.29.19 Claude Code Native Sub Agent Row Isolation (superseded)' README.md
+
+# V0.29.20 Main-Owned Status Telemetry
+ test -f V0.29.20-更新說明.md
+ test -f V0.29.20-實作與驗證報告.md
+ grep -Fq 'V0.29.20 Main-Owned Status Telemetry' README.md
+ grep -Fq 'V0.29.20 session status is owned by Main request while Sub Agent still counts as active work' test/runtime-telemetry.test.js
+ grep -Fq 'V0.29.20 Sub Agent state never overwrites remembered Main session state' test/runtime-telemetry.test.js
+ grep -Fq 'V0.29.20 status endpoint renders Main phase while aggregate counters include Sub Agent requests' test/proxy-server.test.js
+ grep -Fq 'V0.29.20 keeps Main and Sub Agent semantic progress identical across a WebSearch-style continuation' test/proxy-server.test.js
+ grep -Fq 'V0.29.20 keeps Claude Code native Sub Agent task rows untouched and documents Main-owned global statusLine' test/deployment.test.js
+ grep -Fq "agentContext: claudeAgentRequestContext?.context || 'main'" src/services/proxy-server.js
+ grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
+ grep -Fq "status_owner: 'main'" src/services/proxy-server.js
+ ! grep -Fq 'SubagentDisplayRegistry' src/services/proxy-server.js
+ ! grep -Fq 'progressTitle:' src/services/proxy-server.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
