@@ -32,6 +32,11 @@ function declaredSubagentTools(request) {
   return found;
 }
 
+
+export function claudeAgentId(headers) {
+  return headerValue(headers, 'x-claude-code-agent-id');
+}
+
 export function describeClaudeAgentRequest(headers, request = {}) {
   const agentId = headerValue(headers, 'x-claude-code-agent-id');
   const parentAgentId = headerValue(headers, 'x-claude-code-parent-agent-id');

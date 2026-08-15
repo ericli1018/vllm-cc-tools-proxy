@@ -638,3 +638,25 @@ test('V0.29.12 ProgressStream dispose clears every timer, pending state, and is 
   assert.equal(progress.pendingUpdate, null);
   assert.equal(progress.res, null);
 });
+
+test('V0.29.17 title-anchored subagent progress keeps the Agent description on the first visible line', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    progressTitle: '分析 WebSearch 行為',
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    locale: 'zh-TW',
+  });
+  await progress.open();
+  await progress.update('主模型仍在處理…', { details: { phase: 'semantic_heartbeat' } });
+  await progress.closeProgress();
+  await progress.stop();
+  const wire = response.chunks.join('');
+  assert.match(wire, /分析 WebSearch 行為\\n目前處理進度：\\n主模型仍在處理/);
+});
+
+test('V0.29.17 history stripping removes title-anchored progress blocks from model context', () => {
+  const messages = [{ role: 'assistant', content: [{ type: 'text', text: '分析 WebSearch 行為\n目前處理進度：\n主模型仍在處理…' }] }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, []);
+});

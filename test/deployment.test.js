@@ -445,3 +445,10 @@ test('README documents V0.29.16 diagnostic-first Agent UI tracing from the V0.29
   assert.match(readme, /proxy_progress_first_visible/);
   assert.match(readme, /claude_agent_handoff_observed/);
 });
+
+test('README documents V0.29.17 Sub Agent title-anchored progress without disabling visible progress', () => {
+  assert.match(readme, /V0\.29\.17 Sub Agent Title-Anchored Progress/);
+  assert.match(readme, /original Agent description/);
+  assert.match(readme, /WebSearch\/tool-result continuations/);
+  assert.match(readme, /Main Agent progress formatting is unchanged/);
+});

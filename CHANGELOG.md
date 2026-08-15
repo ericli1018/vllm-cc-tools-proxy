@@ -1,3 +1,13 @@
+## 0.29.17 - 2026-08-15
+
+- Fix Sub Agent task rows being overwritten by `目前處理進度：…` after WebSearch/tool-result continuation turns.
+- Add bounded `SubagentDisplayRegistry` to bind child agent ids to Parent `Agent`/`Task` descriptions using exact prompt fingerprints.
+- Render bound Sub Agent progress with the original task description as the first visible line while keeping the normal localized progress block underneath.
+- Preserve Main Agent progress semantics and continuous Sub Agent visible progress; no suppression/deferred gate is reintroduced.
+- Suppress only the startup banner inside Sub Agent streams so it cannot displace the stable task title.
+- Extend progress-history stripping to recognize title-anchored proxy progress blocks.
+- No new ENV; cache generations remain `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.16 - 2026-08-15
 
 - Rebuilt directly from the V0.29.12 baseline; V0.29.13-V0.29.15 Agent/sub-agent progress suppression/deferral policies are intentionally absent.

@@ -29,15 +29,21 @@ function stripLegacyText(text) {
   return text.replace(LEGACY_INVISIBLE_PATTERN, '').replace(LEGACY_PLAIN_PATTERN, '');
 }
 
+function isProgressHeaderLine(line) {
+  return ALL_PROGRESS_BLOCK_HEADERS.some((header) => {
+    if (line === header) return true;
+    const stem = header.replace(/[：:]$/, '');
+    return line.startsWith(`${stem}（`) || line.startsWith(`${stem} (`);
+  });
+}
+
 function isDedicatedProgressText(text) {
   if (typeof text !== 'string') return false;
-  const firstLine = text.split(/\r?\n/, 1)[0];
+  const lines = text.split(/\r?\n/, 3);
+  const firstLine = lines[0] || '';
   if (firstLine.startsWith(STARTUP_BANNER_PREFIX)) return true;
-  return ALL_PROGRESS_BLOCK_HEADERS.some((header) => {
-    if (firstLine === header) return true;
-    const stem = header.replace(/[：:]$/, '');
-    return firstLine.startsWith(`${stem}（`) || firstLine.startsWith(`${stem} (`);
-  });
+  if (isProgressHeaderLine(firstLine)) return true;
+  return Boolean(firstLine && lines[1] && isProgressHeaderLine(lines[1]));
 }
 
 function isDedicatedProgressBlock(block) {
@@ -92,7 +98,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, progressTitle = '',
   } = {}) {
     this.res = res;
     this.model = model;
@@ -106,6 +112,7 @@ export class ProgressStream {
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
+    this.progressTitle = String(progressTitle || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -261,8 +268,7 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}
-${message}` },
+          delta: { type: 'text_delta', text: `${this.progressTitle ? `${this.progressTitle}\n` : ''}${progressBlockHeader(this.locale)}\n${message}` },
         }), metadata);
       } else {
         await this.#write(event('content_block_delta', {
