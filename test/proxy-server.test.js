@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.24', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.25', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3175,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.24/);
+  assert.match(first, /VERSION\s+0\.29\.25/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.24');
+  assert.equal(payload.version, '0.29.25');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.24/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.25/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4015,4 +4015,58 @@ test('V0.29.23 keeps Main visible progress while Sub Agent is liveness-only acro
   assert.equal(logs.some((entry) => entry.event === 'subagent_display_handoff_registered'), false);
   const serialized = JSON.stringify(logs);
   assert.doesNotMatch(serialized, /查證 WebSearch 行為|research web search behavior exactly|child-agent-stable-id/);
+});
+
+test('V0.29.25 managed proxy recovers a stalled streamed response from completed semantic blocks', async (t) => {
+  const logs = [];
+  let calls = 0;
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    calls += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (calls === 1) {
+      res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m1","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+      res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n');
+      res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"已完成段落。"}}\n\n');
+      res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+      res.write('event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n');
+      res.write('event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"這段不完整"}}\n\n');
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try { res.end(); } catch {}
+      return;
+    }
+    assert.match(JSON.stringify(payload.messages), /PROXY_MANAGED_RESPONSE_RECOVERY/);
+    res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m2","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"續接完成。"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    vllmBaseResponseMode: 'streaming',
+    managedModelRoundTimeoutMs: 300,
+    managedModelStallTimeoutMs: 25,
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.closeAllConnections?.());
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 }],
+      messages: [{ role: 'user', content: '請完成任務' }],
+    }),
+  });
+  const text = await response.text();
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.match(text, /已完成段落。/);
+  assert.match(text, /續接完成。/);
+  assert.doesNotMatch(text, /這段不完整/);
+  assert.ok(logs.some((entry) => entry.event === 'managed_model_stall_recovery_started'));
+  assert.ok(logs.some((entry) => entry.event === 'managed_model_stall_recovery_completed'));
 });

@@ -185,3 +185,36 @@ test('V0.2.28.17 collector reports only semantic model delta bytes', async () =>
     Buffer.byteLength(thinking + text + toolJson, 'utf8'));
   assert.equal(deltas.some((entry) => entry.bytes === Buffer.byteLength(signature, 'utf8')), false);
 });
+
+test('V0.29.25 collector exposes only completed blocks as a recovery checkpoint while a later tool block is partial', async () => {
+  const checkpoints = [];
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'recovery-1', type: 'message', role: 'assistant', model: 'mock', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Preserved text.' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'tool-partial', name: 'Bash', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"command":"make' } }),
+  ].join('');
+  const upstream = {
+    ...upstreamFromChunks([]),
+    body: {
+      async *[Symbol.asyncIterator]() {
+        yield Buffer.from(wire);
+        throw new Error('simulated stalled stream abort');
+      },
+    },
+  };
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstream, {
+    onCheckpoint: async (entry) => checkpoints.push(structuredClone(entry)),
+  }), /simulated stalled stream abort/);
+
+  assert.ok(checkpoints.length >= 2);
+  const last = checkpoints.at(-1);
+  assert.deepEqual(last.completed_blocks, [{ type: 'text', text: 'Preserved text.' }]);
+  assert.deepEqual(last.partial_block, { index: 1, type: 'tool_use', id: 'tool-partial', name: 'Bash' });
+  assert.equal(last.phase, 'tool');
+});

@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.24 adds **Context Compact liveness-only SSE**: when an external Ollama/vLLM compact worker is slow, the Proxy immediately opens the Claude Code stream and sends `ping` events without visible progress text until the compact summary or Base fallback is ready. V0.29.23 Sub Agent liveness-only behavior remains unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.25 adds **Managed Response Recovery**: a streamed managed Base-model response that stalls after semantic output can recover from the latest completed content-block boundary instead of immediately failing the Claude Code turn. Tool-phase inactivity now receives a longer derived stall budget, while Main/Sub Agent and Context Compact liveness policies remain unchanged.
+
+## V0.29.25 Managed Response Recovery
+
+V0.29.25 converts a recoverable managed streaming stall from a terminal API error into a bounded continuation. The Anthropic SSE collector records checkpoints only at semantic boundaries. Completed `text` and fully parsed `tool_use` blocks may be preserved; `thinking` is not merged across attempts, and partial text/tool JSON is never delivered as recovered output.
+
+When a streaming response stalls after a semantic checkpoint, the failed upstream attempt is aborted and the Proxy starts an internal recovery request containing a bounded summary of the completed checkpoint plus metadata about the interrupted block. Recovery asks the Base model to continue the same task without repeating preserved text or completed tool calls. The final merge deduplicates completed tool calls by tool id/signature. Recovery happens before Claude Code tool handoff, so a half-generated tool call cannot be executed twice.
+
+The ordinary `MANAGED_MODEL_STALL_TIMEOUT_MS` remains the thinking/response inactivity budget. Tool phase uses a derived inactivity budget of `max(300000 ms, MANAGED_MODEL_STALL_TIMEOUT_MS × 3)` because streaming tool parsers may buffer long JSON arguments. No new ENV variable is introduced. A semantic stall may recover at most two times; if no checkpoint exists, the legacy stall error remains unchanged.
+
+Main Agent visible progress reports recovery as `↻ 主模型輸出中斷；正在從最近完成狀態恢復…`. Sub Agent remains liveness-only, so the same internal recovery is invisible in its transcript. V0.29.24 Context Compact ping-only liveness and Main-owned global status telemetry are unchanged. Release records remain under `change_log/`; cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.24 Context Compact Liveness-Only SSE
 

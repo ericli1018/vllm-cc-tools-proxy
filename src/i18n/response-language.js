@@ -162,6 +162,7 @@ const PROFILES = Object.freeze({
       upstreamBusyAccepted: () => '主模型已取得執行資源，開始處理…',
       modelPlanning: () => '正在請主模型規劃下一步…',
       modelToolResults: () => '主模型正在整理工具結果…',
+      modelStallRecovery: ({ attempt = 1, total = 2 } = {}) => `↻ 主模型輸出中斷；正在從最近完成狀態恢復（${attempt}/${total}）…`,
       finalChannelRecovery: () => '主模型答案通道異常；正在進行一次短格式修正…',
       continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
         ? `主模型尚未形成有效下一步；本輪產生 ${formatCharacterCount(candidateChars)} 字元工作狀態，正在整理並保留續接重點…`
@@ -243,6 +244,7 @@ const PROFILES = Object.freeze({
       upstreamBusyAccepted: () => '主模型已取得执行资源，开始处理…',
       modelPlanning: () => '正在请主模型规划下一步…',
       modelToolResults: () => '主模型正在整理工具结果…',
+      modelStallRecovery: ({ attempt = 1, total = 2 } = {}) => `↻ 主模型输出中断；正在从最近完成状态恢复（${attempt}/${total}）…`,
       finalChannelRecovery: () => '主模型答案通道异常；正在进行一次短格式修正…',
       continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
         ? `主模型尚未形成有效下一步；本轮生成 ${formatCharacterCount(candidateChars)} 字符工作状态，正在整理并保持续接重点…`
@@ -324,6 +326,7 @@ const PROFILES = Object.freeze({
       upstreamBusyAccepted: () => 'Main model accepted the request and is starting processing…',
       modelPlanning: () => 'The main model is planning the next step…',
       modelToolResults: () => 'The main model is processing tool results…',
+      modelStallRecovery: ({ attempt = 1, total = 2 } = {}) => `↻ The main model stream was interrupted; recovering from the latest completed state (${attempt}/${total})…`,
       finalChannelRecovery: () => 'The main model response channel is malformed; applying one short format repair…',
       continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
         ? `The main model did not form a valid next step; organizing and preserving ${formatCharacterCount(candidateChars)} characters of this round’s model working state…`
@@ -405,6 +408,7 @@ const PROFILES = Object.freeze({
       upstreamBusyAccepted: () => 'メインモデルが要求を受理し、処理を開始しました…',
       modelPlanning: () => 'メインモデルが次の手順を計画しています…',
       modelToolResults: () => 'メインモデルがツールの結果を処理しています…',
+      modelStallRecovery: ({ attempt = 1, total = 2 } = {}) => `↻ メインモデルの出力が中断しました。直近の完了状態から復旧しています（${attempt}/${total}）…`,
       finalChannelRecovery: () => 'メインモデルの応答チャネルに異常があります。短い形式修正を1回実行します…',
       continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
         ? `メインモデルが有効な次の手順を形成できませんでした。このラウンドの作業状態 ${formatCharacterCount(candidateChars)} 文字を整理・保持しています…`
@@ -486,6 +490,7 @@ const PROFILES = Object.freeze({
       upstreamBusyAccepted: () => '주 모델이 요청을 수락하여 처리를 시작합니다…',
       modelPlanning: () => '주 모델이 다음 단계를 계획하고 있습니다…',
       modelToolResults: () => '주 모델이 도구 실행 결과를 처리하고 있습니다…',
+      modelStallRecovery: ({ attempt = 1, total = 2 } = {}) => `↻ 주 모델 출력이 중단되었습니다. 최근 완료 상태에서 복구 중입니다 (${attempt}/${total})…`,
       finalChannelRecovery: () => '주 모델 응답 채널에 이상이 있습니다. 짧은 형식 수정을 한 번 수행합니다…',
       continuationRecovery: ({ candidateChars = 0 } = {}) => candidateChars > 0
         ? `주 모델이 유효한 다음 단계를 만들지 못했습니다. 이번 라운드의 모델 작업 상태 ${formatCharacterCount(candidateChars)}자를 정리하고 보존하고 있습니다…`

@@ -24,6 +24,8 @@ import { prepareContinuationState } from './continuation-state.js';
 const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 0;
 const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
 const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
+const DEFAULT_TOOL_STALL_TIMEOUT_MS = 300_000;
+const DEFAULT_MAX_STALL_RECOVERY_ROUNDS = 2;
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -36,6 +38,99 @@ function managedActionSignature(toolUses) {
     name: normalizeManagedToolName(toolUse?.name),
     input: stableValue(toolUse?.input ?? {}),
   })));
+}
+
+
+function recoveryBlockKey(block) {
+  if (!block || typeof block !== 'object') return '';
+  if (block.type === 'tool_use') {
+    if (block.id) return `tool-id:${block.id}`;
+    return `tool:${String(block.name || '')}:${JSON.stringify(stableValue(block.input ?? {}))}`;
+  }
+  if (block.type === 'text') return `text:${String(block.text || '')}`;
+  return '';
+}
+
+function recoverableCheckpointBlocks(checkpoint) {
+  const blocks = Array.isArray(checkpoint?.completed_blocks) ? checkpoint.completed_blocks : [];
+  const seen = new Set();
+  const safe = [];
+  for (const raw of blocks) {
+    if (!raw || !['text', 'tool_use'].includes(raw.type)) continue;
+    if (raw.type === 'text' && !String(raw.text || '').trim()) continue;
+    if (raw.type === 'tool_use' && (!raw.name || !raw.input || typeof raw.input !== 'object')) continue;
+    const block = structuredClone(raw);
+    const key = recoveryBlockKey(block);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    safe.push(block);
+  }
+  return safe;
+}
+
+function mergeRecoveryBlocks(existing = [], additions = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const raw of [...existing, ...additions]) {
+    const key = recoveryBlockKey(raw);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    merged.push(structuredClone(raw));
+  }
+  return merged;
+}
+
+function recoveryCheckpointSummary(blocks, checkpoint, attempt, maxAttempts) {
+  const lines = blocks.map((block, index) => {
+    if (block.type === 'tool_use') {
+      const input = JSON.stringify(block.input ?? {});
+      return `${index + 1}. tool_use ${block.name} ${input.slice(0, 1200)}`;
+    }
+    const text = String(block.text || '');
+    const tail = text.length > 4000 ? text.slice(-4000) : text;
+    return `${index + 1}. text ${JSON.stringify(tail)}`;
+  });
+  const partial = checkpoint?.partial_block || null;
+  return [
+    '[PROXY_MANAGED_RESPONSE_RECOVERY]',
+    `Recovery attempt ${attempt}/${maxAttempts}.`,
+    `Previous stream phase: ${String(checkpoint?.phase || 'unknown')}.`,
+    'The prior assistant stream stalled before message completion. The proxy preserved only blocks that reached a complete semantic boundary.',
+    'Continue the same task from this checkpoint. Do not restart the task and do not repeat any preserved text or completed tool call.',
+    partial ? `The interrupted partial block was ${String(partial.type || 'unknown')}${partial.name ? ` ${partial.name}` : ''}; regenerate that unfinished block from its beginning if it is still needed.` : 'No partial block metadata was available.',
+    lines.length ? 'Preserved completed blocks:\n' + lines.join('\n') : 'No completed non-thinking blocks were preserved; reconstruct only the missing continuation.',
+    'Return only the remaining assistant continuation using normal Anthropic content/tool semantics.',
+  ].join('\n');
+}
+
+function buildManagedStallRecoveryRequest(originalRequest, blocks, checkpoint, attempt, maxAttempts) {
+  const recovered = structuredClone(originalRequest);
+  recovered.messages = Array.isArray(recovered.messages) ? recovered.messages : [];
+  recovered.messages.push({
+    role: 'user',
+    content: [{ type: 'text', text: recoveryCheckpointSummary(blocks, checkpoint, attempt, maxAttempts) }],
+  });
+  return recovered;
+}
+
+function mergeManagedStallRecoveryResponse(blocks, response) {
+  if (!blocks.length) return response;
+  const seen = new Set(blocks.map(recoveryBlockKey).filter(Boolean));
+  const continuation = [];
+  for (const raw of Array.isArray(response?.content) ? response.content : []) {
+    if (!raw || raw.type === 'thinking') continue;
+    const key = recoveryBlockKey(raw);
+    if (key && seen.has(key)) continue;
+    if (key) seen.add(key);
+    continuation.push(structuredClone(raw));
+  }
+  const content = [...blocks.map((block) => structuredClone(block)), ...continuation];
+  const hasToolUse = content.some((block) => block?.type === 'tool_use');
+  return {
+    ...response,
+    content,
+    stop_reason: hasToolUse && !continuation.length ? 'tool_use' : response?.stop_reason,
+  };
 }
 
 function managedTimeoutError(code, timeoutMs, phase, extraDetails = {}) {
@@ -96,6 +191,7 @@ async function runModelWithActivityDeadline(operation, {
   timeoutMs,
   timeoutCode = 'managed_model_timeout',
   stallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  toolStallTimeoutMs = stallTimeoutMs > 0 ? Math.max(DEFAULT_TOOL_STALL_TIMEOUT_MS, stallTimeoutMs * 3) : 0,
   responseMode = 'auto',
   getUpstreamActivity = null,
   onRoundState = () => {},
@@ -117,10 +213,12 @@ async function runModelWithActivityDeadline(operation, {
     const bytes = Number(activity.receivedBytes) || startBytes;
     const lastByteAt = Number(activity.lastByteAt) || 0;
     const observedResponseMode = ['streaming', 'buffered'].includes(activity.responseMode) ? activity.responseMode : '';
+    const phase = ['waiting', 'thinking', 'response', 'tool'].includes(activity.phase) ? activity.phase : 'waiting';
     return {
       started: bytes > startBytes && lastByteAt >= startedAt,
       bytes,
       lastByteAt,
+      phase,
       responseMode: configuredResponseMode === 'auto' ? (observedResponseMode || (bytes > startBytes ? 'streaming' : 'auto')) : configuredResponseMode,
     };
   };
@@ -167,18 +265,28 @@ async function runModelWithActivityDeadline(operation, {
     signal.addEventListener('abort', parentAbort, { once: true });
   });
   const stallPromise = new Promise((_, reject) => { rejectStall = reject; });
-  const pollMs = Math.max(5, Math.min(1000, Math.floor(stallTimeoutMs / 4) || 5));
+  const smallestStallBudget = Math.max(1, Math.min(
+    stallTimeoutMs > 0 ? stallTimeoutMs : Number.POSITIVE_INFINITY,
+    toolStallTimeoutMs > 0 ? toolStallTimeoutMs : Number.POSITIVE_INFINITY,
+  ));
+  const pollMs = Math.max(5, Math.min(1000, Math.floor(smallestStallBudget / 4) || 5));
   if (typeof getUpstreamActivity === 'function' && stallTimeoutMs > 0) {
     stallTimer = setInterval(() => {
       if (settled) return;
       const activity = currentRoundActivity();
       if (activity.responseMode !== 'streaming') return;
+      const effectiveStallTimeoutMs = activity.phase === 'tool' && toolStallTimeoutMs > 0
+        ? toolStallTimeoutMs
+        : stallTimeoutMs;
       const idleMs = activity.lastByteAt > 0 ? Math.max(0, Date.now() - activity.lastByteAt) : 0;
-      if (!activity.started || idleMs < stallTimeoutMs) return;
-      const error = managedTimeoutError('managed_model_stall_timeout', stallTimeoutMs, 'model', {
+      if (!activity.started || idleMs < effectiveStallTimeoutMs) return;
+      const error = managedTimeoutError('managed_model_stall_timeout', effectiveStallTimeoutMs, activity.phase || 'model', {
         response_mode: activity.responseMode,
         received_bytes: activity.bytes,
         idle_ms: idleMs,
+        stream_phase: activity.phase || 'waiting',
+        base_stall_timeout_ms: stallTimeoutMs,
+        tool_stall_timeout_ms: toolStallTimeoutMs,
       });
       controller.abort(error);
       rejectStall(error);
@@ -525,6 +633,8 @@ export async function runManagedLoop(initialRequest, {
   locale = 'zh-TW',
   releaseForcedManagedToolChoiceAfterUse = false,
   modelStallTimeoutMs = DEFAULT_MODEL_STALL_TIMEOUT_MS,
+  modelToolStallTimeoutMs = modelStallTimeoutMs > 0 ? Math.max(DEFAULT_TOOL_STALL_TIMEOUT_MS, modelStallTimeoutMs * 3) : 0,
+  maxStallRecoveryRounds = DEFAULT_MAX_STALL_RECOVERY_ROUNDS,
   modelResponseMode = 'auto',
   getUpstreamActivity = null,
   onModelRoundState = () => {},
@@ -562,30 +672,87 @@ export async function runManagedLoop(initialRequest, {
       task_remaining_ms: taskDeadlineEnabled ? Math.max(0, remaining) : null,
       request: structuredClone(body),
     });
-    const runModel = (modelSignal) => runModelWithActivityDeadline(
-      (boundedSignal) => upstream(body, boundedSignal),
-      {
-        signal: modelSignal,
-        timeoutMs: modelRoundTimeoutMs,
-        timeoutCode: 'managed_model_timeout',
-        stallTimeoutMs: modelStallTimeoutMs,
-        responseMode: modelResponseMode,
-        getUpstreamActivity,
-        onRoundState: onModelRoundState,
-        round: activeRound,
-      },
-    );
-    const rawResponse = taskDeadlineEnabled
-      ? await runWithBoundedTime(
-        (taskSignal) => runModel(taskSignal),
+    const recoveryLimit = Math.max(0, Math.floor(Number(maxStallRecoveryRounds) || 0));
+    let recoveryAttempt = 0;
+    let attemptRequest = body;
+    let preservedBlocks = [];
+    let latestCheckpoint = null;
+    let rawResponse;
+
+    while (true) {
+      let attemptCheckpoint = null;
+      const runModel = (modelSignal) => runModelWithActivityDeadline(
+        (boundedSignal) => upstream(attemptRequest, boundedSignal, {
+          onCheckpoint: (checkpoint) => { attemptCheckpoint = structuredClone(checkpoint); },
+        }),
         {
-          signal: upstreamSignal,
-          timeoutMs: Math.max(1, remaining),
-          timeoutCode: 'managed_task_timeout',
-          phase: 'model',
+          signal: modelSignal,
+          timeoutMs: modelRoundTimeoutMs,
+          timeoutCode: 'managed_model_timeout',
+          stallTimeoutMs: modelStallTimeoutMs,
+          toolStallTimeoutMs: modelToolStallTimeoutMs,
+          responseMode: modelResponseMode,
+          getUpstreamActivity,
+          onRoundState: onModelRoundState,
+          round: activeRound,
         },
-      )
-      : await runModel(upstreamSignal);
+      );
+      try {
+        rawResponse = taskDeadlineEnabled
+          ? await runWithBoundedTime(
+            (taskSignal) => runModel(taskSignal),
+            {
+              signal: upstreamSignal,
+              timeoutMs: Math.max(1, remainingTaskMs()),
+              timeoutCode: 'managed_task_timeout',
+              phase: 'model',
+            },
+          )
+          : await runModel(upstreamSignal);
+        if (recoveryAttempt > 0) {
+          rawResponse = mergeManagedStallRecoveryResponse(preservedBlocks, rawResponse);
+          await onDiagnostic('managed_model_stall_recovery_completed', {
+            round: activeRound,
+            recovery_attempt: recoveryAttempt,
+            preserved_block_count: preservedBlocks.length,
+            final_block_types: Array.isArray(rawResponse?.content) ? rawResponse.content.map((block) => String(block?.type || 'unknown')) : [],
+          });
+        }
+        break;
+      } catch (error) {
+        const stall = error instanceof HttpError && error.code === 'managed_model_stall_timeout';
+        const semanticCheckpointAvailable = Boolean(attemptCheckpoint || latestCheckpoint);
+        if (!stall || !semanticCheckpointAvailable || recoveryAttempt >= recoveryLimit || upstreamSignal?.aborted) throw error;
+        latestCheckpoint = attemptCheckpoint || latestCheckpoint;
+        preservedBlocks = mergeRecoveryBlocks(preservedBlocks, recoverableCheckpointBlocks(attemptCheckpoint));
+        recoveryAttempt += 1;
+        attemptRequest = buildManagedStallRecoveryRequest(body, preservedBlocks, latestCheckpoint, recoveryAttempt, recoveryLimit);
+        await onDiagnostic('managed_model_stall_recovery_started', {
+          round: activeRound,
+          recovery_attempt: recoveryAttempt,
+          recovery_limit: recoveryLimit,
+          stalled_phase: latestCheckpoint?.phase || error?.details?.stream_phase || 'unknown',
+          preserved_block_count: preservedBlocks.length,
+          preserved_tool_count: preservedBlocks.filter((block) => block?.type === 'tool_use').length,
+          partial_block_type: latestCheckpoint?.partial_block?.type || '',
+          partial_tool_name: latestCheckpoint?.partial_block?.name || '',
+          idle_ms: error?.details?.idle_ms || 0,
+          timeout_ms: error?.details?.timeout_ms || error?.details?.tool_stall_timeout_ms || modelStallTimeoutMs,
+        });
+        await onProgress(statusText(locale, 'modelStallRecovery', {
+          attempt: recoveryAttempt,
+          total: recoveryLimit,
+          phase: latestCheckpoint?.phase || 'unknown',
+        }), {
+          phase: 'managed_model_stall_recovery',
+          attempt: recoveryAttempt,
+          total: recoveryLimit,
+          model_phase: latestCheckpoint?.phase || 'unknown',
+          force: true,
+        });
+      }
+    }
+
     await onTrace('base_model_response', {
       round: activeRound,
       response: structuredClone(rawResponse),

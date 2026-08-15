@@ -6,6 +6,8 @@ const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), '
 const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
 const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
 const proxyServerSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+const sseCollectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -513,4 +515,22 @@ test('V0.29.24 adds liveness-only SSE for external Context Compact without chang
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.ok(changeLogEntries.includes('V0.29.24-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.24-實作與驗證報告.md'));
+});
+
+
+test('V0.29.25 adds phase-aware Managed Response Recovery without new ENV settings', async () => {
+  assert.match(readme, /V0\.29\.25 Managed Response Recovery/);
+  assert.match(readme, /max\(300000 ms, MANAGED_MODEL_STALL_TIMEOUT_MS × 3\)/);
+  assert.match(managedLoopSource, /DEFAULT_MAX_STALL_RECOVERY_ROUNDS\s*=\s*2/);
+  assert.match(managedLoopSource, /PROXY_MANAGED_RESPONSE_RECOVERY/);
+  assert.match(managedLoopSource, /managed_model_stall_recovery_started/);
+  assert.match(managedLoopSource, /managed_model_stall_recovery_completed/);
+  assert.match(managedLoopSource, /toolStallTimeoutMs/);
+  assert.match(sseCollectorSource, /onCheckpoint/);
+  assert.match(sseCollectorSource, /completed_blocks/);
+  assert.doesNotMatch(envExample, /^MANAGED_MODEL_TOOL_STALL_TIMEOUT_MS=/m);
+  assert.doesNotMatch(envExample, /^MAX_STALL_RECOVERY_ROUNDS=/m);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.25-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.25-實作與驗證報告.md'));
 });

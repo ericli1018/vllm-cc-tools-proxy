@@ -177,7 +177,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onBusyEvent = null, onResponseMode = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onCheckpoint = null, onBusyEvent = null, onResponseMode = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk, onBusyEvent });
   if (!response.ok) {
     const text = await response.text();
@@ -204,6 +204,7 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
   if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
     ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
     ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
+    ...(typeof onCheckpoint === 'function' ? { onCheckpoint } : {}),
   });
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
@@ -876,6 +877,7 @@ export function createProxyServer(config, dependencies = {}) {
       busyWaiting: baseBusyState.waiting,
       busyAcceptedAt: baseBusyState.acceptedAt,
       responseMode: effectiveBaseResponseMode,
+      phase: modelRoundProgress.phase || 'waiting',
     });
     const progressTiming = { mode: 'initial', startedAt: Date.now(), position: 0 };
     const onBaseBusyEvent = async (event, fields = {}) => {
@@ -1953,10 +1955,11 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
+      const upstream = (body, signal, runtimeOptions = {}) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
         onResponseChunk: onBaseResponseChunk,
         onStreamPhase: onManagedModelStreamPhase,
         onSemanticDelta: onModelSemanticDelta,
+        ...(typeof runtimeOptions.onCheckpoint === 'function' ? { onCheckpoint: runtimeOptions.onCheckpoint } : {}),
         onBusyEvent: onBaseBusyEvent,
         onResponseMode: onBaseResponseMode,
       });

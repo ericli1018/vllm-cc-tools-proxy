@@ -1180,3 +1180,80 @@ test('V0.29.11 streaming Base response still raises stall timeout after post-sta
     return true;
   });
 });
+
+test('V0.29.25 tool phase uses a longer inactivity budget than normal streaming phases', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0, responseMode: 'streaming', phase: 'tool' };
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'slow tool json' }] }, {
+    upstream: async () => {
+      setTimeout(() => {
+        activity.receivedBytes = 64;
+        activity.lastByteAt = Date.now();
+      }, 5);
+      await new Promise((resolve) => setTimeout(resolve, 45));
+      return response([{ type: 'text', text: 'tool stream completed' }]);
+    },
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 120,
+    modelStallTimeoutMs: 20,
+    modelToolStallTimeoutMs: 70,
+    modelResponseMode: 'streaming',
+    getUpstreamActivity: () => ({ ...activity }),
+  });
+  assert.equal(result.content[0].text, 'tool stream completed');
+});
+
+test('V0.29.25 recovers a stalled tool-phase response from completed blocks and drops duplicate recovered tool calls', async () => {
+  const activity = { receivedBytes: 0, lastByteAt: 0, responseMode: 'streaming', phase: 'tool' };
+  const requests = [];
+  const progress = [];
+  let calls = 0;
+  const upstream = async (request, signal, { onCheckpoint } = {}) => {
+    requests.push(structuredClone(request));
+    calls += 1;
+    if (calls === 1) {
+      setTimeout(() => {
+        activity.receivedBytes = 128;
+        activity.lastByteAt = Date.now();
+        activity.phase = 'tool';
+        onCheckpoint?.({
+          phase: 'tool',
+          completed_blocks: [
+            { type: 'text', text: 'I have prepared the first action.' },
+            { type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'cmake -S . -B build' } },
+          ],
+          partial_block: { index: 2, type: 'tool_use', id: 'bash-2', name: 'Bash' },
+        });
+      }, 5);
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    }
+    activity.receivedBytes += 64;
+    activity.lastByteAt = Date.now();
+    activity.phase = 'tool';
+    return response([
+      { type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'cmake -S . -B build' } },
+      { type: 'tool_use', id: 'bash-2', name: 'Bash', input: { command: 'cmake --build build' } },
+    ], 'tool_use');
+  };
+
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'build it' }] }, {
+    upstream,
+    executeTool: async () => ({}),
+    modelRoundTimeoutMs: 200,
+    modelStallTimeoutMs: 20,
+    modelToolStallTimeoutMs: 30,
+    modelResponseMode: 'streaming',
+    maxStallRecoveryRounds: 2,
+    getUpstreamActivity: () => ({ ...activity }),
+    onProgress: (message) => progress.push(message),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.stop_reason, 'tool_use');
+  assert.deepEqual(result.content, [
+    { type: 'text', text: 'I have prepared the first action.' },
+    { type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'cmake -S . -B build' } },
+    { type: 'tool_use', id: 'bash-2', name: 'Bash', input: { command: 'cmake --build build' } },
+  ]);
+  assert.match(JSON.stringify(requests[1].messages), /PROXY_MANAGED_RESPONSE_RECOVERY/);
+  assert.match(progress.join('\n'), /恢復|recover/i);
+});

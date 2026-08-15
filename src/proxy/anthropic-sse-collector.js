@@ -75,7 +75,7 @@ function finalizeToolInput(block, partialJson, index) {
 }
 
 export async function collectAnthropicMessageFromSse(upstream, {
-  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {}, onSemanticDelta = () => {},
+  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {}, onSemanticDelta = () => {}, onCheckpoint = () => {},
 } = {}) {
   if (!upstream?.body) throw invalidStream('vLLM Anthropic SSE response did not contain a body.');
 
@@ -87,6 +87,34 @@ export async function collectAnthropicMessageFromSse(upstream, {
   let sawMessageStop = false;
   let firstModelEventObserved = false;
   let currentStreamPhase = 'waiting';
+  const completedIndexes = new Set();
+  let openIndex = null;
+
+  const checkpointSnapshot = () => {
+    const completedBlocks = [...completedIndexes]
+      .sort((a, b) => a - b)
+      .map((index) => structuredClone(blocks.get(index)))
+      .filter(Boolean);
+    let partialBlock = null;
+    if (Number.isInteger(openIndex) && !completedIndexes.has(openIndex) && blocks.has(openIndex)) {
+      const block = blocks.get(openIndex) || {};
+      partialBlock = {
+        index: openIndex,
+        type: String(block.type || 'unknown'),
+        ...(block.id ? { id: String(block.id) } : {}),
+        ...(block.name ? { name: String(block.name) } : {}),
+      };
+    }
+    return {
+      phase: currentStreamPhase,
+      completed_blocks: completedBlocks,
+      partial_block: partialBlock,
+    };
+  };
+
+  const notifyCheckpoint = async () => {
+    try { await onCheckpoint(checkpointSnapshot()); } catch {}
+  };
 
   const notifyStreamPhase = async ({ event = '', blockType = '', deltaType = '' } = {}) => {
     const phase = (blockType === 'thinking' || deltaType === 'thinking_delta') ? 'thinking'
@@ -134,12 +162,14 @@ export async function collectAnthropicMessageFromSse(upstream, {
         throw invalidStream('vLLM Anthropic SSE content_block_start was invalid.');
       }
       blocks.set(index, structuredClone(block));
+      openIndex = index;
       if (!firstModelEventObserved) {
         firstModelEventObserved = true;
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
       await notifyStreamPhase({ event: parsed.name, blockType: block.type || '' });
       if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
+      await notifyCheckpoint();
       return;
     }
 
@@ -188,6 +218,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
         finalizeToolInput(block, toolJson.get(index), index);
         toolJson.delete(index);
       }
+      completedIndexes.add(index);
+      if (openIndex === index) openIndex = null;
+      await notifyCheckpoint();
       return;
     }
 
