@@ -1,3 +1,13 @@
+## 0.29.19 - 2026-08-15
+
+- Move collapsed Sub Agent row ownership to Claude Code native `subagentStatusLine` instead of modifying assistant `text_delta` content.
+- Add `scripts/cc-tool-proxy-subagent-statusline.js`, which renders each visible task from Claude Code `task.description` with safe `label` / `name` / `type` fallback and no network calls.
+- Remove the V0.29.17/V0.29.18 `SubagentDisplayRegistry`, prompt-fingerprint binding, `progressTitle` runtime plumbing, and repeated title/header SSE workaround.
+- Restore the clean append-only Proxy progress format for both Main and Sub Agent transcripts while preserving ping and semantic-heartbeat liveness.
+- Preserve backward-compatible stripping of historical title-anchored Proxy progress from model context.
+- Document side-by-side `statusLine` + `subagentStatusLine` Claude Code host configuration; no new Proxy ENV.
+- Keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.18 - 2026-08-15
 
 - Repeat the bound Sub Agent task title and localized progress header on every visible Sub Agent progress `text_delta`, not only the first delta.

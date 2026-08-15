@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.18 repeats the stable Sub Agent task title on every visible progress delta so Claude Code collapsed rows cannot drift to a bare progress message; V0.29.17 anchors Sub Agent visible progress to the original Agent description across tool continuations; V0.29.16 restores the V0.29.12 progress baseline and adds diagnostic-first Claude Agent UI tracing; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.19 separates Sub Agent panel-row ownership from Proxy semantic progress: Claude Code native `subagentStatusLine` renders the original task description in the main agent panel, while Proxy SSE progress remains visible inside Main/Sub Agent transcripts for liveness. V0.29.18/V0.29.17 title-prefix workarounds are retired from runtime; V0.29.16 Agent lifecycle diagnostics and the V0.29.12 progress/memory baseline remain. V0.29.11 adds Base response-mode-aware timeout handling, V0.29.10 authoritative `VLLM_BASE_MODEL` routing, and V0.29.9 same-session historical media continuation reuse.
 
 
 
@@ -9,6 +9,56 @@
 
 
 
+
+## V0.29.19 Claude Code Native Sub Agent Row Isolation
+
+V0.29.19 stops trying to protect the Claude Code Sub Agent panel row by modifying Anthropic assistant `text_delta` content. Real V0.29.18 logs confirmed that Agent identity and title binding remained intact while Claude Code still rendered Proxy progress in the collapsed Sub Agent row. The panel row and the Sub Agent transcript are therefore treated as two different UI channels.
+
+Claude Code's native `subagentStatusLine` setting owns the row body in the agent panel below the prompt. Claude Code passes a `tasks[]` array to the configured command; each task includes `id`, `name`, `type`, `status`, `description`, `label`, timing/token fields, and `cwd`. The bundled `cc-tool-proxy-subagent-statusline.js` emits one JSON line per visible task and uses `task.description` as the row body, with `label`, `name`, then `type` only as safe fallbacks. The script makes no network request and does not query the Proxy.
+
+Install both bundled status-line clients on the Claude Code host:
+
+```bash
+cp scripts/cc-tool-proxy-statusline.js ~/.claude/cc-tool-proxy-statusline.js
+cp scripts/cc-tool-proxy-subagent-statusline.js ~/.claude/cc-tool-proxy-subagent-statusline.js
+chmod +x ~/.claude/cc-tool-proxy-statusline.js ~/.claude/cc-tool-proxy-subagent-statusline.js
+```
+
+Merge the following keys into `~/.claude/settings.json` without deleting unrelated settings:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "node ~/.claude/cc-tool-proxy-statusline.js",
+    "refreshInterval": 1,
+    "padding": 0
+  },
+  "subagentStatusLine": {
+    "type": "command",
+    "command": "node ~/.claude/cc-tool-proxy-subagent-statusline.js"
+  }
+}
+```
+
+The resulting ownership is intentionally split:
+
+```text
+Claude Code main agent panel row
+  -> native subagentStatusLine
+  -> original task.description
+
+Main/Sub Agent transcript progress
+  -> Proxy Anthropic SSE progress
+  -> 目前處理進度：...
+
+Transport liveness
+  -> existing ping + semantic heartbeat
+```
+
+V0.29.17/V0.29.18 `SubagentDisplayRegistry` and runtime `progressTitle` prefixing are removed. Main and Sub Agent SSE progress use the same clean append-only format again. Backward-compatible `stripProgressHistory()` recognition for historical V0.29.17/V0.29.18 title-anchored progress is retained so old conversation history does not leak Proxy UI text back into the Base model.
+
+`subagentStatusLine` is a Claude Code host setting, so installing the Proxy ZIP alone cannot activate the custom row renderer; the script must be copied and the setting merged on the Claude Code host. Claude Code applies the same trust / `disableAllHooks` gates to this feature as to `statusLine`; if `disableAllHooks` is enabled, the native row override will not run. No new Proxy ENV variables are introduced. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.18 Sub Agent Every-Delta Title Anchoring
 

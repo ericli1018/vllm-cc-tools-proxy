@@ -3,8 +3,7 @@ import crypto from 'node:crypto';
 import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
 import { hasProgressHistory, stripProgressHistory, ProgressStream, formatSseEvent } from '../proxy/progress.js';
-import { claudeAgentId, describeClaudeAgentRequest, describeClaudeAgentHandoff } from '../proxy/claude-agent-diagnostics.js';
-import { SubagentDisplayRegistry } from '../proxy/subagent-display-registry.js';
+import { describeClaudeAgentRequest, describeClaudeAgentHandoff } from '../proxy/claude-agent-diagnostics.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { renderManagedToolResult } from '../proxy/web-result-contract.js';
@@ -540,7 +539,6 @@ export function createProxyServer(config, dependencies = {}) {
   };
   const webToolDiagnosticController = dependencies.webToolDiagnosticController || createWebToolDiagnosticController(webToolDiagnosticConfig);
   const clientWebToolLifecycleRegistry = dependencies.clientWebToolLifecycleRegistry || new ClientWebToolLifecycleRegistry();
-  const subagentDisplayRegistry = dependencies.subagentDisplayRegistry || new SubagentDisplayRegistry();
   const webToolDiagnosticTraceStore = webToolDiagnosticConfig.trace
     ? (dependencies.webToolDiagnosticTraceStore || new WebToolDiagnosticTraceStore({ rootDir: webToolDiagnosticConfig.traceDir }))
     : null;
@@ -646,7 +644,6 @@ export function createProxyServer(config, dependencies = {}) {
     let lastModelOutputDeltaAt = 0;
     let claudeAgentRequestContext = null;
     let clientSessionId = '';
-    let subagentProgressBinding = { title: '', source: '', title_fingerprint: '' };
     let progressFirstVisibleAt = 0;
     const observeProgressWrite = (entry = {}) => {
       if (progressFirstVisibleAt || entry.kind !== 'progress_block_start') return;
@@ -661,10 +658,6 @@ export function createProxyServer(config, dependencies = {}) {
       });
     };
     const observeAgentHandoff = (response) => {
-      const registeredTitles = subagentDisplayRegistry.recordHandoffs(clientSessionId, response);
-      if (registeredTitles > 0) {
-        log(config, 'info', 'subagent_display_handoff_registered', { requestId, count: registeredTitles });
-      }
       const handoffs = describeClaudeAgentHandoff(response);
       if (handoffs.length === 0) return;
       log(config, 'info', 'claude_agent_handoff_observed', {
@@ -1095,22 +1088,6 @@ export function createProxyServer(config, dependencies = {}) {
       clientSessionId = claudeCodeSessionId(req.headers, original);
       if (messagesPath === '/v1/messages') {
         claudeAgentRequestContext = describeClaudeAgentRequest(req.headers, original);
-        if (claudeAgentRequestContext.context === 'subagent') {
-          subagentProgressBinding = subagentDisplayRegistry.bindRequest({
-            sessionId: clientSessionId,
-            agentId: claudeAgentId(req.headers),
-            request: original,
-          });
-          if (subagentProgressBinding.title) {
-            log(config, 'info', 'subagent_progress_title_bound', {
-              requestId,
-              agent_id_fingerprint: claudeAgentRequestContext.agent_id_fingerprint,
-              title_fingerprint: subagentProgressBinding.title_fingerprint,
-              title_chars: subagentProgressBinding.title.length,
-              source: subagentProgressBinding.source,
-            });
-          }
-        }
         log(config, 'info', 'claude_agent_request_observed', {
           requestId,
           agent_context: claudeAgentRequestContext.context,
@@ -1191,7 +1168,6 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
-            progressTitle: subagentProgressBinding.title,
             onWrite: observeProgressWrite,
           });
           await progress.open();
@@ -1447,7 +1423,6 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
-            progressTitle: subagentProgressBinding.title,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -1717,7 +1692,6 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
-            progressTitle: subagentProgressBinding.title,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -1760,7 +1734,6 @@ export function createProxyServer(config, dependencies = {}) {
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
           locale: config.responseLanguage,
-          progressTitle: subagentProgressBinding.title,
           getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {

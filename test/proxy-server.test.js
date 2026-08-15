@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.18', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.19', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3093,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.18/);
+  assert.match(first, /VERSION\s+0\.29\.19/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.18');
+  assert.equal(payload.version, '0.29.19');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.18/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.19/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3820,7 +3820,7 @@ test('V0.29.16 records Agent UI lifecycle diagnostics while preserving V0.29.12 
   assert.doesNotMatch(serializedLogs, /child-agent-secret-id|parent-agent-secret-id|Analyze memory lifecycle|toolu-agent-secret/);
 });
 
-test('V0.29.17 keeps a Sub Agent title anchored across a WebSearch-style continuation while Main progress stays unchanged', async (t) => {
+test('V0.29.19 keeps Main and Sub Agent semantic progress clean across a WebSearch-style continuation', async (t) => {
   const logs = [];
   let calls = 0;
   const vllm = await startJsonServer(async (req, res) => {
@@ -3853,7 +3853,7 @@ test('V0.29.17 keeps a Sub Agent title anchored across a WebSearch-style continu
   const proxyUrl = await listen(proxy);
   t.after(() => vllm.server.close());
   t.after(() => proxy.close());
-  const sessionHeaders = { 'content-type': 'application/json', 'x-claude-code-session-id': 'agent-title-session' };
+  const sessionHeaders = { 'content-type': 'application/json', 'x-claude-code-session-id': 'agent-native-row-session' };
 
   const parent = await fetch(`${proxyUrl}/v1/messages`, {
     method: 'POST', headers: sessionHeaders,
@@ -3873,7 +3873,8 @@ test('V0.29.17 keeps a Sub Agent title anchored across a WebSearch-style continu
     body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'research web search behavior exactly' }] }),
   });
   const child1Wire = await child1.text();
-  assert.match(child1Wire, /查證 WebSearch 行為\\n目前處理進度：/);
+  assert.match(child1Wire, /目前處理進度：/);
+  assert.doesNotMatch(child1Wire, /查證 WebSearch 行為\\n目前處理進度：/);
 
   const child2 = await fetch(`${proxyUrl}/v1/messages`, {
     method: 'POST', headers: childHeaders,
@@ -3884,12 +3885,13 @@ test('V0.29.17 keeps a Sub Agent title anchored across a WebSearch-style continu
     ] }),
   });
   const child2Wire = await child2.text();
-  assert.match(child2Wire, /查證 WebSearch 行為\\n目前處理進度：/);
+  assert.match(child2Wire, /目前處理進度：/);
+  assert.doesNotMatch(child2Wire, /查證 WebSearch 行為\\n目前處理進度：/);
 
-  const binds = logs.filter((entry) => entry.event === 'subagent_progress_title_bound');
-  assert.ok(binds.length >= 2);
-  assert.equal(binds[0].source, 'prompt_match');
-  assert.equal(binds.at(-1).source, 'agent_id');
+  const childRequests = logs.filter((entry) => entry.event === 'claude_agent_request_observed' && entry.agent_context === 'subagent');
+  assert.equal(childRequests.length, 2);
+  assert.equal(logs.some((entry) => entry.event === 'subagent_progress_title_bound'), false);
+  assert.equal(logs.some((entry) => entry.event === 'subagent_display_handoff_registered'), false);
   const serialized = JSON.stringify(logs);
   assert.doesNotMatch(serialized, /查證 WebSearch 行為|research web search behavior exactly|child-agent-stable-id/);
 });

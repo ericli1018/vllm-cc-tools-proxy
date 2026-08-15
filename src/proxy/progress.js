@@ -98,7 +98,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, progressTitle = '',
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -112,7 +112,6 @@ export class ProgressStream {
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
-    this.progressTitle = String(progressTitle || '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120);
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -268,15 +267,10 @@ export class ProgressStream {
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${this.progressTitle ? `${this.progressTitle}\n` : ''}${progressBlockHeader(this.locale)}\n${message}` },
+          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${message}` },
         }), metadata);
       } else {
-        const deltaText = this.progressTitle
-          ? `
-${this.progressTitle}
-${progressBlockHeader(this.locale)}
-${message}`
-          : `
+        const deltaText = `
 ${message}`;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',

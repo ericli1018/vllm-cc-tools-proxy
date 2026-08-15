@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.18'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.18'
+test "$(node -p "require('./package.json').version")" = '0.29.19'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.19'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.18'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.19'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -768,32 +768,39 @@ echo 'Verification complete.'
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
-# V0.29.17 Sub Agent Title-Anchored Progress
+# V0.29.17 / V0.29.18 historical title-prefix compatibility artifacts
  test -f V0.29.17-更新說明.md
  test -f V0.29.17-實作與驗證報告.md
- test -f src/proxy/subagent-display-registry.js
- test -f test/subagent-display-registry.test.js
- grep -Fq 'V0.29.17 Sub Agent Title-Anchored Progress' README.md
- grep -Fq 'SubagentDisplayRegistry' src/services/proxy-server.js
- grep -Fq 'progressTitle: subagentProgressBinding.title' src/services/proxy-server.js
- grep -Fq 'subagent_progress_title_bound' src/services/proxy-server.js
- grep -Fq 'this.progressTitle' src/proxy/progress.js
- grep -Fq 'V0.29.17 binds an Agent description to the child agent id by exact prompt and reuses it for continuations' test/subagent-display-registry.test.js
- grep -Fq 'V0.29.17 title-anchored subagent progress keeps the Agent description on the first visible line' test/progress.test.js
- grep -Fq 'V0.29.17 history stripping removes title-anchored progress blocks from model context' test/progress.test.js
- grep -Fq 'V0.29.17 keeps a Sub Agent title anchored across a WebSearch-style continuation while Main progress stays unchanged' test/proxy-server.test.js
- grep -Fq "pipelineVersion: 'media-v8'" src/config.js
- grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
- grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
-
-
-# V0.29.18 Sub Agent Every-Delta Title Anchoring
  test -f V0.29.18-更新說明.md
  test -f V0.29.18-實作與驗證報告.md
+ grep -Fq 'V0.29.17 Sub Agent Title-Anchored Progress' README.md
  grep -Fq 'V0.29.18 Sub Agent Every-Delta Title Anchoring' README.md
- grep -Fq 'const deltaText = this.progressTitle' src/proxy/progress.js
- grep -Fq 'V0.29.18 title-anchored Sub Agent progress repeats the stable title and header on every visible delta' test/progress.test.js
- grep -Fq 'V0.29.18 Main Agent progress keeps the V0.29.17 append-only format without repeated headers' test/progress.test.js
+ grep -Fq 'V0.29.19 history stripping remains backward-compatible with V0.29.17/18 title-anchored progress blocks' test/progress.test.js
+ test ! -f src/proxy/subagent-display-registry.js
+ test ! -f test/subagent-display-registry.test.js
+ ! grep -Fq 'SubagentDisplayRegistry' src/services/proxy-server.js
+ ! grep -Fq 'subagent_progress_title_bound' src/services/proxy-server.js
+ ! grep -Fq 'subagent_display_handoff_registered' src/services/proxy-server.js
+ ! grep -Fq 'progressTitle:' src/services/proxy-server.js
+ ! grep -Fq 'this.progressTitle' src/proxy/progress.js
+
+# V0.29.19 Claude Code Native Sub Agent Row Isolation
+ test -f V0.29.19-更新說明.md
+ test -f V0.29.19-實作與驗證報告.md
+ test -f scripts/cc-tool-proxy-subagent-statusline.js
+ test -x scripts/cc-tool-proxy-subagent-statusline.js
+ grep -Fq 'V0.29.19 Claude Code Native Sub Agent Row Isolation' README.md
+ grep -Fq 'subagentStatusLine' README.md
+ grep -Fq 'cc-tool-proxy-subagent-statusline.js' README.md
+ grep -Fq 'task.description' README.md
+ grep -Fq 'V0.29.19 subagentStatusLine renders the Claude Code task description for each visible row' test/subagent-statusline-client.test.js
+ grep -Fq 'V0.29.19 semantic progress ignores the retired progressTitle compatibility option' test/progress.test.js
+ grep -Fq 'V0.29.19 keeps Main and Sub Agent semantic progress clean across a WebSearch-style continuation' test/proxy-server.test.js
+ grep -Fq 'V0.29.19 documents native subagentStatusLine row isolation alongside existing Proxy statusLine' test/deployment.test.js
+ ! grep -Fq 'fetch(' scripts/cc-tool-proxy-subagent-statusline.js
+ ! grep -Fq 'CC_TOOL_PROXY_URL' scripts/cc-tool-proxy-subagent-statusline.js
+ ! grep -Fq 'ANTHROPIC_BASE_URL' scripts/cc-tool-proxy-subagent-statusline.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+

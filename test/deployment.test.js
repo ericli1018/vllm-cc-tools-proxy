@@ -452,3 +452,16 @@ test('README documents V0.29.17 Sub Agent title-anchored progress without disabl
   assert.match(readme, /WebSearch\/tool-result continuations/);
   assert.match(readme, /Main Agent progress formatting is unchanged/);
 });
+
+test('V0.29.19 documents native subagentStatusLine row isolation alongside existing Proxy statusLine', async () => {
+  const subagentStatusline = await fs.readFile(new URL('../scripts/cc-tool-proxy-subagent-statusline.js', import.meta.url), 'utf8');
+  assert.match(readme, /V0\.29\.19 Claude Code Native Sub Agent Row Isolation/);
+  assert.match(readme, /subagentStatusLine/);
+  assert.match(readme, /cc-tool-proxy-subagent-statusline\.js/);
+  assert.match(readme, /task\.description/);
+  assert.match(readme, /statusLine[\s\S]*subagentStatusLine/);
+  assert.match(subagentStatusline, /Array\.isArray\(input\?\.tasks\)/);
+  assert.match(subagentStatusline, /description/);
+  assert.doesNotMatch(subagentStatusline, /fetch\(|CC_TOOL_PROXY_URL|ANTHROPIC_BASE_URL/);
+  assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
+});
