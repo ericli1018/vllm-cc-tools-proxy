@@ -1,3 +1,11 @@
+## 0.29.15 - 2026-08-15
+
+- Make Anthropic SSE transport liveness unconditional for Parent/Main and Sub Agent streaming requests: immediate `ping` plus recurring `PROGRESS_PING_INTERVAL_MS` pings remain active even when semantic progress is deferred.
+- Replace V0.29.14 blanket Parent semantic suppression with a deferred gate. Direct ordinary text/non-Agent actions release the latest visible progress; Agent/Task handoff discards pending synthetic text so the native tool_use stays at index 0.
+- Keep thinking blocks non-decisive and keep Proxy-managed internal loops deferred until terminal disposition, preventing later Agent handoff titles from being polluted.
+- Preserve visible `目前處理進度` inside Sub Agent execution views and keep startup-banner ownership with the Parent session.
+- Add no new ENV and leave persistent cache generations unchanged.
+
 ## 0.29.14 - 2026-08-15
 
 - Correct V0.29.13's over-broad sub-agent progress suppression by restoring semantic `目前處理進度：` output inside Claude Code sub-agent execution requests identified by `x-claude-code-agent-id` / `x-claude-code-parent-agent-id`.

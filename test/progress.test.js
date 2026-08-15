@@ -639,6 +639,61 @@ test('V0.29.12 ProgressStream dispose clears every timer, pending state, and is 
   assert.equal(progress.res, null);
 });
 
+test('V0.29.15 deferred semantic progress keeps transport heartbeat active without opening assistant text', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    semanticProgressDeferred: true,
+    visibleAfterMs: 0,
+    pingIntervalMs: 10,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.update('正在請主模型規劃下一步…', { force: true, details: { phase: 'managed_model_round_start' } });
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  const stream = response.chunks.join('');
+  assert.equal(progress.visible, false);
+  assert.match(stream, /event: ping/);
+  assert.ok((stream.match(/event: ping/g) || []).length >= 3);
+  assert.doesNotMatch(stream, /目前處理進度：/);
+  assert.doesNotMatch(stream, /"content_block"\s*:\s*\{"type":"text"/);
+  await progress.dispose();
+});
+
+test('V0.29.15 releasing deferred semantic progress flushes the latest state while suppression drops it', async () => {
+  const releasedResponse = new FakeResponse();
+  const released = new ProgressStream(releasedResponse, {
+    semanticProgressDeferred: true,
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+  });
+  await released.open();
+  await released.update('第一個狀態', { force: true, details: { phase: 'one' } });
+  await released.update('最新狀態', { force: true, details: { phase: 'two' } });
+  assert.equal(released.visible, false);
+  await released.releaseSemanticProgress();
+  const releasedStream = releasedResponse.chunks.join('');
+  assert.equal(released.visible, true);
+  assert.match(releasedStream, /目前處理進度：/);
+  assert.match(releasedStream, /最新狀態/);
+  assert.doesNotMatch(releasedStream, /第一個狀態/);
+  await released.dispose();
+
+  const suppressedResponse = new FakeResponse();
+  const suppressed = new ProgressStream(suppressedResponse, {
+    semanticProgressDeferred: true,
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+  });
+  await suppressed.open();
+  await suppressed.update('不應顯示', { force: true, details: { phase: 'pending' } });
+  await suppressed.suppressSemanticProgress();
+  const suppressedStream = suppressedResponse.chunks.join('');
+  assert.equal(suppressed.visible, false);
+  assert.match(suppressedStream, /event: ping/);
+  assert.doesNotMatch(suppressedStream, /不應顯示/);
+  await suppressed.dispose();
+});
+
 test('V0.29.13 silent semantic progress keeps state and liveness without creating assistant text content', async () => {
   const response = new FakeResponse();
   const states = [];

@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.14', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.15', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3093,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.14/);
+  assert.match(first, /VERSION\s+0\.29\.15/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.14');
+  assert.equal(payload.version, '0.29.15');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.14/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.15/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3825,9 +3825,12 @@ test('V0.29.14 parent request with Agent tool keeps Agent tool_use at index zero
   assert.match(subStream, /"index":0,"content_block":\{"type":"text"/);
   assert.match(subStream, /"index":1,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
 
-  const isolated = logs.find((entry) => entry.event === 'parent_agent_progress_isolated');
-  assert.equal(isolated?.source, 'subagent_dispatch_tool');
-  assert.equal(isolated?.semantic_progress_enabled, false);
+  const deferred = logs.find((entry) => entry.event === 'parent_agent_progress_deferred');
+  assert.equal(deferred?.source, 'subagent_dispatch_tool');
+  assert.equal(deferred?.semantic_progress_enabled, true);
+  assert.equal(deferred?.semantic_progress_deferred, true);
+  assert.equal(deferred?.transport_keepalive_enabled, true);
+  assert.ok(logs.some((entry) => entry.event === 'parent_agent_progress_suppressed_for_handoff'));
   const enabled = logs.find((entry) => entry.event === 'subagent_progress_enabled');
   assert.equal(enabled?.source, 'claude_code_agent_headers');
   assert.equal(enabled?.semantic_progress_enabled, true);
@@ -3934,4 +3937,112 @@ test('V0.29.14 legacy Task dispatch tool also isolates parent semantic progress'
   const stream = await response.text();
   assert.doesNotMatch(stream, /目前處理進度：/);
   assert.match(stream, /"index":0,"content_block":\{"type":"tool_use","id":"task-call","name":"Task"/);
+});
+
+test('V0.29.15 parent Agent handoff keeps transport heartbeat active and preserves Agent at index zero', async (t) => {
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+    await new Promise((resolve) => setTimeout(resolve, 35));
+    res.end([
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"agent-call","name":"Agent","input":{}}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"description\\":\\"Inspect memory lifecycle\\",\\"prompt\\":\\"Inspect\\",\\"subagent_type\\":\\"Explore\\"}"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    progressVisibleAfterMs: 0,
+    progressPingIntervalMs: 10,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'delegate' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.ok((stream.match(/event: ping/g) || []).length >= 3);
+  assert.doesNotMatch(stream, /目前處理進度：/);
+  assert.match(stream, /"index":0,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
+  assert.doesNotMatch(stream, /"index":1,"content_block":\{"type":"tool_use"/);
+});
+
+test('V0.29.15 parent with Agent capability releases visible progress when the direct response is ordinary text', async (t) => {
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '', '',
+    ].join('\n'));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    res.end([
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ordinary answer"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    progressVisibleAfterMs: 0,
+    progressPingIntervalMs: 10,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'answer directly' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /目前處理進度：/);
+  assert.match(stream, /ordinary answer/);
+  assert.match(stream, /"index":0,"content_block":\{"type":"text","text":""\}/);
+  assert.match(stream, /"index":1,"content_block":\{"type":"text","text":""\}/);
+  assert.ok(logs.some((entry) => entry.event === 'parent_agent_progress_released'));
 });

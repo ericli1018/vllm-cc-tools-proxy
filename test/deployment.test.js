@@ -456,3 +456,14 @@ test('README documents V0.29.14 parent label isolation with sub-agent execution 
   assert.match(readme, /startup banner/i);
   assert.match(readme, /no new ENV|No new ENV/i);
 });
+
+
+test('README documents V0.29.15 always-on transport liveness with deferred parent semantic progress', () => {
+  assert.match(readme, /V0\.29\.15.*Transport.*Liveness|V0\.29\.15.*Parent.*Progress/is);
+  assert.match(readme, /event:\s*ping|Anthropic.*ping/is);
+  assert.match(readme, /PROGRESS_PING_INTERVAL_MS/);
+  assert.match(readme, /Agent.*index 0|index 0.*Agent/is);
+  assert.match(readme, /deferred.*semantic progress|semantic progress.*deferred/is);
+  assert.match(readme, /Sub Agent.*目前處理進度|目前處理進度.*Sub Agent/is);
+  assert.match(readme, /no new ENV|No new ENV/i);
+});
