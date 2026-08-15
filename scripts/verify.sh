@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.23'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.23'
+test "$(node -p "require('./package.json').version")" = '0.29.24'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.24'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.23'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.24'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -866,6 +866,29 @@ echo 'Verification complete.'
  test ! -f test/subagent-statusline-client.test.js
  test ! -f src/proxy/subagent-display-registry.js
  ! grep -Fq 'progressTitle:' src/services/proxy-server.js
+ grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
+ grep -Fq "status_owner: 'main'" src/services/proxy-server.js
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+
+
+# V0.29.24 External Context Compact Liveness-Only SSE
+ test -f change_log/V0.29.24-更新說明.md
+ test -f change_log/V0.29.24-實作與驗證報告.md
+ test ! -f CHANGELOG.md
+ ! find . -maxdepth 1 -type f \( -name 'V*-更新說明.md' -o -name 'V*-實作與驗證報告.md' -o -name 'V*-診斷說明.md' \) | grep -q .
+ grep -Fq 'V0.29.24 Context Compact Liveness-Only SSE' README.md
+ grep -Fq 'async function openContextCompactLiveness' src/services/proxy-server.js
+ grep -Fq "formatSseEvent('ping', { type: 'ping' })" src/services/proxy-server.js
+ grep -Fq 'context_compact_client_stream_open' src/services/proxy-server.js
+ grep -Fq 'context_compact_client_stream_stop' src/services/proxy-server.js
+ grep -Fq "compactLiveness?.stop('external_compact_complete')" src/services/proxy-server.js
+ grep -Fq "compactLiveness?.stop('base_compact_fallback')" src/services/proxy-server.js
+ grep -Fq 'V0.29.24 streaming external compact opens ping-only SSE before the delayed summary' test/proxy-server.test.js
+ grep -Fq 'V0.29.24 streaming external compact keeps Base compact fallback after ping-only SSE has opened' test/proxy-server.test.js
+ grep -Fq 'V0.29.24 adds liveness-only SSE for external Context Compact without changing Main or Sub Agent progress policy' test/deployment.test.js
+ grep -Fq "visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent'" src/services/proxy-server.js
  grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
  grep -Fq "status_owner: 'main'" src/services/proxy-server.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js

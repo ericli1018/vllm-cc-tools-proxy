@@ -453,18 +453,72 @@ function syntheticTextResponse(model, text) {
   };
 }
 
+async function openContextCompactLiveness(res, {
+  pingIntervalMs = 5000,
+  drainTimeoutMs = 0,
+  onEvent = async () => {},
+} = {}) {
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-store',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+  }
+  let stopped = false;
+  let timer = null;
+  let pingCount = 0;
+  let queue = Promise.resolve();
+  const writePing = () => {
+    queue = queue.catch(() => {}).then(async () => {
+      if (stopped || res.destroyed || res.writableEnded) return;
+      await writeChunk(res, formatSseEvent('ping', { type: 'ping' }), { drainTimeoutMs });
+      pingCount += 1;
+      try { await onEvent('context_compact_client_ping', { ping_count: pingCount }); } catch {}
+    });
+    return queue;
+  };
+  await writePing();
+  try {
+    await onEvent('context_compact_client_stream_open', {
+      ping_interval_ms: pingIntervalMs,
+      ping_count: pingCount,
+    });
+  } catch {}
+  timer = setInterval(() => { writePing().catch(() => {}); }, pingIntervalMs);
+  timer.unref?.();
+  return {
+    async stop(reason = 'complete') {
+      if (stopped) return;
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+      try { await queue; } catch {}
+      try {
+        await onEvent('context_compact_client_stream_stop', {
+          reason,
+          ping_count: pingCount,
+        });
+      } catch {}
+    },
+  };
+}
+
 async function sendContextCompactResult(res, request, summary, { drainTimeoutMs = 0 } = {}) {
   const response = syntheticTextResponse(request?.model, summary);
   if (request?.stream !== true) {
     sendJson(res, 200, response);
     return;
   }
-  res.writeHead(200, {
-    'content-type': 'text/event-stream; charset=utf-8',
-    'cache-control': 'no-cache, no-store',
-    connection: 'keep-alive',
-    'x-accel-buffering': 'no',
-  });
+  if (!res.headersSent) {
+    res.writeHead(200, {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache, no-store',
+      connection: 'keep-alive',
+      'x-accel-buffering': 'no',
+    });
+  }
   const events = [
     formatSseEvent('message_start', {
       type: 'message_start',
@@ -629,6 +683,7 @@ export function createProxyServer(config, dependencies = {}) {
     const requestObservedAt = Date.now();
     const abortController = new AbortController();
     let progress = null;
+    let compactLiveness = null;
     let completed = false;
     let preparedMedia = null;
     let mediaProgress = null;
@@ -1299,6 +1354,18 @@ export function createProxyServer(config, dependencies = {}) {
             reason: 'claude_code_context_compact',
             provider: config.contextCompact.provider,
           });
+          if (original.stream === true) {
+            compactLiveness = await openContextCompactLiveness(res, {
+              pingIntervalMs: config.progressPingIntervalMs || 5000,
+              drainTimeoutMs: config.sseDrainTimeoutMs || 0,
+              onEvent: async (event, fields) => log(
+                config,
+                event === 'context_compact_client_ping' ? 'debug' : 'info',
+                event,
+                { requestId, ...fields },
+              ),
+            });
+          }
           let compactResult = null;
           try {
             compactResult = await runContextCompact(compactRequest, {
@@ -1316,6 +1383,8 @@ export function createProxyServer(config, dependencies = {}) {
             });
           }
           if (compactResult) {
+            await compactLiveness?.stop('external_compact_complete');
+            compactLiveness = null;
             await sendContextCompactResult(res, original, compactResult.summary, {
               drainTimeoutMs: config.sseDrainTimeoutMs || 0,
             });
@@ -1324,6 +1393,8 @@ export function createProxyServer(config, dependencies = {}) {
           }
         }
 
+        await compactLiveness?.stop('base_compact_fallback');
+        compactLiveness = null;
         log(config, 'info', 'route_decision', {
           requestId, method: req.method, path: url.pathname,
           decision: 'context_compact_bypass',
@@ -2129,6 +2200,7 @@ export function createProxyServer(config, dependencies = {}) {
       else res.destroy(error);
       completed = true;
     } finally {
+      try { await compactLiveness?.stop?.('request_finalize'); } catch {}
       try { await progress?.dispose?.(); } catch {}
       runtimeTelemetry.setBusy(requestId, false);
       releaseRuntimeRequest?.();

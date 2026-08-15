@@ -1,6 +1,14 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.23 makes Sub Agent progress **liveness-only**: Main Agent keeps the existing visible assistant `text` / `text_delta` progress, while Sub Agent requests keep the SSE transport alive with `ping` events but emit no Proxy-owned visible progress block. This prevents `目前處理進度：...` from becoming Claude Code's Sub Agent row description. The global `statusLine` remains Main-owned.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.24 adds **Context Compact liveness-only SSE**: when an external Ollama/vLLM compact worker is slow, the Proxy immediately opens the Claude Code stream and sends `ping` events without visible progress text until the compact summary or Base fallback is ready. V0.29.23 Sub Agent liveness-only behavior remains unchanged.
+
+## V0.29.24 Context Compact Liveness-Only SSE
+
+V0.29.24 closes the transport-liveness gap on the external Context Compact route. For `stream:true` compact requests, the Proxy now opens an Anthropic SSE response immediately and emits a ping-only keepalive before waiting for the external Ollama/vLLM compact backend. The keepalive uses the existing `PROGRESS_PING_INTERVAL_MS` cadence and never emits `目前處理進度：`, `text_delta`, or `thinking_delta` progress.
+
+The compact liveness stream intentionally does **not** send `message_start` early. When the external compact backend succeeds, keepalive stops and the normal compact `message_start` / summary / `message_stop` sequence follows. When the external compact backend fails, keepalive stops and the existing Base compact fallback SSE is piped into the already-open response. Non-stream compact behavior is unchanged.
+
+Main Agent visible progress and V0.29.23 Sub Agent liveness-only policy are unchanged. No new ENV variables are introduced. Release records remain under `change_log/`; cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.23 Sub Agent Liveness-Only Progress
 

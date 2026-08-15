@@ -499,3 +499,18 @@ test('V0.29.23 makes Sub Agent progress liveness-only while Main keeps visible p
   await assert.rejects(fs.access(new URL('../scripts/cc-tool-proxy-subagent-statusline.js', import.meta.url)));
   assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
 });
+
+
+test('V0.29.24 adds liveness-only SSE for external Context Compact without changing Main or Sub Agent progress policy', async () => {
+  assert.match(readme, /V0\.29\.24 Context Compact Liveness-Only SSE/);
+  assert.match(readme, /ping-only keepalive|ping-only SSE/is);
+  assert.match(readme, /does not send `message_start` early|does \*\*not\*\* send `message_start` early/is);
+  assert.match(proxyServerSource, /openContextCompactLiveness/);
+  assert.match(proxyServerSource, /context_compact_client_stream_open/);
+  assert.match(proxyServerSource, /context_compact_client_stream_stop/);
+  assert.match(proxyServerSource, /formatSseEvent\('ping', \{ type: 'ping' \}\)/);
+  assert.match(proxyServerSource, /visibleProgressEnabled:\s*claudeAgentRequestContext\?\.context !== 'subagent'/);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.24-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.24-實作與驗證報告.md'));
+});

@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.23', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.24', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -2989,6 +2989,88 @@ test('V0.2.28.10 Ollama external compact uses native think=false and returns Ant
   assert.ok(logs.some((entry) => entry.event === 'context_compact_backend_response' && entry.backend_prompt_tokens === 1234));
 });
 
+test('V0.29.24 streaming external compact opens ping-only SSE before the delayed summary', async (t) => {
+  const compact = await startJsonServer(async (req, res) => {
+    await read(req);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: { role: 'assistant', content: 'COMPACT_LIVENESS_OK' }, prompt_eval_count: 100, eval_count: 20 }));
+  });
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: 'http://127.0.0.1:9',
+    progressPingIntervalMs: 25,
+    contextCompact: { enabled: true, provider: 'ollama', url: compact.url, model: 'compact-model', apiKey: '', think: false },
+    logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy); t.after(() => compact.server.close()); t.after(() => proxy.close());
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far. This summary should preserve technical details essential for continuing development work without losing context. Please provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', stream: true, messages: [{ role: 'user', content: compactPrompt }] }),
+  });
+  const wire = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(wire, /^event: ping\ndata: \{"type":"ping"\}\n\n/);
+  assert.match(wire, /COMPACT_LIVENESS_OK/);
+  assert.doesNotMatch(wire, /目前處理進度/);
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_client_stream_open'));
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_client_stream_stop' && entry.reason === 'external_compact_complete'));
+});
+
+test('V0.29.24 streaming external compact keeps Base compact fallback after ping-only SSE has opened', async (t) => {
+  const compact = await startJsonServer(async (req, res) => {
+    await read(req);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    res.writeHead(503, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'down' }));
+  });
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    assert.equal(payload.stream, true);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"base-compact","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"BASE_STREAM_COMPACT_OK"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    progressPingIntervalMs: 20,
+    contextCompact: { enabled: true, provider: 'ollama', url: compact.url, model: 'compact-model', apiKey: '', think: false },
+    logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy); t.after(() => compact.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+  const compactPrompt = `Your task is to create a detailed summary of the conversation so far. This summary should preserve technical details essential for continuing development work without losing context. Please provide your summary based on the conversation so far.`;
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'claude-sonnet-4-6', stream: true, messages: [{ role: 'user', content: compactPrompt }] }),
+  });
+  const wire = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(wire, /^event: ping\ndata: \{"type":"ping"\}\n\n/);
+  assert.match(wire, /BASE_STREAM_COMPACT_OK/);
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_backend_fallback' && entry.reason === 'http_503'));
+  assert.ok(logs.some((entry) => entry.event === 'context_compact_client_stream_stop' && entry.reason === 'base_compact_fallback'));
+});
+
 test('V0.2.28.10 vLLM external compact uses chat_template_kwargs and non-stream Anthropic response', async (t) => {
   let compactObserved;
   const compact = await startJsonServer(async (req, res) => {
@@ -3093,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.23/);
+  assert.match(first, /VERSION\s+0\.29\.24/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.23');
+  assert.equal(payload.version, '0.29.24');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.23/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.24/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
