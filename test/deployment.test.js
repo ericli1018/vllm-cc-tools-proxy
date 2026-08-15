@@ -436,3 +436,13 @@ test('README documents V0.29.12 runtime memory lifecycle hardening', () => {
   assert.match(readme, /visual-v18/);
   assert.match(readme, /evidence-v14/);
 });
+
+
+test('README documents V0.29.13 Claude Code sub-agent UI isolation', () => {
+  assert.match(readme, /V0\.29\.13 Claude Code Sub-Agent UI Isolation/);
+  assert.match(readme, /x-claude-code-agent-id/);
+  assert.match(readme, /x-claude-code-parent-agent-id/);
+  assert.match(readme, /statusLine/);
+  assert.match(readme, /index 0|index=0/);
+  assert.match(readme, /no new ENV|No new ENV/i);
+});

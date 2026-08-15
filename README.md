@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.13 isolates Proxy progress from Claude Code sub-agent semantic output; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
@@ -9,6 +9,16 @@
 
 
 
+
+## V0.29.13 Claude Code Sub-Agent UI Isolation
+
+V0.29.13 prevents Proxy-generated progress text from replacing or obscuring Claude Code's native sub-agent display label. Current Claude Code sub-agent API requests carry `x-claude-code-agent-id` and `x-claude-code-parent-agent-id`. The Proxy now treats the presence of either dedicated agent header as the authoritative sub-agent fingerprint; it does not infer agent identity from tool declarations, model aliases, prompt text, system text, or the shared Claude Code session id.
+
+For a detected sub-agent streaming request, `ProgressStream` enters presentation-only silent semantic mode. The Proxy still opens the Anthropic SSE message, sends transport pings, maintains usage accounting, records managed progress/state transitions, updates runtime telemetry, and remains visible through Claude Code native `statusLine`. It does **not** create the synthetic assistant `type=text` block whose first line is `目前處理進度：`. The first real model text/thinking/tool block therefore remains content `index=0`, preserving Claude Code's own Agent/sub-agent UI semantics and the original `Agent.input.description`.
+
+Main-agent requests without the Claude Code agent headers retain the existing V0.29.12 behavior, including visible SSE progress fallback. A silent sub-agent request also does not consume the one-time per-session startup banner claim, so the parent/main session can still receive the banner normally. Safe `subagent_progress_isolated` diagnostics record only request-scoped header presence flags and the fixed detection source; agent ids, prompts, tool arguments, and response text are not logged by this event.
+
+No new ENV variable is added. Persistent media/evidence representation is unchanged, so cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.12 Runtime Memory Lifecycle Hardening
 

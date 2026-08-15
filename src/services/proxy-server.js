@@ -410,6 +410,20 @@ function canonicalMessagesPath(pathname) {
   return '';
 }
 
+function claudeCodeAgentContext(headers) {
+  const normalize = (value) => {
+    const raw = Array.isArray(value) ? value[0] : value;
+    return typeof raw === 'string' ? raw.trim().slice(0, 200) : '';
+  };
+  const agentId = normalize(headers?.['x-claude-code-agent-id']);
+  const parentAgentId = normalize(headers?.['x-claude-code-parent-agent-id']);
+  return {
+    isSubagent: Boolean(agentId || parentAgentId),
+    agentId,
+    parentAgentId,
+  };
+}
+
 function claudeCodeSessionId(headers, request) {
   const header = headers?.['x-claude-code-session-id'];
   if (typeof header === 'string' && header.trim()) return header.trim().slice(0, 200);
@@ -1062,6 +1076,17 @@ export function createProxyServer(config, dependencies = {}) {
         { headers: req.headers, body: original },
       );
       const clientSessionId = claudeCodeSessionId(req.headers, original);
+      const clientAgentContext = claudeCodeAgentContext(req.headers);
+      const semanticProgressEnabled = !clientAgentContext.isSubagent;
+      if (messagesPath === '/v1/messages' && original.stream === true && clientAgentContext.isSubagent) {
+        log(config, 'info', 'subagent_progress_isolated', {
+          requestId,
+          source: 'claude_code_agent_headers',
+          agent_id_present: Boolean(clientAgentContext.agentId),
+          parent_agent_id_present: Boolean(clientAgentContext.parentAgentId),
+          semantic_progress_enabled: false,
+        });
+      }
       const toolResultContinuation = messagesPath === '/v1/messages' && isToolResultContinuation(original.messages);
       if (messagesPath === '/v1/messages') {
         releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
@@ -1120,6 +1145,7 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
+            semanticProgressEnabled,
           });
           await progress.open();
           await emitFinalAnthropicResponse(progress, childResponse, { locale: config.responseLanguage });
@@ -1289,7 +1315,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const maybeShowStartupBanner = async (stream) => {
-        if (!stream || original?.stream !== true || !clientSessionId) return false;
+        if (!stream || stream.semanticProgressEnabled === false || original?.stream !== true || !clientSessionId) return false;
         if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
         const snapshot = runtimeTelemetry.snapshot();
         const banner = formatStartupBanner({
@@ -1372,6 +1398,7 @@ export function createProxyServer(config, dependencies = {}) {
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
+            semanticProgressEnabled,
           });
           await progress.open();
           await maybeShowStartupBanner(progress);
@@ -1638,6 +1665,7 @@ export function createProxyServer(config, dependencies = {}) {
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
+            semanticProgressEnabled,
           });
           await progress.open();
           await maybeShowStartupBanner(progress);
@@ -1677,6 +1705,7 @@ export function createProxyServer(config, dependencies = {}) {
           visibleAfterMs: config.progressVisibleAfterMs,
           locale: config.responseLanguage,
           getReceivedBytes: getBaseResponseBytes,
+          semanticProgressEnabled,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {
               requestId,

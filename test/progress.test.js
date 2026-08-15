@@ -638,3 +638,27 @@ test('V0.29.12 ProgressStream dispose clears every timer, pending state, and is 
   assert.equal(progress.pendingUpdate, null);
   assert.equal(progress.res, null);
 });
+
+test('V0.29.13 silent semantic progress keeps state and liveness without creating assistant text content', async () => {
+  const response = new FakeResponse();
+  const states = [];
+  const progress = new ProgressStream(response, {
+    semanticProgressEnabled: false,
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+    onStateChange: (entry) => states.push(entry),
+  });
+  await progress.open();
+  await progress.showStartupBanner('╭─◆ CC TOOL PROXY V0.29.13');
+  await progress.update('正在請主模型規劃下一步…', { force: true, details: { phase: 'managed_model_round_start' } });
+  await progress.closeProgress('正在交還 Claude Code…', { phase: 'handoff_to_claude_code' });
+  const stream = response.chunks.join('');
+  assert.equal(progress.visible, false);
+  assert.ok(states.some((entry) => entry.phase === 'managed_model_round_start'));
+  assert.doesNotMatch(stream, /目前處理進度：/);
+  assert.doesNotMatch(stream, /CC TOOL PROXY V0\.29\.13/);
+  assert.doesNotMatch(stream, /"content_block"\s*:\s*\{"type":"text"/);
+  assert.match(stream, /event: ping/);
+  await progress.dispose();
+});

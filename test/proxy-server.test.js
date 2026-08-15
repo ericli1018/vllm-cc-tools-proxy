@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.12', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.13', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3093,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.12/);
+  assert.match(first, /VERSION\s+0\.29\.13/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.12');
+  assert.equal(payload.version, '0.29.13');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.12/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.13/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3725,4 +3725,160 @@ test('V0.29.12 health endpoint exposes continuation-cache byte budgets separatel
   const body = await response.json();
   assert.deepEqual(body.cache.continuation, continuation.health());
   assert.ok(body.cache.continuation.bytes > 0);
+});
+
+test('V0.29.13 Claude Code agent headers select silent semantic progress without affecting ordinary requests', async (t) => {
+  const semanticFlags = [];
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, progressVisibleAfterMs: 0 }), {
+    progressStreamFactory: (res, options) => {
+      semanticFlags.push(options.semanticProgressEnabled);
+      return new ProgressStream(res, options);
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+
+  for (const headers of [
+    { 'content-type': 'application/json', 'x-claude-code-agent-id': 'agent-123', 'x-claude-code-parent-agent-id': 'parent-1' },
+    { 'content-type': 'application/json' },
+  ]) {
+    const response = await fetch(`${proxyUrl}/v1/messages`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }),
+    });
+    assert.equal(response.status, 200);
+    await response.text();
+  }
+  assert.deepEqual(semanticFlags, [false, true]);
+});
+
+test('V0.29.13 sub-agent request keeps Agent tool_use at content index zero while main-agent progress behavior stays unchanged', async (t) => {
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"agent-call","name":"Agent","input":{}}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"description\\":\\"Inspect memory lifecycle\\",\\"prompt\\":\\"Inspect\\",\\"subagent_type\\":\\"Explore\\"}"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+  const body = JSON.stringify({
+    model: 'm', stream: true,
+    tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'delegate' }],
+  });
+
+  const sub = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-claude-code-agent-id': 'sub-42',
+      'x-claude-code-parent-agent-id': 'main-1',
+    },
+    body,
+  });
+  const subStream = await sub.text();
+  assert.doesNotMatch(subStream, /目前處理進度：/);
+  assert.match(subStream, /"index":0,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
+  assert.doesNotMatch(subStream, /"index":1,"content_block":\{"type":"tool_use"/);
+
+  const main = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body,
+  });
+  const mainStream = await main.text();
+  assert.match(mainStream, /目前處理進度：/);
+  assert.match(mainStream, /"index":0,"content_block":\{"type":"text"/);
+  assert.match(mainStream, /"index":1,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
+
+  const isolated = logs.find((entry) => entry.event === 'subagent_progress_isolated');
+  assert.equal(isolated?.source, 'claude_code_agent_headers');
+  assert.equal(isolated?.agent_id_present, true);
+  assert.equal(isolated?.parent_agent_id_present, true);
+});
+
+test('V0.29.13 silent sub-agent request does not consume the parent session startup banner claim', async (t) => {
+  const upstream = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, progressVisibleAfterMs: 0 }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+  const body = JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hi' }] });
+  const session = 'shared-parent-session';
+
+  const sub = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-claude-code-session-id': session,
+      'x-claude-code-agent-id': 'sub-1',
+      'x-claude-code-parent-agent-id': 'main-1',
+    },
+    body,
+  });
+  const subStream = await sub.text();
+  assert.doesNotMatch(subStream, /CC TOOL PROXY/);
+
+  const main = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': session },
+    body,
+  });
+  const mainStream = await main.text();
+  assert.match(mainStream, /CC TOOL PROXY/);
 });

@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.12'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.12'
+test "$(node -p "require('./package.json').version")" = '0.29.13'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.13'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.12'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.13'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -747,6 +747,23 @@ echo 'Verification complete.'
  grep -Fq 'V0.29.12 disposed ProgressStream is collectible' test/progress-memory.test.js
  grep -Fq 'V0.29.12 client disconnect disposes the active ProgressStream exactly once' test/proxy-server.test.js
  grep -Fq 'V0.29.12 continuation cache evicts LRU entries when a session exceeds its byte budget' test/media-continuation-cache.test.js
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+
+
+# V0.29.13 Claude Code Sub-Agent UI Isolation
+ test -f V0.29.13-更新說明.md
+ test -f V0.29.13-實作與驗證報告.md
+ grep -Fq 'V0.29.13 Claude Code Sub-Agent UI Isolation' README.md
+ grep -Fq "x-claude-code-agent-id" src/services/proxy-server.js
+ grep -Fq "x-claude-code-parent-agent-id" src/services/proxy-server.js
+ grep -Fq 'semanticProgressEnabled' src/proxy/progress.js
+ grep -Fq 'subagent_progress_isolated' src/services/proxy-server.js
+ grep -Fq 'V0.29.13 silent semantic progress keeps state and liveness without creating assistant text content' test/progress.test.js
+ grep -Fq 'V0.29.13 Claude Code agent headers select silent semantic progress without affecting ordinary requests' test/proxy-server.test.js
+ grep -Fq 'V0.29.13 sub-agent request keeps Agent tool_use at content index zero while main-agent progress behavior stays unchanged' test/proxy-server.test.js
+ grep -Fq 'V0.29.13 silent sub-agent request does not consume the parent session startup banner claim' test/proxy-server.test.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js

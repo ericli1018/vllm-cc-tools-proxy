@@ -1,3 +1,13 @@
+## 0.29.13 - 2026-08-15
+
+- Detect Claude Code sub-agent API requests from the dedicated `x-claude-code-agent-id` / `x-claude-code-parent-agent-id` headers instead of guessing from tool declarations or prompts.
+- Add silent semantic progress mode for sub-agent requests: transport ping, usage, telemetry, logs, and native statusLine remain active, while Proxy-generated `目前處理進度：` assistant text is suppressed.
+- Preserve the first real sub-agent model/tool block at Anthropic content index 0 and keep the original Agent description untouched.
+- Prevent silent sub-agent requests from consuming the parent session's one-time startup banner claim.
+- Add safe `subagent_progress_isolated` diagnostics without logging agent ids, prompts, tool arguments, or response content.
+- Keep main-agent visible SSE progress behavior unchanged; no new ENV is added.
+- Keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.12 - 2026-08-15
 
 - Add idempotent `ProgressStream.dispose()` and guarantee request-finally cleanup so client disconnect, abort, timeout, and error paths cannot retain keepalive/heartbeat/pending timers.

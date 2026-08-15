@@ -92,7 +92,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, semanticProgressEnabled = true,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -106,6 +106,7 @@ export class ProgressStream {
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
+    this.semanticProgressEnabled = semanticProgressEnabled !== false;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -163,6 +164,7 @@ export class ProgressStream {
   }
 
   async showStartupBanner(text) {
+    if (!this.semanticProgressEnabled) return false;
     if (this.closed || this.progressClosed || this.visible || !text) return false;
     this.#clearPending();
     const changedAt = Date.now();
@@ -324,6 +326,7 @@ ${message}` },
     }
 
     const entry = { message, kind, details, revision, changedAt, renderMode };
+    if (!this.semanticProgressEnabled) return;
     const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
     if (!force && belowThreshold) {
       this.pendingUpdate = entry;
