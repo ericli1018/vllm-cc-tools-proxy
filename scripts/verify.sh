@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.13'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.13'
+test "$(node -p "require('./package.json').version")" = '0.29.14'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.14'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.13'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.14'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -752,18 +752,26 @@ echo 'Verification complete.'
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 
-# V0.29.13 Claude Code Sub-Agent UI Isolation
+# V0.29.13 Claude Code Sub-Agent UI Isolation foundation
  test -f V0.29.13-更新說明.md
  test -f V0.29.13-實作與驗證報告.md
  grep -Fq 'V0.29.13 Claude Code Sub-Agent UI Isolation' README.md
  grep -Fq "x-claude-code-agent-id" src/services/proxy-server.js
  grep -Fq "x-claude-code-parent-agent-id" src/services/proxy-server.js
  grep -Fq 'semanticProgressEnabled' src/proxy/progress.js
- grep -Fq 'subagent_progress_isolated' src/services/proxy-server.js
  grep -Fq 'V0.29.13 silent semantic progress keeps state and liveness without creating assistant text content' test/progress.test.js
- grep -Fq 'V0.29.13 Claude Code agent headers select silent semantic progress without affecting ordinary requests' test/proxy-server.test.js
- grep -Fq 'V0.29.13 sub-agent request keeps Agent tool_use at content index zero while main-agent progress behavior stays unchanged' test/proxy-server.test.js
- grep -Fq 'V0.29.13 silent sub-agent request does not consume the parent session startup banner claim' test/proxy-server.test.js
+
+# V0.29.14 Parent Agent Label Isolation and Sub-Agent Progress Restoration
+ test -f V0.29.14-更新說明.md
+ test -f V0.29.14-實作與驗證報告.md
+ grep -Fq 'V0.29.14 Parent Agent Label Isolation' README.md
+ grep -Fq 'parent_agent_progress_isolated' src/services/proxy-server.js
+ grep -Fq 'subagent_progress_enabled' src/services/proxy-server.js
+ grep -Fq "return name === 'agent' || name === 'task';" src/services/proxy-server.js
+ grep -Fq 'V0.29.14 sub-agent headers restore semantic progress while ordinary requests remain enabled' test/proxy-server.test.js
+ grep -Fq 'V0.29.14 parent request with Agent tool keeps Agent tool_use at index zero while sub-agent execution keeps progress visible' test/proxy-server.test.js
+ grep -Fq 'V0.29.14 sub-agent progress does not consume the parent session startup banner claim' test/proxy-server.test.js
+ grep -Fq 'V0.29.14 legacy Task dispatch tool also isolates parent semantic progress' test/proxy-server.test.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js

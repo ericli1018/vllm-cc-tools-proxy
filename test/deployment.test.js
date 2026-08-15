@@ -446,3 +446,13 @@ test('README documents V0.29.13 Claude Code sub-agent UI isolation', () => {
   assert.match(readme, /index 0|index=0/);
   assert.match(readme, /no new ENV|No new ENV/i);
 });
+
+
+test('README documents V0.29.14 parent label isolation with sub-agent execution progress restored', () => {
+  assert.match(readme, /V0\.29\.14 Parent Agent Label Isolation/i);
+  assert.match(readme, /Sub Agent.*目前處理進度|目前處理進度.*Sub Agent/is);
+  assert.match(readme, /Agent.*Task/is);
+  assert.match(readme, /statusLine/);
+  assert.match(readme, /startup banner/i);
+  assert.match(readme, /no new ENV|No new ENV/i);
+});

@@ -1,3 +1,12 @@
+## 0.29.14 - 2026-08-15
+
+- Correct V0.29.13's over-broad sub-agent progress suppression by restoring semantic `目前處理進度：` output inside Claude Code sub-agent execution requests identified by `x-claude-code-agent-id` / `x-claude-code-parent-agent-id`.
+- Protect native parent-screen sub-agent labels by suppressing assistant-text progress only for top-level streaming requests that declare an `Agent` or legacy `Task` dispatch tool; runtime telemetry, logs, pings, and native `statusLine` remain active.
+- Preserve the native `Agent.input.description` / `Task` tool block at Anthropic content index 0 on parent dispatch requests.
+- Keep the one-time startup banner parent-session-only even though sub-agent semantic progress is enabled again.
+- Add safe `parent_agent_progress_isolated` and `subagent_progress_enabled` diagnostics without logging agent ids, prompts, descriptions, tool inputs, or response content.
+- Add no new ENV and keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.13 - 2026-08-15
 
 - Detect Claude Code sub-agent API requests from the dedicated `x-claude-code-agent-id` / `x-claude-code-parent-agent-id` headers instead of guessing from tool declarations or prompts.

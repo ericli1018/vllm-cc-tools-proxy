@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.13 isolates Proxy progress from Claude Code sub-agent semantic output; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.14 separates parent Agent-label protection from sub-agent execution progress, correcting V0.29.13's over-broad silent-sub-agent policy; V0.29.13 introduced Claude Code agent-header detection; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
@@ -9,6 +9,19 @@
 
 
 
+
+
+## V0.29.14 Parent Agent Label Isolation and Sub-Agent Progress Restoration
+
+V0.29.14 separates two Claude Code UI responsibilities that V0.29.13 incorrectly treated as the same thing. The **parent/main Agent list label** must remain Claude Code's native `Agent.input.description` (or legacy `Task` description), while the **Sub Agent execution view** should still receive Proxy semantic progress such as `目前處理進度：…` when the user switches into that running agent.
+
+Claude Code agent headers remain authoritative for identifying the request that is executing inside a Sub Agent. When `x-claude-code-agent-id` or `x-claude-code-parent-agent-id` is present, semantic progress is enabled again. The Sub Agent view therefore keeps transport pings, runtime telemetry, native `statusLine`, and the visible `目前處理進度：` assistant progress block. The one-time startup banner remains parent-session-only and is not claimed by a Sub Agent request.
+
+Parent/main requests use a separate safety rule. If a top-level streaming request declares an `Agent` or legacy `Task` dispatch tool, Proxy progress remains available through runtime telemetry, logs, transport liveness, and Claude Code native `statusLine`, but the synthetic assistant text progress block is suppressed for that request. Because assistant progress is not inserted at content index 0, a later `Agent`/`Task` tool_use remains at native Anthropic content **index 0**, preserving Claude Code's Sub Agent working name. This is intentionally based only on the tool declaration name; Proxy does not read or rewrite the Agent description, prompt, tool input, or response text to make this routing decision.
+
+A top-level request that does **not** declare `Agent`/`Task` keeps the existing inline SSE progress behavior. This is the protocol-safe tradeoff: a Parent request that can dispatch a Sub Agent cannot emit retractable assistant text before the model's eventual tool choice is known, so label-safe requests use `statusLine`/telemetry until the real model/tool content arrives. No new ENV setting is added.
+
+Safe diagnostics distinguish the two paths: `parent_agent_progress_isolated` records only the fixed source and `semantic_progress_enabled=false`, while `subagent_progress_enabled` records only header-presence booleans and `semantic_progress_enabled=true`. Agent ids, descriptions, prompts, tool arguments, and response text are not included. Persistent media/evidence semantics are unchanged, so cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.13 Claude Code Sub-Agent UI Isolation
 

@@ -424,6 +424,14 @@ function claudeCodeAgentContext(headers) {
   };
 }
 
+function hasSubagentDispatchTool(tools) {
+  if (!Array.isArray(tools)) return false;
+  return tools.some((tool) => {
+    const name = typeof tool?.name === 'string' ? tool.name.trim().toLowerCase() : '';
+    return name === 'agent' || name === 'task';
+  });
+}
+
 function claudeCodeSessionId(headers, request) {
   const header = headers?.['x-claude-code-session-id'];
   if (typeof header === 'string' && header.trim()) return header.trim().slice(0, 200);
@@ -1077,13 +1085,23 @@ export function createProxyServer(config, dependencies = {}) {
       );
       const clientSessionId = claudeCodeSessionId(req.headers, original);
       const clientAgentContext = claudeCodeAgentContext(req.headers);
-      const semanticProgressEnabled = !clientAgentContext.isSubagent;
+      const parentCanDispatchSubagent = messagesPath === '/v1/messages'
+        && original.stream === true
+        && !clientAgentContext.isSubagent
+        && hasSubagentDispatchTool(original.tools);
+      const semanticProgressEnabled = clientAgentContext.isSubagent || !parentCanDispatchSubagent;
       if (messagesPath === '/v1/messages' && original.stream === true && clientAgentContext.isSubagent) {
-        log(config, 'info', 'subagent_progress_isolated', {
+        log(config, 'info', 'subagent_progress_enabled', {
           requestId,
           source: 'claude_code_agent_headers',
           agent_id_present: Boolean(clientAgentContext.agentId),
           parent_agent_id_present: Boolean(clientAgentContext.parentAgentId),
+          semantic_progress_enabled: true,
+        });
+      } else if (parentCanDispatchSubagent) {
+        log(config, 'info', 'parent_agent_progress_isolated', {
+          requestId,
+          source: 'subagent_dispatch_tool',
           semantic_progress_enabled: false,
         });
       }
@@ -1316,6 +1334,7 @@ export function createProxyServer(config, dependencies = {}) {
 
       const maybeShowStartupBanner = async (stream) => {
         if (!stream || stream.semanticProgressEnabled === false || original?.stream !== true || !clientSessionId) return false;
+        if (clientAgentContext.isSubagent) return false;
         if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
         const snapshot = runtimeTelemetry.snapshot();
         const banner = formatStartupBanner({
