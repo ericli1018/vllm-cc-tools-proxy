@@ -54,12 +54,11 @@ test('ProgressStream emits the V0.2.8 progress header without a V0.2.2 nonce sen
 
 
 
-test('V0.29.21 subagent progress carrier uses thinking deltas instead of assistant text', async () => {
+test('V0.29.22 Main and Sub Agent progress use the same visible text carrier', async () => {
   const response = new FakeResponse();
   const progress = new ProgressStream(response, {
     visibleAfterMs: 0,
     pingIntervalMs: 60_000,
-    carrier: 'thinking',
   });
   await progress.open();
   await progress.update('◐ 主模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase' } });
@@ -70,11 +69,11 @@ test('V0.29.21 subagent progress carrier uses thinking deltas instead of assista
   await progress.stop();
 
   const stream = response.chunks.join('');
-  assert.match(stream, /"content_block":\{"type":"thinking","thinking":"","signature":""\}/);
-  assert.match(stream, /"type":"thinking_delta","thinking":"目前處理進度：\\n◐ 主模型開始思考/);
+  assert.match(stream, /"content_block":\{"type":"text","text":""\}/);
+  assert.match(stream, /"type":"text_delta","text":"目前處理進度：\\n◐ 主模型開始思考/);
   assert.match(stream, /主模型思考中/);
-  assert.doesNotMatch(stream, /"type":"text_delta","text":"目前處理進度：/);
-  assert.doesNotMatch(stream, /"content_block":\{"type":"text","text":""\}/);
+  assert.doesNotMatch(stream, /"type":"thinking_delta","thinking":"目前處理進度：/);
+  assert.doesNotMatch(stream, /"content_block":\{"type":"thinking"/);
 });
 
 test('V0.29.21 stripProgressHistory removes synthetic thinking progress without removing real model thinking', () => {

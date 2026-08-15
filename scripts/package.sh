@@ -8,7 +8,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 (
   cd "$ROOT"
-  tar --exclude=.git --exclude=dist --exclude=node_modules --exclude='*.log' -cf - .
+  tar --exclude=.git --exclude=dist --exclude=node_modules --exclude='*.log' --exclude=docs/superpowers -cf - .
 ) | (cd "$STAGE" && tar -xf -)
 (cd "$STAGE" && ./scripts/verify.sh)
 mkdir -p "$OUT"

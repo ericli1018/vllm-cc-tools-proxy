@@ -1,3 +1,13 @@
+## 0.29.22 - 2026-08-15
+
+- Retire the V0.29.21 Sub Agent `thinking_delta` progress-carrier experiment after live Claude Code validation showed that the events were delivered but not rendered as visible `目前處理進度：` output.
+- Restore one visible semantic progress carrier for Main and Sub Agent requests: both now use the existing assistant `text` / `text_delta` ProgressStream path.
+- Preserve a fresh progress lifecycle after WebSearch/WebFetch/Read/Bash and other tool-result continuations.
+- Keep Claude Code's native Sub Agent row fully unowned by the Proxy: no `subagentStatusLine`, title registry, Agent-description prefixing, or row-freeze logic.
+- Preserve backward-compatible stripping of V0.29.21 synthetic thinking-progress blocks from inbound history.
+- Preserve V0.29.20 Main-owned global `statusLine` telemetry; aggregate counters still include Sub Agent activity.
+- No new ENV; cache generations remain `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.21 - 2026-08-15
 
 - Make Claude Code native Sub Agent task names immutable from Proxy semantic progress by moving Sub Agent Proxy-owned progress from assistant `text_delta` to a dedicated `thinking_delta` content block.
