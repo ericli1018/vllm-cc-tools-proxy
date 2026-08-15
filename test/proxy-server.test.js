@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.15', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.16', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3093,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.15/);
+  assert.match(first, /VERSION\s+0\.29\.16/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3123,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.15');
+  assert.equal(payload.version, '0.29.16');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.15/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.16/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3727,322 +3727,95 @@ test('V0.29.12 health endpoint exposes continuation-cache byte budgets separatel
   assert.ok(body.cache.continuation.bytes > 0);
 });
 
-test('V0.29.14 sub-agent headers restore semantic progress while ordinary requests remain enabled', async (t) => {
-  const semanticFlags = [];
-  const upstream = await startJsonServer(async (req, res) => {
-    await read(req);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\nevent: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\nevent: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\nevent: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n');
-  });
-  const proxy = createProxyServer(config({ vllmBaseUrl: upstream.url, progressVisibleAfterMs: 0 }), {
-    progressStreamFactory: (res, options) => {
-      semanticFlags.push(options.semanticProgressEnabled);
-      return new ProgressStream(res, options);
-    },
-  });
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.server.close());
-  t.after(() => proxy.close());
-
-  for (const headers of [
-    { 'content-type': 'application/json', 'x-claude-code-agent-id': 'agent-123', 'x-claude-code-parent-agent-id': 'parent-1' },
-    { 'content-type': 'application/json' },
-  ]) {
-    const response = await fetch(`${proxyUrl}/v1/messages`, {
-      method: 'POST', headers,
-      body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }),
-    });
-    assert.equal(response.status, 200);
-    const stream = await response.text();
-    assert.match(stream, /目前處理進度：/);
-  }
-  assert.deepEqual(semanticFlags, [true, true]);
-});
-
-test('V0.29.14 parent request with Agent tool keeps Agent tool_use at index zero while sub-agent execution keeps progress visible', async (t) => {
-  const upstream = http.createServer(async (req, res) => {
-    await read(req);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end([
-      'event: message_start',
-      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
-      '',
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"agent-call","name":"Agent","input":{}}}',
-      '',
-      'event: content_block_delta',
-      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"description\\":\\"Inspect memory lifecycle\\",\\"prompt\\":\\"Inspect\\",\\"subagent_type\\":\\"Explore\\"}"}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":0}',
-      '',
-      'event: message_delta',
-      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}',
-      '',
-      'event: message_stop',
-      'data: {"type":"message_stop"}',
-      '', '',
-    ].join('\n'));
-  });
-  const upstreamUrl = await listen(upstream);
+test('V0.29.16 records Agent UI lifecycle diagnostics while preserving V0.29.12 visible progress wire order', async (t) => {
   const logs = [];
+  let calls = 0;
+  const vllm = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    calls += 1;
+    const response = calls === 1
+      ? {
+        id: 'agent-parent', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 'toolu-agent-secret', name: 'Agent', input: {
+          description: 'Analyze memory lifecycle',
+          prompt: 'sensitive child prompt must not enter logs',
+          subagent_type: 'Explore',
+        } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 12, output_tokens: 4 },
+      }
+      : {
+        id: 'agent-child', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'CHILD COMPLETE' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 8, output_tokens: 2 },
+      };
+    assert.equal(payload.model, 'm');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify(response));
+  });
   const proxy = createProxyServer(config({
-    vllmBaseUrl: upstreamUrl,
-    progressVisibleAfterMs: 0,
+    vllmBaseUrl: vllm.url,
     logLevel: 'info',
-    logSink: (entry) => logs.push(entry),
+    logSink: (entry) => logs.push(structuredClone(entry)),
+    progressVisibleAfterMs: 0,
   }));
   const proxyUrl = await listen(proxy);
-  t.after(() => upstream.close());
+  t.after(() => vllm.server.close());
   t.after(() => proxy.close());
-  const body = JSON.stringify({
-    model: 'm', stream: true,
-    tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
-    messages: [{ role: 'user', content: 'delegate' }],
-  });
 
   const parent = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body,
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'Agent', description: 'delegate', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'parent sensitive prompt' }],
+    }),
   });
-  const parentStream = await parent.text();
-  assert.doesNotMatch(parentStream, /目前處理進度：/);
-  assert.match(parentStream, /"index":0,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
-  assert.doesNotMatch(parentStream, /"index":1,"content_block":\{"type":"tool_use"/);
+  assert.equal(parent.status, 200);
+  const parentWire = await parent.text();
+  assert.match(parentWire, /"type":"content_block_start","index":0,"content_block":\{"type":"text"/);
+  assert.match(parentWire, /"type":"content_block_start","index":1,"content_block":\{"type":"tool_use","id":"toolu-agent-secret","name":"Agent"/);
+  assert.match(parentWire, /Analyze memory lifecycle/);
 
-  const sub = await fetch(`${proxyUrl}/v1/messages`, {
+  const parentRequest = logs.find((entry) => entry.event === 'claude_agent_request_observed' && entry.agent_context === 'main');
+  assert.ok(parentRequest);
+  assert.deepEqual(parentRequest.declared_subagent_tools, ['Agent']);
+  assert.equal(parentRequest.has_agent_id, false);
+
+  const progressVisible = logs.find((entry) => entry.event === 'proxy_progress_first_visible');
+  assert.ok(progressVisible);
+  assert.equal(progressVisible.content_index, 0);
+  assert.equal(progressVisible.agent_context, 'main');
+
+  const handoff = logs.find((entry) => entry.event === 'claude_agent_handoff_observed');
+  assert.ok(handoff);
+  assert.equal(handoff.agent_context, 'main');
+  assert.equal(handoff.progress_visible, true);
+  assert.equal(handoff.progress_preceded_handoff, true);
+  assert.equal(handoff.handoffs[0].tool_name, 'Agent');
+  assert.equal(handoff.handoffs[0].block_index, 0);
+  assert.equal(handoff.handoffs[0].description_chars, 'Analyze memory lifecycle'.length);
+
+  const child = await fetch(`${proxyUrl}/v1/messages`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
-      'x-claude-code-agent-id': 'sub-42',
-      'x-claude-code-parent-agent-id': 'main-1',
+      'x-claude-code-agent-id': 'child-agent-secret-id',
+      'x-claude-code-parent-agent-id': 'parent-agent-secret-id',
     },
-    body,
+    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'user', content: 'child sensitive prompt' }] }),
   });
-  const subStream = await sub.text();
-  assert.match(subStream, /目前處理進度：/);
-  assert.match(subStream, /"index":0,"content_block":\{"type":"text"/);
-  assert.match(subStream, /"index":1,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
+  assert.equal(child.status, 200);
+  assert.equal((await child.json()).content[0].text, 'CHILD COMPLETE');
 
-  const deferred = logs.find((entry) => entry.event === 'parent_agent_progress_deferred');
-  assert.equal(deferred?.source, 'subagent_dispatch_tool');
-  assert.equal(deferred?.semantic_progress_enabled, true);
-  assert.equal(deferred?.semantic_progress_deferred, true);
-  assert.equal(deferred?.transport_keepalive_enabled, true);
-  assert.ok(logs.some((entry) => entry.event === 'parent_agent_progress_suppressed_for_handoff'));
-  const enabled = logs.find((entry) => entry.event === 'subagent_progress_enabled');
-  assert.equal(enabled?.source, 'claude_code_agent_headers');
-  assert.equal(enabled?.semantic_progress_enabled, true);
-});
+  const childRequest = logs.find((entry) => entry.event === 'claude_agent_request_observed' && entry.agent_context === 'subagent');
+  assert.ok(childRequest);
+  assert.equal(childRequest.has_agent_id, true);
+  assert.equal(childRequest.has_parent_agent_id, true);
+  assert.match(childRequest.agent_id_fingerprint, /^[a-f0-9]{12}$/);
+  assert.match(childRequest.parent_agent_id_fingerprint, /^[a-f0-9]{12}$/);
 
-test('V0.29.14 sub-agent progress does not consume the parent session startup banner claim', async (t) => {
-  const upstream = http.createServer(async (req, res) => {
-    await read(req);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end([
-      'event: message_start',
-      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
-      '',
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-      '',
-      'event: content_block_delta',
-      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":0}',
-      '',
-      'event: message_delta',
-      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}',
-      '',
-      'event: message_stop',
-      'data: {"type":"message_stop"}',
-      '', '',
-    ].join('\n'));
-  });
-  const upstreamUrl = await listen(upstream);
-  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, progressVisibleAfterMs: 0 }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.close());
-  t.after(() => proxy.close());
-  const body = JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hi' }] });
-  const session = 'shared-parent-session';
-
-  const sub = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'x-claude-code-session-id': session,
-      'x-claude-code-agent-id': 'sub-1',
-      'x-claude-code-parent-agent-id': 'main-1',
-    },
-    body,
-  });
-  const subStream = await sub.text();
-  assert.match(subStream, /目前處理進度：/);
-  assert.doesNotMatch(subStream, /CC TOOL PROXY/);
-
-  const main = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': session },
-    body,
-  });
-  const mainStream = await main.text();
-  assert.match(mainStream, /CC TOOL PROXY/);
-});
-
-test('V0.29.14 legacy Task dispatch tool also isolates parent semantic progress', async (t) => {
-  const upstream = http.createServer(async (req, res) => {
-    await read(req);
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end([
-      'event: message_start',
-      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
-      '',
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"task-call","name":"Task","input":{}}}',
-      '',
-      'event: content_block_delta',
-      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"description\\":\\"Inspect code\\"}"}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":0}',
-      '',
-      'event: message_delta',
-      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":1}}',
-      '',
-      'event: message_stop',
-      'data: {"type":"message_stop"}',
-      '', '',
-    ].join('\n'));
-  });
-  const upstreamUrl = await listen(upstream);
-  const proxy = createProxyServer(config({ vllmBaseUrl: upstreamUrl, progressVisibleAfterMs: 0 }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.close());
-  t.after(() => proxy.close());
-
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: 'm', stream: true,
-      tools: [{ name: 'Task', description: 'Spawn task', input_schema: { type: 'object' } }],
-      messages: [{ role: 'user', content: 'delegate' }],
-    }),
-  });
-  const stream = await response.text();
-  assert.doesNotMatch(stream, /目前處理進度：/);
-  assert.match(stream, /"index":0,"content_block":\{"type":"tool_use","id":"task-call","name":"Task"/);
-});
-
-test('V0.29.15 parent Agent handoff keeps transport heartbeat active and preserves Agent at index zero', async (t) => {
-  const upstream = http.createServer(async (req, res) => {
-    await read(req);
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
-    await new Promise((resolve) => setTimeout(resolve, 35));
-    res.end([
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"agent-call","name":"Agent","input":{}}}',
-      '',
-      'event: content_block_delta',
-      'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"description\\":\\"Inspect memory lifecycle\\",\\"prompt\\":\\"Inspect\\",\\"subagent_type\\":\\"Explore\\"}"}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":0}',
-      '',
-      'event: message_delta',
-      'data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":2}}',
-      '',
-      'event: message_stop',
-      'data: {"type":"message_stop"}',
-      '', '',
-    ].join('\n'));
-  });
-  const upstreamUrl = await listen(upstream);
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: upstreamUrl,
-    progressVisibleAfterMs: 0,
-    progressPingIntervalMs: 10,
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.close());
-  t.after(() => proxy.close());
-
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: 'm', stream: true,
-      tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
-      messages: [{ role: 'user', content: 'delegate' }],
-    }),
-  });
-  const stream = await response.text();
-  assert.ok((stream.match(/event: ping/g) || []).length >= 3);
-  assert.doesNotMatch(stream, /目前處理進度：/);
-  assert.match(stream, /"index":0,"content_block":\{"type":"tool_use","id":"agent-call","name":"Agent"/);
-  assert.doesNotMatch(stream, /"index":1,"content_block":\{"type":"tool_use"/);
-});
-
-test('V0.29.15 parent with Agent capability releases visible progress when the direct response is ordinary text', async (t) => {
-  const upstream = http.createServer(async (req, res) => {
-    await read(req);
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.write([
-      'event: message_start',
-      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}',
-      '',
-      'event: content_block_start',
-      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-      '', '',
-    ].join('\n'));
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    res.end([
-      'event: content_block_delta',
-      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ordinary answer"}}',
-      '',
-      'event: content_block_stop',
-      'data: {"type":"content_block_stop","index":0}',
-      '',
-      'event: message_delta',
-      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
-      '',
-      'event: message_stop',
-      'data: {"type":"message_stop"}',
-      '', '',
-    ].join('\n'));
-  });
-  const upstreamUrl = await listen(upstream);
-  const logs = [];
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: upstreamUrl,
-    progressVisibleAfterMs: 0,
-    progressPingIntervalMs: 10,
-    logLevel: 'info',
-    logSink: (entry) => logs.push(entry),
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.close());
-  t.after(() => proxy.close());
-
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      model: 'm', stream: true,
-      tools: [{ name: 'Agent', description: 'Spawn agent', input_schema: { type: 'object' } }],
-      messages: [{ role: 'user', content: 'answer directly' }],
-    }),
-  });
-  const stream = await response.text();
-  assert.match(stream, /目前處理進度：/);
-  assert.match(stream, /ordinary answer/);
-  assert.match(stream, /"index":0,"content_block":\{"type":"text","text":""\}/);
-  assert.match(stream, /"index":1,"content_block":\{"type":"text","text":""\}/);
-  assert.ok(logs.some((entry) => entry.event === 'parent_agent_progress_released'));
+  const serializedLogs = JSON.stringify(logs);
+  assert.doesNotMatch(serializedLogs, /parent sensitive prompt|child sensitive prompt|sensitive child prompt must not enter logs/);
+  assert.doesNotMatch(serializedLogs, /child-agent-secret-id|parent-agent-secret-id|Analyze memory lifecycle|toolu-agent-secret/);
 });

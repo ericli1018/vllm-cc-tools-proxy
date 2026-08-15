@@ -1,29 +1,12 @@
-## 0.29.15 - 2026-08-15
+## 0.29.16 - 2026-08-15
 
-- Make Anthropic SSE transport liveness unconditional for Parent/Main and Sub Agent streaming requests: immediate `ping` plus recurring `PROGRESS_PING_INTERVAL_MS` pings remain active even when semantic progress is deferred.
-- Replace V0.29.14 blanket Parent semantic suppression with a deferred gate. Direct ordinary text/non-Agent actions release the latest visible progress; Agent/Task handoff discards pending synthetic text so the native tool_use stays at index 0.
-- Keep thinking blocks non-decisive and keep Proxy-managed internal loops deferred until terminal disposition, preventing later Agent handoff titles from being polluted.
-- Preserve visible `目前處理進度` inside Sub Agent execution views and keep startup-banner ownership with the Parent session.
-- Add no new ENV and leave persistent cache generations unchanged.
-
-## 0.29.14 - 2026-08-15
-
-- Correct V0.29.13's over-broad sub-agent progress suppression by restoring semantic `目前處理進度：` output inside Claude Code sub-agent execution requests identified by `x-claude-code-agent-id` / `x-claude-code-parent-agent-id`.
-- Protect native parent-screen sub-agent labels by suppressing assistant-text progress only for top-level streaming requests that declare an `Agent` or legacy `Task` dispatch tool; runtime telemetry, logs, pings, and native `statusLine` remain active.
-- Preserve the native `Agent.input.description` / `Task` tool block at Anthropic content index 0 on parent dispatch requests.
-- Keep the one-time startup banner parent-session-only even though sub-agent semantic progress is enabled again.
-- Add safe `parent_agent_progress_isolated` and `subagent_progress_enabled` diagnostics without logging agent ids, prompts, descriptions, tool inputs, or response content.
-- Add no new ENV and keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
-
-## 0.29.13 - 2026-08-15
-
-- Detect Claude Code sub-agent API requests from the dedicated `x-claude-code-agent-id` / `x-claude-code-parent-agent-id` headers instead of guessing from tool declarations or prompts.
-- Add silent semantic progress mode for sub-agent requests: transport ping, usage, telemetry, logs, and native statusLine remain active, while Proxy-generated `目前處理進度：` assistant text is suppressed.
-- Preserve the first real sub-agent model/tool block at Anthropic content index 0 and keep the original Agent description untouched.
-- Prevent silent sub-agent requests from consuming the parent session's one-time startup banner claim.
-- Add safe `subagent_progress_isolated` diagnostics without logging agent ids, prompts, tool arguments, or response content.
-- Keep main-agent visible SSE progress behavior unchanged; no new ENV is added.
-- Keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`.
+- Rebuilt directly from the V0.29.12 baseline; V0.29.13-V0.29.15 Agent/sub-agent progress suppression/deferral policies are intentionally absent.
+- Preserve V0.29.12 visible progress behavior for main and sub-agent views.
+- Add safe `claude_agent_request_observed` correlation diagnostics for Claude Code agent request headers and declared Agent/Task tools.
+- Add `proxy_progress_first_visible` diagnostics for the first visible Proxy progress block without changing content ordering.
+- Add `claude_agent_handoff_observed` diagnostics for final Agent/Task tool-use metadata, including safe fingerprints and whether visible progress preceded handoff.
+- Never log prompt/message contents, literal Agent descriptions, literal agent ids, literal tool-use ids, API keys, or authorization values in these new events.
+- Keep cache generations at `media-v8` / `visual-v18` / `evidence-v14`; no new ENV is added.
 
 ## 0.29.12 - 2026-08-15
 

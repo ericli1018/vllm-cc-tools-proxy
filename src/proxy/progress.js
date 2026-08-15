@@ -92,7 +92,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, semanticProgressEnabled = true, semanticProgressDeferred = false,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -106,8 +106,6 @@ export class ProgressStream {
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
-    this.semanticProgressEnabled = semanticProgressEnabled !== false;
-    this.semanticProgressDeferred = this.semanticProgressEnabled && semanticProgressDeferred === true;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -165,7 +163,6 @@ export class ProgressStream {
   }
 
   async showStartupBanner(text) {
-    if (!this.semanticProgressEnabled) return false;
     if (this.closed || this.progressClosed || this.visible || !text) return false;
     this.#clearPending();
     const changedAt = Date.now();
@@ -327,11 +324,6 @@ ${message}` },
     }
 
     const entry = { message, kind, details, revision, changedAt, renderMode };
-    if (!this.semanticProgressEnabled) return;
-    if (this.semanticProgressDeferred) {
-      this.pendingUpdate = entry;
-      return;
-    }
     const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
     if (!force && belowThreshold) {
       this.pendingUpdate = entry;
@@ -343,25 +335,6 @@ ${message}` },
     this.pendingTimer = null;
     this.pendingUpdate = null;
     await this.#emitUpdate(entry);
-  }
-
-  async releaseSemanticProgress() {
-    if (!this.semanticProgressEnabled || !this.semanticProgressDeferred || this.closed || this.progressClosed) return false;
-    this.semanticProgressDeferred = false;
-    const pending = this.pendingUpdate;
-    this.pendingUpdate = null;
-    if (this.pendingTimer) clearTimeout(this.pendingTimer);
-    this.pendingTimer = null;
-    if (pending) await this.#emitUpdate(pending);
-    return true;
-  }
-
-  async suppressSemanticProgress() {
-    if (!this.semanticProgressEnabled && !this.semanticProgressDeferred) return false;
-    this.semanticProgressEnabled = false;
-    this.semanticProgressDeferred = false;
-    this.#clearPending();
-    return true;
   }
 
   async closeProgress(finalMessage = '', { phase = 'progress_close', details = {} } = {}) {

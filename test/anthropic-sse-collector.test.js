@@ -185,28 +185,3 @@ test('V0.2.28.17 collector reports only semantic model delta bytes', async () =>
     Buffer.byteLength(thinking + text + toolJson, 'utf8'));
   assert.equal(deltas.some((entry) => entry.bytes === Buffer.byteLength(signature, 'utf8')), false);
 });
-
-test('V0.29.15 collector exposes decisive content block starts including tool names', async () => {
-  const wire = [
-    event('message_start', { type: 'message_start', message: {
-      id: 'decisive-1', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
-    } }),
-    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }),
-    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
-    event('content_block_start', { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'agent-1', name: 'Agent', input: {} } }),
-    event('content_block_delta', { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"description":"Inspect"}' } }),
-    event('content_block_stop', { type: 'content_block_stop', index: 1 }),
-    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }),
-    event('message_stop', { type: 'message_stop' }),
-  ].join('');
-  const starts = [];
-
-  await collectAnthropicMessageFromSse(upstreamFromChunks([wire]), {
-    onContentBlockStart: async (entry) => starts.push(entry),
-  });
-
-  assert.deepEqual(starts, [
-    { index: 0, type: 'thinking', name: '' },
-    { index: 1, type: 'tool_use', name: 'Agent' },
-  ]);
-});

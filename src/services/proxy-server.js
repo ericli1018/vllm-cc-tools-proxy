@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
 import { hasProgressHistory, stripProgressHistory, ProgressStream, formatSseEvent } from '../proxy/progress.js';
+import { describeClaudeAgentRequest, describeClaudeAgentHandoff } from '../proxy/claude-agent-diagnostics.js';
 import { createMediaAdapters } from '../proxy/media-adapters.js';
 import { executeManagedTool } from '../proxy/web-tools.js';
 import { renderManagedToolResult } from '../proxy/web-result-contract.js';
@@ -176,7 +177,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onContentBlockStart = null, onBusyEvent = null, onResponseMode = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onBusyEvent = null, onResponseMode = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk, onBusyEvent });
   if (!response.ok) {
     const text = await response.text();
@@ -203,7 +204,6 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
   if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
     ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
     ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
-    ...(typeof onContentBlockStart === 'function' ? { onContentBlockStart } : {}),
   });
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
@@ -313,7 +313,7 @@ async function streamManagedBase(progress, request, config, incomingHeaders, sig
 
 
 async function collectManagedBase(request, config, incomingHeaders, signal, {
-  onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null, onSemanticDelta = null, onContentBlockStart = null, onBusyEvent = null,
+  onLifecycle = () => {}, onUsage = () => {}, onResponseChunk = null, onSemanticDelta = null, onBusyEvent = null,
 } = {}) {
   const outbound = { ...request, stream: true };
   const requestStartedAt = Date.now();
@@ -339,7 +339,6 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
     return collectAnthropicMessageFromSse(upstream, {
       onUsage,
       ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
-      ...(typeof onContentBlockStart === 'function' ? { onContentBlockStart } : {}),
       onFirstEvent: async ({ event, type, block_type }) => onLifecycle('base_upstream_first_event', {
         upstream_event: event,
         upstream_type: type,
@@ -410,35 +409,6 @@ function canonicalMessagesPath(pathname) {
   if (pathname === '/v1/messages' || pathname === '/v1/messages/') return '/v1/messages';
   if (pathname === '/v1/messages/count_tokens' || pathname === '/v1/messages/count_tokens/') return '/v1/messages/count_tokens';
   return '';
-}
-
-function claudeCodeAgentContext(headers) {
-  const normalize = (value) => {
-    const raw = Array.isArray(value) ? value[0] : value;
-    return typeof raw === 'string' ? raw.trim().slice(0, 200) : '';
-  };
-  const agentId = normalize(headers?.['x-claude-code-agent-id']);
-  const parentAgentId = normalize(headers?.['x-claude-code-parent-agent-id']);
-  return {
-    isSubagent: Boolean(agentId || parentAgentId),
-    agentId,
-    parentAgentId,
-  };
-}
-
-function isSubagentDispatchToolName(value) {
-  const name = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return name === 'agent' || name === 'task';
-}
-
-function hasSubagentDispatchTool(tools) {
-  if (!Array.isArray(tools)) return false;
-  return tools.some((tool) => isSubagentDispatchToolName(tool?.name));
-}
-
-function firstDecisiveContentBlock(response) {
-  const blocks = Array.isArray(response?.content) ? response.content : [];
-  return blocks.find((block) => !['thinking', 'redacted_thinking'].includes(String(block?.type || ''))) || null;
 }
 
 function claudeCodeSessionId(headers, request) {
@@ -656,6 +626,7 @@ export function createProxyServer(config, dependencies = {}) {
 
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
+    const requestObservedAt = Date.now();
     const abortController = new AbortController();
     let progress = null;
     let completed = false;
@@ -671,6 +642,35 @@ export function createProxyServer(config, dependencies = {}) {
       : '';
     let modelOutputBytes = 0; // semantic thinking/text/tool JSON payload bytes only
     let lastModelOutputDeltaAt = 0;
+    let claudeAgentRequestContext = null;
+    let progressFirstVisibleAt = 0;
+    const observeProgressWrite = (entry = {}) => {
+      if (progressFirstVisibleAt || entry.kind !== 'progress_block_start') return;
+      progressFirstVisibleAt = Date.now();
+      log(config, 'info', 'proxy_progress_first_visible', {
+        requestId,
+        agent_context: claudeAgentRequestContext?.context || 'unknown',
+        content_index: 0,
+        phase: entry.phase || '',
+        sequence: entry.sequence || 0,
+        elapsed_ms: Math.max(0, progressFirstVisibleAt - requestObservedAt),
+      });
+    };
+    const observeAgentHandoff = (response) => {
+      const handoffs = describeClaudeAgentHandoff(response);
+      if (handoffs.length === 0) return;
+      log(config, 'info', 'claude_agent_handoff_observed', {
+        requestId,
+        agent_context: claudeAgentRequestContext?.context || 'unknown',
+        progress_visible: Boolean(progress?.visible),
+        progress_preceded_handoff: Boolean(progressFirstVisibleAt),
+        progress_first_visible_elapsed_ms: progressFirstVisibleAt
+          ? Math.max(0, progressFirstVisibleAt - requestObservedAt)
+          : null,
+        stop_reason: String(response?.stop_reason || ''),
+        handoffs,
+      });
+    };
     const modelRoundProgress = {
       active: false,
       round: 0,
@@ -1084,6 +1084,21 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      if (messagesPath === '/v1/messages') {
+        claudeAgentRequestContext = describeClaudeAgentRequest(req.headers, original);
+        log(config, 'info', 'claude_agent_request_observed', {
+          requestId,
+          agent_context: claudeAgentRequestContext.context,
+          has_agent_id: claudeAgentRequestContext.has_agent_id,
+          has_parent_agent_id: claudeAgentRequestContext.has_parent_agent_id,
+          agent_id_fingerprint: claudeAgentRequestContext.agent_id_fingerprint,
+          parent_agent_id_fingerprint: claudeAgentRequestContext.parent_agent_id_fingerprint,
+          declared_subagent_tools: claudeAgentRequestContext.declared_subagent_tools,
+          stream: claudeAgentRequestContext.stream,
+          message_count: claudeAgentRequestContext.message_count,
+        });
+      }
+
       requestStage = 'request_trace';
       await writeWebToolTrace(
         requestId,
@@ -1093,59 +1108,6 @@ export function createProxyServer(config, dependencies = {}) {
         { headers: req.headers, body: original },
       );
       const clientSessionId = claudeCodeSessionId(req.headers, original);
-      const clientAgentContext = claudeCodeAgentContext(req.headers);
-      const parentCanDispatchSubagent = messagesPath === '/v1/messages'
-        && original.stream === true
-        && !clientAgentContext.isSubagent
-        && hasSubagentDispatchTool(original.tools);
-      const semanticProgressEnabled = true;
-      const semanticProgressDeferred = parentCanDispatchSubagent;
-      if (messagesPath === '/v1/messages' && original.stream === true && clientAgentContext.isSubagent) {
-        log(config, 'info', 'subagent_progress_enabled', {
-          requestId,
-          source: 'claude_code_agent_headers',
-          agent_id_present: Boolean(clientAgentContext.agentId),
-          parent_agent_id_present: Boolean(clientAgentContext.parentAgentId),
-          semantic_progress_enabled: true,
-        });
-      } else if (parentCanDispatchSubagent) {
-        log(config, 'info', 'parent_agent_progress_deferred', {
-          requestId,
-          source: 'subagent_dispatch_tool',
-          semantic_progress_enabled: true,
-          semantic_progress_deferred: true,
-          transport_keepalive_enabled: true,
-        });
-      }
-    const resolveDeferredParentProgressFromBlock = async ({ type = '', name = '' } = {}) => {
-      if (!parentCanDispatchSubagent || !progress?.semanticProgressDeferred) return;
-      const blockType = String(type || '');
-      if (['thinking', 'redacted_thinking'].includes(blockType)) return;
-      if (blockType === 'tool_use' && isSubagentDispatchToolName(name)) {
-        await progress.suppressSemanticProgress();
-        log(config, 'info', 'parent_agent_progress_suppressed_for_handoff', {
-          requestId,
-          tool_name: String(name || '').slice(0, 80),
-          transport_keepalive_enabled: true,
-        });
-        return;
-      }
-      await progress.releaseSemanticProgress();
-      log(config, 'info', 'parent_agent_progress_released', {
-        requestId,
-        trigger_block_type: blockType || 'unknown',
-        tool_name: blockType === 'tool_use' ? String(name || '').slice(0, 80) : '',
-      });
-    };
-    const resolveDeferredParentProgressFromResponse = async (response) => {
-      if (!parentCanDispatchSubagent || !progress?.semanticProgressDeferred) return;
-      const block = firstDecisiveContentBlock(response);
-      await resolveDeferredParentProgressFromBlock({
-        type: String(block?.type || 'text'),
-        name: String(block?.name || ''),
-      });
-    };
-
       const toolResultContinuation = messagesPath === '/v1/messages' && isToolResultContinuation(original.messages);
       if (messagesPath === '/v1/messages') {
         releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId });
@@ -1204,12 +1166,13 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
-            semanticProgressEnabled,
-          semanticProgressDeferred,
+            onWrite: observeProgressWrite,
           });
           await progress.open();
+          observeAgentHandoff(childResponse);
           await emitFinalAnthropicResponse(progress, childResponse, { locale: config.responseLanguage });
         } else {
+          observeAgentHandoff(childResponse);
           sendJson(res, 200, childResponse);
         }
         completed = true;
@@ -1375,8 +1338,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const maybeShowStartupBanner = async (stream) => {
-        if (!stream || stream.semanticProgressEnabled === false || stream.semanticProgressDeferred === true || original?.stream !== true || !clientSessionId) return false;
-        if (clientAgentContext.isSubagent) return false;
+        if (!stream || original?.stream !== true || !clientSessionId) return false;
         if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
         const snapshot = runtimeTelemetry.snapshot();
         const banner = formatStartupBanner({
@@ -1459,8 +1421,7 @@ export function createProxyServer(config, dependencies = {}) {
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
-            semanticProgressEnabled,
-          semanticProgressDeferred,
+            onWrite: observeProgressWrite,
           });
           await progress.open();
           await maybeShowStartupBanner(progress);
@@ -1489,20 +1450,20 @@ export function createProxyServer(config, dependencies = {}) {
               onResponseChunk: onBaseResponseChunk,
               onStreamPhase: onManagedModelStreamPhase,
               onSemanticDelta: onModelSemanticDelta,
-              onContentBlockStart: resolveDeferredParentProgressFromBlock,
               onBusyEvent: onBaseBusyEvent,
               onResponseMode: onBaseResponseMode,
             },
           );
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
-          await resolveDeferredParentProgressFromResponse(response);
           response = await applyFinalPresentationLanguage(response, original);
           progress.stopSemanticHeartbeat();
+          observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
           let response = await callUpstreamJson(original, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
           response = await applyFinalPresentationLanguage(response, original);
+          observeAgentHandoff(response);
           sendJson(res, 200, response);
         }
         completed = true;
@@ -1729,20 +1690,20 @@ export function createProxyServer(config, dependencies = {}) {
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
-            semanticProgressEnabled,
-          semanticProgressDeferred,
+            onWrite: observeProgressWrite,
           });
           await progress.open();
           await maybeShowStartupBanner(progress);
           let response = await callUpstreamManagedStream(
-            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onContentBlockStart: resolveDeferredParentProgressFromBlock, onBusyEvent: onBaseBusyEvent, onResponseMode: onBaseResponseMode },
+            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent, onResponseMode: onBaseResponseMode },
           );
-          await resolveDeferredParentProgressFromResponse(response);
           response = await applyFinalPresentationLanguage(response, request);
+          observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
           let response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
           response = await applyFinalPresentationLanguage(response, request);
+          observeAgentHandoff(response);
           sendJson(res, 200, response);
         }
         completed = true;
@@ -1771,8 +1732,6 @@ export function createProxyServer(config, dependencies = {}) {
           visibleAfterMs: config.progressVisibleAfterMs,
           locale: config.responseLanguage,
           getReceivedBytes: getBaseResponseBytes,
-          semanticProgressEnabled,
-          semanticProgressDeferred,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {
               requestId,
@@ -1782,6 +1741,7 @@ export function createProxyServer(config, dependencies = {}) {
             });
           },
           onWrite: (entry) => {
+            observeProgressWrite(entry);
             if (entry.backpressure) {
               log(config, 'warn', 'progress_sse_backpressure', {
                 requestId,
@@ -1909,11 +1869,6 @@ export function createProxyServer(config, dependencies = {}) {
         onResponseChunk: onBaseResponseChunk,
         onStreamPhase: onManagedModelStreamPhase,
         onSemanticDelta: onModelSemanticDelta,
-        onContentBlockStart: async ({ type = '', name = '' } = {}) => {
-          if (String(type) === 'tool_use' && isSubagentDispatchToolName(name)) {
-            await resolveDeferredParentProgressFromBlock({ type, name });
-          }
-        },
         onBusyEvent: onBaseBusyEvent,
         onResponseMode: onBaseResponseMode,
       });
@@ -2016,7 +1971,6 @@ export function createProxyServer(config, dependencies = {}) {
             : undefined,
           signal: abortController.signal,
         });
-        await resolveDeferredParentProgressFromResponse(result);
         if (!nativeWebSearchFastLane) {
           result = await applyFinalPresentationLanguage(result, request);
         }
@@ -2037,8 +1991,12 @@ export function createProxyServer(config, dependencies = {}) {
               - totalAnthropicInputTokens(initialStreamUsage),
             output_tokens: observedUsage.output_tokens || 0,
           });
+          observeAgentHandoff(result);
           await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex, locale: config.responseLanguage });
-        } else sendJson(res, 200, result);
+        } else {
+          observeAgentHandoff(result);
+          sendJson(res, 200, result);
+        }
       } else {
         if (request.stream === true) {
           progressTiming.mode = 'model';
@@ -2058,7 +2016,6 @@ export function createProxyServer(config, dependencies = {}) {
           let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
             onSemanticDelta: onModelSemanticDelta,
-            onContentBlockStart: resolveDeferredParentProgressFromBlock,
             onBusyEvent: onBaseBusyEvent,
             onUsage: ({ stage, usage }) => log(config, 'info', 'managed_stream_usage_observed', {
               requestId,
@@ -2099,12 +2056,13 @@ export function createProxyServer(config, dependencies = {}) {
           });
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
-          await resolveDeferredParentProgressFromResponse(response);
           response = await applyFinalPresentationLanguage(response, request);
+          observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
           let response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
           response = await applyFinalPresentationLanguage(response, request);
+          observeAgentHandoff(response);
           sendJson(res, 200, response);
         }
       }

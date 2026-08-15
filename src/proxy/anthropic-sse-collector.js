@@ -75,7 +75,7 @@ function finalizeToolInput(block, partialJson, index) {
 }
 
 export async function collectAnthropicMessageFromSse(upstream, {
-  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {}, onSemanticDelta = () => {}, onContentBlockStart = () => {},
+  onFirstEvent = () => {}, onUsage = () => {}, onComplete = () => {}, onStreamPhase = () => {}, onSemanticDelta = () => {},
 } = {}) {
   if (!upstream?.body) throw invalidStream('vLLM Anthropic SSE response did not contain a body.');
 
@@ -134,13 +134,6 @@ export async function collectAnthropicMessageFromSse(upstream, {
         throw invalidStream('vLLM Anthropic SSE content_block_start was invalid.');
       }
       blocks.set(index, structuredClone(block));
-      try {
-        await onContentBlockStart({
-          index,
-          type: String(block.type || ''),
-          name: typeof block.name === 'string' ? block.name : '',
-        });
-      } catch {}
       if (!firstModelEventObserved) {
         firstModelEventObserved = true;
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}

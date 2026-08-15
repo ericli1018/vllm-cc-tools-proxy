@@ -438,32 +438,10 @@ test('README documents V0.29.12 runtime memory lifecycle hardening', () => {
 });
 
 
-test('README documents V0.29.13 Claude Code sub-agent UI isolation', () => {
-  assert.match(readme, /V0\.29\.13 Claude Code Sub-Agent UI Isolation/);
-  assert.match(readme, /x-claude-code-agent-id/);
-  assert.match(readme, /x-claude-code-parent-agent-id/);
-  assert.match(readme, /statusLine/);
-  assert.match(readme, /index 0|index=0/);
-  assert.match(readme, /no new ENV|No new ENV/i);
-});
-
-
-test('README documents V0.29.14 parent label isolation with sub-agent execution progress restored', () => {
-  assert.match(readme, /V0\.29\.14 Parent Agent Label Isolation/i);
-  assert.match(readme, /Sub Agent.*目前處理進度|目前處理進度.*Sub Agent/is);
-  assert.match(readme, /Agent.*Task/is);
-  assert.match(readme, /statusLine/);
-  assert.match(readme, /startup banner/i);
-  assert.match(readme, /no new ENV|No new ENV/i);
-});
-
-
-test('README documents V0.29.15 always-on transport liveness with deferred parent semantic progress', () => {
-  assert.match(readme, /V0\.29\.15.*Transport.*Liveness|V0\.29\.15.*Parent.*Progress/is);
-  assert.match(readme, /event:\s*ping|Anthropic.*ping/is);
-  assert.match(readme, /PROGRESS_PING_INTERVAL_MS/);
-  assert.match(readme, /Agent.*index 0|index 0.*Agent/is);
-  assert.match(readme, /deferred.*semantic progress|semantic progress.*deferred/is);
-  assert.match(readme, /Sub Agent.*目前處理進度|目前處理進度.*Sub Agent/is);
-  assert.match(readme, /no new ENV|No new ENV/i);
+test('README documents V0.29.16 diagnostic-first Agent UI tracing from the V0.29.12 baseline', () => {
+  assert.match(readme, /V0\.29\.16 Diagnostic-First Claude Agent UI Tracing/);
+  assert.match(readme, /V0\.29\.12 visible progress semantics are preserved/);
+  assert.match(readme, /claude_agent_request_observed/);
+  assert.match(readme, /proxy_progress_first_visible/);
+  assert.match(readme, /claude_agent_handoff_observed/);
 });
