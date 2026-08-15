@@ -104,7 +104,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text',
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text', visibleProgressEnabled = true,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -119,6 +119,7 @@ export class ProgressStream {
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
     this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
+    this.visibleProgressEnabled = visibleProgressEnabled !== false;
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -176,7 +177,7 @@ export class ProgressStream {
   }
 
   async showStartupBanner(text) {
-    if (this.closed || this.progressClosed || this.visible || !text) return false;
+    if (!this.visibleProgressEnabled || this.closed || this.progressClosed || this.visible || !text) return false;
     this.#clearPending();
     const changedAt = Date.now();
     const revision = ++this.revision;
@@ -211,7 +212,7 @@ export class ProgressStream {
   }
 
   startSemanticHeartbeat(messageFactory) {
-    if (this.semanticHeartbeatTimer || this.progressClosed || this.closed || typeof messageFactory !== 'function') return;
+    if (!this.visibleProgressEnabled || this.semanticHeartbeatTimer || this.progressClosed || this.closed || typeof messageFactory !== 'function') return;
     this.semanticHeartbeatTimer = setInterval(() => {
       let message = '';
       try { message = messageFactory(); } catch { return; }
@@ -327,7 +328,7 @@ ${message}`;
   }
 
   async update(message, { force = false, kind = 'progress_delta', details = {}, renderMode = 'auto' } = {}) {
-    if (this.closed || this.progressClosed || !message) return;
+    if (!this.visibleProgressEnabled || this.closed || this.progressClosed || !message) return;
     const changedAt = Date.now();
     const isHeartbeat = kind === 'semantic_heartbeat';
     let revision = this.revision;

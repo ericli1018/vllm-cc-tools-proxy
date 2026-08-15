@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.22'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.22'
+test "$(node -p "require('./package.json').version")" = '0.29.23'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.23'
 
 
 test -f src/i18n/response-language.js
@@ -232,7 +232,7 @@ grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
  grep -Fq 'buildBaseLanguageRepairRequest' src/services/proxy-server.js
  test -f src/proxy/final-language-gate.js
  test -f src/services/final-language-repair.js
- test -f V0.2.26.4-更新說明.md
+ test -f change_log/V0.2.26.4-更新說明.md
 
 # V0.2.26.5 Final Language Gate boundary hotfix contract
  grep -Fq 'V0.2.26.5 Final Language Gate boundary hotfix' README.md
@@ -242,7 +242,7 @@ grep -Fq 'whole-task hard deadline is now **disabled by default**' README.md
  grep -Fq '0.2.26+hotfix.5' README.md
  grep -Fq 'if (!nativeWebSearchFastLane)' src/services/proxy-server.js
  grep -Fq 'variantDominates' src/proxy/final-language-gate.js
- test -f V0.2.26.5-更新說明.md
+ test -f change_log/V0.2.26.5-更新說明.md
 # V0.2.27 routed schematic PDF release contract
 grep -Fq 'V0.2.27 routed schematic PDF pipeline' README.md
 grep -Fq 'media-v7' README.md
@@ -251,7 +251,7 @@ grep -Fq 'evidence-v2' README.md
 test -f src/visual/pdf-page-classifier.js
 test -f src/visual/pdf-tiler.js
 test -f src/visual/pdf-evidence-merger.js
-test -f V0.2.27-更新說明.md
+test -f change_log/V0.2.27-更新說明.md
 grep -Fq 'pdf_schematic_tile' src/parsers/pdf.js
 grep -Fq 'registerRegion' src/visual/asset-registry.js
 
@@ -260,7 +260,7 @@ grep -Fq 'V0.2.27.1 live PDF/media progress hotfix' README.md
 grep -Fq 'sanitized bootstrap' README.md
 grep -Fq 'exact cumulative `message_delta.usage`' README.md
 test -f src/proxy/media-usage-bootstrap.js
-test -f V0.2.27.1-更新說明.md
+test -f change_log/V0.2.27.1-更新說明.md
 grep -Fq 'managed_usage_bootstrap_succeeded' src/services/proxy-server.js
 grep -Fq 'media_usage_exact' src/services/proxy-server.js
 grep -Fq 'pdf_schematic_tile_render' src/parsers/pdf.js
@@ -272,7 +272,7 @@ grep -Fq 'V0.2.27.2 native Read.pages focused PDF refinement' README.md
 grep -Fq 'page-scoped cache' README.md
 grep -Fiq 'no custom Claude Code tool' README.md
 test -f src/proxy/pdf-page-scope.js
-test -f V0.2.27.2-更新說明.md
+test -f change_log/V0.2.27.2-更新說明.md
 grep -Fq 'scopeMediaCacheKey' src/cache/cache-key.js
 grep -Fq 'mediaOccurrences' src/proxy/media-preflight.js
 grep -Fq 'pageScope' src/proxy/media-progress.js
@@ -283,7 +283,7 @@ grep -Fq 'page_scope_mode' src/parsers/pdf.js
 # V0.2.27.3 per-round continuation byte accounting hotfix contract
 grep -Fq 'V0.2.27.3 per-round continuation byte accounting hotfix' README.md
 grep -Fq 'round_received_bytes' README.md
-test -f V0.2.27.3-更新說明.md
+test -f change_log/V0.2.27.3-更新說明.md
 grep -Fq 'getCurrentRoundResponseBytes' src/services/proxy-server.js
 grep -Fq 'round_received_bytes: receivedThisRound' src/services/proxy-server.js
 
@@ -291,7 +291,7 @@ grep -Fq 'round_received_bytes: receivedThisRound' src/services/proxy-server.js
 # V0.2.28 IMAGE wire-contract observability release contract
 grep -Fq 'V0.2.28 IMAGE wire-contract observability' README.md
 test -f src/proxy/image-payload-observer.js
-test -f V0.2.28-更新說明.md
+test -f change_log/V0.2.28-更新說明.md
 grep -Fq 'image_payload_observed' src/services/proxy-server.js
 grep -Fq 'image_payload_normalized' src/proxy/media-adapters.js
 grep -Fq 'wire_dimensions' src/proxy/media-preflight.js
@@ -302,13 +302,13 @@ grep -Fq 'evidence-v2' README.md
 
 # V0.2.28.1 historical GLM output-contract hardening documentation
 grep -Fq 'V0.2.28.1 GLM output contract hardening' README.md
-test -f V0.2.28.1-更新說明.md
+test -f change_log/V0.2.28.1-更新說明.md
 grep -Fq 'language_not_compliant' src/proxy/final-language-gate.js
 grep -Fq 'visual_reasoning_stripped' src/visual/vision-client.js
 
 # V0.2.28.2 Vision empty-output contract hotfix
 grep -Fq 'V0.2.28.2 Vision empty-output contract hotfix' README.md
-test -f V0.2.28.2-更新說明.md
+test -f change_log/V0.2.28.2-更新說明.md
 grep -Fq 'vision_output_observed' src/visual/vision-client.js
 grep -Fq 'vision_empty_output_retry' src/visual/vision-client.js
 grep -Fq "code: 'vision_empty_output'" src/visual/vision-client.js
@@ -321,7 +321,7 @@ grep -Fq 'evidence-v4' README.md
 
 # V0.2.28.3 Vision evidence quality gate + adaptive thinking recovery
 grep -Fq 'V0.2.28.3 Vision Evidence Quality Gate' README.md
-test -f V0.2.28.3-更新說明.md
+test -f change_log/V0.2.28.3-更新說明.md
 grep -Fq 'vision_output_quality' src/visual/vision-client.js
 grep -Fq 'vision_quality_retry' src/visual/vision-client.js
 grep -Fq "code: 'vision_output_invalid'" src/visual/vision-client.js
@@ -332,7 +332,7 @@ grep -Fq 'evidence-v5' README.md
 
 # V0.2.28.8 cache-aware context token accounting
 grep -Fq 'V0.2.28.8 cache-aware context token accounting' README.md
-test -f V0.2.28.8-更新說明.md
+test -f change_log/V0.2.28.8-更新說明.md
 grep -Fq 'hasInputUsage' src/proxy/progress.js
 ! grep -Fq 'Math.max(current.input_tokens' src/proxy/progress.js
 grep -Fq 'replaces preflight total with cache-split input usage atomically' test/progress.test.js
@@ -340,7 +340,7 @@ grep -Fq 'does not double-count vLLM cache-split usage after preflight total' te
 
 # V0.2.28.7 compact main-model phase progress
 grep -Fq 'V0.2.28.7 compact main-model phase progress' README.md
-test -f V0.2.28.7-更新說明.md
+test -f change_log/V0.2.28.7-更新說明.md
 grep -Fq 'onStreamPhase' src/proxy/anthropic-sse-collector.js
 grep -Fq 'managed_model_stream_phase_changed' src/services/proxy-server.js
 grep -Fq "'modelHeartbeat'" test/response-language.test.js
@@ -351,7 +351,7 @@ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 # V0.2.28.6 Final Language direct-segment repair
 grep -Fq 'V0.2.28.6 Final Language direct-segment repair' README.md
-test -f V0.2.28.6-更新說明.md
+test -f change_log/V0.2.28.6-更新說明.md
 grep -Fq 'extractLanguageRepairSegmentFromAnthropic' src/services/final-language-repair.js
 grep -Fq 'segment_index' src/services/final-language-repair.js
 grep -Fq 'segment_count' src/services/final-language-repair.js
@@ -365,7 +365,7 @@ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 # V0.2.28.5 recovery-only managed continuation state compression
 grep -Fq 'V0.2.28.5 managed continuation state compression' README.md
-test -f V0.2.28.5-更新說明.md
+test -f change_log/V0.2.28.5-更新說明.md
 test -f src/proxy/continuation-state.js
 test -f src/services/continuation-state-compressor.js
 grep -Fq 'prepareContinuationState' src/proxy/managed-loop.js
@@ -383,7 +383,7 @@ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 # V0.2.28.4 schematic tile isolation + Vision transport diagnostics
 grep -Fq 'V0.2.28.4 PDF schematic tile isolation' README.md
-test -f V0.2.28.4-更新說明.md
+test -f change_log/V0.2.28.4-更新說明.md
 grep -Fq 'pdf_schematic_tile_failed' src/parsers/pdf.js
 grep -Fq 'transport_code' src/lib/media.js
 grep -Fq 'UND_ERR_HEADERS_TIMEOUT' src/lib/media.js
@@ -399,12 +399,12 @@ grep -Fq 'context_compact_request_detected' src/services/proxy-server.js
 grep -Fq 'context_compact_bypass' src/services/proxy-server.js
 grep -Fq 'prepareClaudeCodeCompactRequest' src/services/proxy-server.js
 grep -Fq 'V0.2.28.9 Context Compact routing guard' README.md
-test -f V0.2.28.9-更新說明.md
+test -f change_log/V0.2.28.9-更新說明.md
 
 # V0.2.28.10 external Context Compact model
  test -f src/services/context-compact-client.js
  test -f test/context-compact-client.test.js
- test -f V0.2.28.10-更新說明.md
+ test -f change_log/V0.2.28.10-更新說明.md
  grep -Fq 'V0.2.28.10 external Context Compact model' README.md
  grep -q '^CONTEXT_COMPACT_PROVIDER=ollama$' .env.example
  grep -q '^CONTEXT_COMPACT_URL=http://host.docker.internal:11434$' .env.example
@@ -428,7 +428,7 @@ test -f V0.2.28.9-更新說明.md
 test -f src/services/base-busy-retry.js
 test -f test/base-busy-retry.test.js
 test -f test/vllm-busy-retry.test.js
-test -f V0.2.28.11-更新說明.md
+test -f change_log/V0.2.28.11-更新說明.md
 grep -Fq 'V0.2.28.11 independent Base connections' README.md
 grep -Fq 'base_upstream_busy_${event}' src/services/proxy-server.js
 grep -Fq "event === 'wait'" src/services/proxy-server.js
@@ -444,7 +444,7 @@ grep -Fq "event === 'accepted'" src/services/proxy-server.js
 
 
 # V0.29.0 progressive document read + persistent source cache
-test -f V0.29.0-更新說明.md
+test -f change_log/V0.29.0-更新說明.md
 grep -Fq 'V0.29.0 Progressive Document Read + Persistent Source Cache' README.md
 test -f src/cache/document-source-cache.js
 grep -Fq 'scopePdfDocumentCacheKey' src/cache/cache-key.js
@@ -460,7 +460,7 @@ grep -Fq 'V0.29.0 unscoped large PDF returns a bounded document map' test/pdf-pa
 
 
 # V0.29.3 Recursive Vision Zoom & Overlapping Tiles
-test -f V0.29.3-更新說明.md
+test -f change_log/V0.29.3-更新說明.md
 grep -Fq 'V0.29.3 Recursive Vision Zoom & Overlapping Tiles' README.md
 grep -Fq 'VISUAL_STATUS: NEEDS_ZOOM' src/visual/vision-client.js
 grep -Fq "allowNeedsZoomFallback = false" src/visual/vision-client.js
@@ -478,7 +478,7 @@ grep -Fq 'V0.29.3 DIAGRAM NEEDS_ZOOM falls back' test/pdf-parser.test.js
 grep -Fq 'README documents V0.29.3 Recursive Vision Zoom' test/deployment.test.js
 
 # V0.29.2 Vision Output Contract
-test -f V0.29.2-更新說明.md
+test -f change_log/V0.29.2-更新說明.md
 grep -Fq 'V0.29.2 Vision Output Contract' README.md
 grep -Fq 'VISUAL_STATUS: CONTENT' src/visual/vision-client.js
 grep -Fq 'VISUAL_STATUS: BLANK' src/visual/vision-client.js
@@ -493,7 +493,7 @@ grep -Fq 'V0.29.2 retries a final Vision response that omits VISUAL_STATUS' test
 grep -Fq 'README documents V0.29.2 Vision Output Contract' test/deployment.test.js
 
 # V0.29.1 Vision Recovery Safety
-test -f V0.29.1-更新說明.md
+test -f change_log/V0.29.1-更新說明.md
 grep -Fq 'V0.29.1 Vision Recovery Safety' README.md
 grep -Fq 'VLLM_VISION_TIMEOUT_MS=120000' README.md
 grep -Fq "code: 'vision_service_timeout'" src/visual/vision-client.js
@@ -505,7 +505,7 @@ grep -Fq 'V0.29.1 one recoverable image failure does not stop later images' test
 grep -Fq 'V0.29.1 Vision timeout uses explicit deadline' test/vision-client.test.js
 
 # V0.2.28.20 large payload + media safety
-test -f V0.2.28.20-更新說明.md
+test -f change_log/V0.2.28.20-更新說明.md
 grep -Fq 'V0.2.28.20 Large Payload & Media Safety' README.md
 test -f src/lib/structure-guard.js
 ! grep -Fq 'BASE64_PATTERN' src/lib/media.js
@@ -520,7 +520,7 @@ grep -Fq 'error_stack' src/services/proxy-server.js
 grep -Fq 'V0.2.28.20 large PDF Read request is fileized' test/proxy-server.test.js
 
 # V0.2.28.19 unified round-scoped telemetry + Proxy-global status counters
-test -f V0.2.28.19-更新說明.md
+test -f change_log/V0.2.28.19-更新說明.md
 grep -Fq 'V0.2.28.19 Unified Round-Scoped Telemetry' README.md
 grep -Fq 'beginModelRound' src/proxy/runtime-telemetry.js
 grep -Fq 'endModelRound' src/proxy/runtime-telemetry.js
@@ -533,16 +533,16 @@ grep -Fq 'runtimeTelemetry.endModelRound' src/services/proxy-server.js
 grep -Fq "Math.floor((Number(elapsedMs) || 0) / 1000)" src/i18n/response-language.js
 
 # V0.2.28.18 strict Final Language Repair + round semantic-byte completion
-test -f V0.2.28.18-更新說明.md
+test -f change_log/V0.2.28.18-更新說明.md
 grep -Fq 'V0.2.28.18 Strict Final Language Repair' README.md
 grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.22'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.23'
 
 # V0.2.28.17 semantic model output telemetry
- test -f V0.2.28.17-更新說明.md
+ test -f change_log/V0.2.28.17-更新說明.md
  grep -Fq 'V0.2.28.17 Semantic Model Output Telemetry' README.md
  grep -Fq 'onSemanticDelta' src/proxy/anthropic-sse-collector.js
  grep -Fq 'observeModelDelta' src/proxy/runtime-telemetry.js
@@ -551,7 +551,7 @@ test "$(node -p "require('./package-lock.json').version")" = '0.29.22'
  grep -Fq 'semantic model delta' test/anthropic-sse-collector.test.js
 
 # V0.2.28.16 Claude Code native statusLine + append-only SSE liveness
-test -f V0.2.28.16-更新說明.md
+test -f change_log/V0.2.28.16-更新說明.md
 test -f scripts/cc-tool-proxy-statusline.js
 test -f test/runtime-telemetry.test.js
 test -f test/statusline-client.test.js
@@ -564,7 +564,7 @@ grep -Fq 'refreshInterval' README.md
 ! grep -Fq '\r${message}${padding}' src/proxy/progress.js
 
 # V0.2.28.14 multilingual runtime progress telemetry
-test -f V0.2.28.14-更新說明.md
+test -f change_log/V0.2.28.14-更新說明.md
 grep -Fq 'V0.2.28.14 Multilingual Runtime Progress Telemetry' README.md
 grep -Fq 'formatByteRate' src/i18n/response-language.js
 grep -Fq 'recentBytesPerSecond' src/services/proxy-server.js
@@ -573,7 +573,7 @@ grep -Fq 'progressBlockHeader(this.locale)' src/proxy/progress.js
 ! grep -Fq 'progressBlockHeader(this.locale, { receivedBytes:' src/proxy/progress.js
 
 # V0.2.28.13 original-vs-repaired language-shift validation
-test -f V0.2.28.13-更新說明.md
+test -f change_log/V0.2.28.13-更新說明.md
 grep -Fq 'LANGUAGE_SHIFT_MIN_TARGET_GAIN = 12' src/proxy/final-language-gate.js
 grep -Fq 'LANGUAGE_SHIFT_MIN_SOURCE_REDUCTION_RATIO = 0.30' src/proxy/final-language-gate.js
 grep -Fq 'accept_by_language_shift' src/proxy/final-language-gate.js
@@ -582,7 +582,7 @@ grep -Fq 'V0.2.28.13 Original-vs-Repaired Language Shift Validation' README.md
 
 # V0.2.28.12 technical-prose language classification + dedicated Language Processor + session banner
 test -f src/proxy/runtime-telemetry.js
-test -f V0.2.28.12-更新說明.md
+test -f change_log/V0.2.28.12-更新說明.md
 grep -Fq 'LANG_PROCESSOR_ENABLED=false' .env.example
 grep -Fq 'LANG_PROCESSOR_PROVIDER: ${LANG_PROCESSOR_PROVIDER:-vllm}' compose.yaml
 grep -Fq 'LANG_PROCESSOR_URL: ${LANG_PROCESSOR_URL:-}' compose.yaml
@@ -596,7 +596,7 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
 
 
 # V0.29.5 Visual Detail Contract
- test -f V0.29.5-更新說明.md
+ test -f change_log/V0.29.5-更新說明.md
  grep -Fq 'V0.29.5 Visual Detail Contract' README.md
  grep -Fq 'VISUAL_DETAIL: SUFFICIENT' src/visual/vision-client.js
  grep -Fq 'VISUAL_DETAIL: NEEDS_ZOOM' src/visual/vision-client.js
@@ -613,7 +613,7 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
  grep -Fq 'README documents V0.29.5 two-dimensional Visual Detail contract' test/deployment.test.js
 
 # V0.29.4 Generic Zoom Fallback & Vision Contract Repair
- test -f V0.29.4-更新說明.md
+ test -f change_log/V0.29.4-更新說明.md
  grep -Fq 'V0.29.4 Generic Zoom Fallback & Vision Contract Repair' README.md
  grep -Fq 'analyzeGenericZoomFallback' src/visual/generic-zoom.js
  grep -Fq 'allowNeedsZoomFallback: true' src/proxy/media-adapters.js
@@ -628,7 +628,7 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
  grep -Fq 'V0.29.4 localizes generic image zoom-tile progress phases' test/response-language.test.js
 
 # V0.29.6 Generic Zoom Terminal Convergence
- test -f V0.29.6-更新說明.md
+ test -f change_log/V0.29.6-更新說明.md
  grep -Fq 'V0.29.6 Generic Zoom Terminal Convergence' README.md
  grep -Fq 'terminal_status: resolved | partial | unreadable' README.md
  grep -Fq 'media_cache_skip' README.md
@@ -645,7 +645,7 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
  grep -Fq 'V0.29.6 persistent literal Vision control tags' test/vision-client.test.js
 
 # V0.29.7 Failure-Aware Vision Recovery
- test -f V0.29.7-更新說明.md
+ test -f change_log/V0.29.7-更新說明.md
  grep -Fq 'V0.29.7 Failure-Aware Vision Recovery' README.md
  grep -Fq 'MAX_VISION_RECOVERY_RETRIES = 3' src/visual/vision-client.js
  grep -Fq 'focused_recovery' src/visual/vision-client.js
@@ -663,8 +663,8 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
 
 
 # V0.29.8 Visual Crop Terminal Recovery
- test -f V0.29.8-更新說明.md
- test -f V0.29.8-實作與驗證報告.md
+ test -f change_log/V0.29.8-更新說明.md
+ test -f change_log/V0.29.8-實作與驗證報告.md
  grep -Fq 'V0.29.8 Visual Crop Terminal Recovery' README.md
  grep -Fq "'visual_crop_depth_limit'" src/visual/crop-errors.js
  grep -Fq "vision_crop_budget_exhausted" src/visual/vision-client.js
@@ -678,8 +678,8 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
 
 
 # V0.29.9 Historical Media Continuation Dedup
- test -f V0.29.9-更新說明.md
- test -f V0.29.9-實作與驗證報告.md
+ test -f change_log/V0.29.9-更新說明.md
+ test -f change_log/V0.29.9-實作與驗證報告.md
  test -f src/cache/media-continuation-cache.js
  grep -Fq 'V0.29.9 Historical Media Continuation Dedup' README.md
  grep -Fq 'media_continuation_cache_hit' src/services/proxy-server.js
@@ -695,8 +695,8 @@ grep -Fq 'languageProcessorAvailable' src/services/proxy-server.js
 
 
 # V0.29.10 Authoritative VLLM_BASE_MODEL Routing
- test -f V0.29.10-更新說明.md
- test -f V0.29.10-實作與驗證報告.md
+ test -f change_log/V0.29.10-更新說明.md
+ test -f change_log/V0.29.10-實作與驗證報告.md
  test -f src/proxy/base-model.js
  grep -Fq 'V0.29.10 Authoritative VLLM_BASE_MODEL Routing' README.md
  grep -Fq 'vllmBaseModel' src/config.js
@@ -715,8 +715,8 @@ echo 'Verification complete.'
 
 
 # V0.29.11 Base Response Mode-aware Timeout
- test -f V0.29.11-更新說明.md
- test -f V0.29.11-實作與驗證報告.md
+ test -f change_log/V0.29.11-更新說明.md
+ test -f change_log/V0.29.11-實作與驗證報告.md
  grep -Fq 'VLLM_BASE_RESPONSE_MODE=auto' .env.example
  grep -Fq 'MANAGED_MODEL_STALL_TIMEOUT_MS=90000' .env.example
  grep -Fq 'VLLM_BASE_RESPONSE_MODE: ${VLLM_BASE_RESPONSE_MODE:-auto}' compose.yaml
@@ -734,8 +734,8 @@ echo 'Verification complete.'
 
 
 # V0.29.12 Runtime Memory Lifecycle Hardening
- test -f V0.29.12-更新說明.md
- test -f V0.29.12-實作與驗證報告.md
+ test -f change_log/V0.29.12-更新說明.md
+ test -f change_log/V0.29.12-實作與驗證報告.md
  test -f test/progress-memory.test.js
  grep -Fq 'V0.29.12 Runtime Memory Lifecycle Hardening' README.md
  grep -Fq 'async dispose()' src/proxy/progress.js
@@ -752,8 +752,8 @@ echo 'Verification complete.'
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 # V0.29.16 Diagnostic-First Claude Agent UI Tracing
- test -f V0.29.16-更新說明.md
- test -f V0.29.16-實作與驗證報告.md
+ test -f change_log/V0.29.16-更新說明.md
+ test -f change_log/V0.29.16-實作與驗證報告.md
  test -f src/proxy/claude-agent-diagnostics.js
  grep -Fq 'V0.29.16 Diagnostic-First Claude Agent UI Tracing' README.md
  grep -Fq 'V0.29.12 visible progress semantics are preserved' README.md
@@ -769,10 +769,10 @@ echo 'Verification complete.'
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
 
 # V0.29.17 / V0.29.18 historical title-prefix compatibility artifacts
- test -f V0.29.17-更新說明.md
- test -f V0.29.17-實作與驗證報告.md
- test -f V0.29.18-更新說明.md
- test -f V0.29.18-實作與驗證報告.md
+ test -f change_log/V0.29.17-更新說明.md
+ test -f change_log/V0.29.17-實作與驗證報告.md
+ test -f change_log/V0.29.18-更新說明.md
+ test -f change_log/V0.29.18-實作與驗證報告.md
  grep -Fq 'V0.29.17 Sub Agent Title-Anchored Progress' README.md
  grep -Fq 'V0.29.18 Sub Agent Every-Delta Title Anchoring' README.md
  grep -Fq 'V0.29.19 history stripping remains backward-compatible with V0.29.17/18 title-anchored progress blocks' test/progress.test.js
@@ -785,20 +785,20 @@ echo 'Verification complete.'
  ! grep -Fq 'this.progressTitle' src/proxy/progress.js
 
 # V0.29.19 historical native Sub Agent row experiment (superseded in V0.29.20)
- test -f V0.29.19-更新說明.md
- test -f V0.29.19-實作與驗證報告.md
+ test -f change_log/V0.29.19-更新說明.md
+ test -f change_log/V0.29.19-實作與驗證報告.md
  test ! -f scripts/cc-tool-proxy-subagent-statusline.js
  test ! -f test/subagent-statusline-client.test.js
  grep -Fq 'V0.29.19 Claude Code Native Sub Agent Row Isolation (superseded)' README.md
 
 # V0.29.20 Main-Owned Status Telemetry
- test -f V0.29.20-更新說明.md
- test -f V0.29.20-實作與驗證報告.md
+ test -f change_log/V0.29.20-更新說明.md
+ test -f change_log/V0.29.20-實作與驗證報告.md
  grep -Fq 'V0.29.20 Main-Owned Status Telemetry' README.md
  grep -Fq 'V0.29.20 session status is owned by Main request while Sub Agent still counts as active work' test/runtime-telemetry.test.js
  grep -Fq 'V0.29.20 Sub Agent state never overwrites remembered Main session state' test/runtime-telemetry.test.js
  grep -Fq 'V0.29.20 status endpoint renders Main phase while aggregate counters include Sub Agent requests' test/proxy-server.test.js
- grep -Fq 'V0.29.22 keeps Main and Sub Agent visible text progress identical across WebSearch continuation' test/proxy-server.test.js
+ grep -Fq 'V0.29.23 keeps Main visible progress while Sub Agent is liveness-only across WebSearch continuation' test/proxy-server.test.js
  grep -Fq 'V0.29.20 keeps Claude Code native Sub Agent task rows untouched and documents Main-owned global statusLine' test/deployment.test.js
  grep -Fq "agentContext: claudeAgentRequestContext?.context || 'main'" src/services/proxy-server.js
  grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
@@ -811,8 +811,8 @@ echo 'Verification complete.'
 
 
 # V0.29.21 historical thinking-carrier compatibility (superseded in V0.29.22)
- test -f V0.29.21-更新說明.md
- test -f V0.29.21-實作與驗證報告.md
+ test -f change_log/V0.29.21-更新說明.md
+ test -f change_log/V0.29.21-實作與驗證報告.md
  grep -Fq 'V0.29.21 Sub Agent Immutable Task Name (superseded)' README.md
  grep -Fq "carrier = 'text'" src/proxy/progress.js
  grep -Fq "carrier === 'thinking'" src/proxy/progress.js
@@ -822,11 +822,10 @@ echo 'Verification complete.'
  ! grep -Fq "const progressCarrier = () => claudeAgentRequestContext?.context === 'subagent' ? 'thinking' : 'text';" src/services/proxy-server.js
 
 # V0.29.22 Unified Visible Progress
- test -f V0.29.22-更新說明.md
- test -f V0.29.22-實作與驗證報告.md
+ test -f change_log/V0.29.22-更新說明.md
+ test -f change_log/V0.29.22-實作與驗證報告.md
  grep -Fq 'V0.29.22 Unified Visible Progress' README.md
  grep -Fq 'V0.29.22 Main and Sub Agent progress use the same visible text carrier' test/progress.test.js
- grep -Fq 'V0.29.22 keeps Main and Sub Agent visible text progress identical across WebSearch continuation' test/proxy-server.test.js
  grep -Fq 'V0.29.22 restores one visible text progress carrier while leaving native Sub Agent rows untouched' test/deployment.test.js
  grep -Fq 'progress_carrier:' src/services/proxy-server.js
  ! grep -Fq 'progressCarrier =' src/services/proxy-server.js
@@ -840,6 +839,33 @@ echo 'Verification complete.'
  ! grep -Fq 'subagent_display_handoff_registered' src/services/proxy-server.js
  ! grep -Fq 'progressTitle:' src/services/proxy-server.js
  ! grep -Fq 'this.progressTitle' src/proxy/progress.js
+ grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
+ grep -Fq "status_owner: 'main'" src/services/proxy-server.js
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+
+
+# V0.29.23 Sub Agent Liveness-Only Progress + change_log layout
+ test -f change_log/CHANGELOG.md
+ test -f change_log/V0.29.23-更新說明.md
+ test -f change_log/V0.29.23-實作與驗證報告.md
+ test ! -f CHANGELOG.md
+ ! find . -maxdepth 1 -type f \( -name 'V*-更新說明.md' -o -name 'V*-實作與驗證報告.md' -o -name 'V*-診斷說明.md' \) | grep -q .
+ grep -Fq 'V0.29.23 Sub Agent Liveness-Only Progress' README.md
+ grep -Fq 'visibleProgressEnabled = true' src/proxy/progress.js
+ grep -Fq 'if (!this.visibleProgressEnabled || this.closed || this.progressClosed || !message) return;' src/proxy/progress.js
+ grep -Fq "visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent'" src/services/proxy-server.js
+ grep -Fq 'claude_agent_progress_policy' src/services/proxy-server.js
+ grep -Fq "transport_liveness: 'sse_ping'" src/services/proxy-server.js
+ grep -Fq 'V0.29.23 liveness-only ProgressStream sends ping without synthetic visible progress' test/progress.test.js
+ grep -Fq 'V0.29.23 keeps Main visible progress while Sub Agent is liveness-only across WebSearch continuation' test/proxy-server.test.js
+ grep -Fq 'V0.29.23 keeps release change logs under change_log instead of project root' test/deployment.test.js
+ grep -Fq 'V0.29.23 makes Sub Agent progress liveness-only while Main keeps visible progress' test/deployment.test.js
+ test ! -f scripts/cc-tool-proxy-subagent-statusline.js
+ test ! -f test/subagent-statusline-client.test.js
+ test ! -f src/proxy/subagent-display-registry.js
+ ! grep -Fq 'progressTitle:' src/services/proxy-server.js
  grep -Fq "state.sessionId === session && state.agentContext === 'main'" src/proxy/runtime-telemetry.js
  grep -Fq "status_owner: 'main'" src/services/proxy-server.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js

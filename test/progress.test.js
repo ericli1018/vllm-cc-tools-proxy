@@ -704,3 +704,31 @@ test('V0.29.19 semantic progress ignores the retired progressTitle compatibility
   assert.match(wire, /目前處理進度：\\n等待模型第一個位元組/);
   assert.match(wire, /\\n主模型開始思考/);
 });
+
+
+test('V0.29.23 liveness-only ProgressStream sends ping without synthetic visible progress', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 10,
+    heartbeatIntervalMs: 10,
+    visibleProgressEnabled: false,
+    locale: 'zh-TW',
+  });
+  await progress.open();
+  await progress.update('這段不應出現在 Sub Agent UI', { force: true, details: { phase: 'waiting' } });
+  progress.startSemanticHeartbeat(() => '這個 semantic heartbeat 也不應成為 assistant content');
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  await progress.closeProgress();
+  await progress.stop();
+
+  const wire = response.chunks.join('');
+  const pingCount = (wire.match(/event: ping/g) || []).length;
+  assert.ok(pingCount >= 2, `expected repeated transport pings, got ${pingCount}`);
+  assert.doesNotMatch(wire, /目前處理進度：/);
+  assert.doesNotMatch(wire, /這段不應出現在 Sub Agent UI/);
+  assert.doesNotMatch(wire, /這個 semantic heartbeat 也不應成為 assistant content/);
+  assert.doesNotMatch(wire, /"type":"text_delta"/);
+  assert.doesNotMatch(wire, /"type":"thinking_delta"/);
+  assert.equal(progress.visible, false);
+});

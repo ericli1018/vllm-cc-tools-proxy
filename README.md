@@ -1,8 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.22 restores one **visible progress transport** for every Claude Code model turn: Main and Sub Agent both use the existing assistant `text` / `text_delta` progress block. The V0.29.21 Sub Agent `thinking_delta` experiment is retired because live Claude Code runs received those events but did not render the expected `目前處理進度：` block. The global `statusLine` remains Main-owned exactly as in V0.29.20, and the Proxy still does not override Claude Code's native Sub Agent row.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.23 makes Sub Agent progress **liveness-only**: Main Agent keeps the existing visible assistant `text` / `text_delta` progress, while Sub Agent requests keep the SSE transport alive with `ping` events but emit no Proxy-owned visible progress block. This prevents `目前處理進度：...` from becoming Claude Code's Sub Agent row description. The global `statusLine` remains Main-owned.
 
-## V0.29.22 Unified Visible Progress
+## V0.29.23 Sub Agent Liveness-Only Progress
+
+V0.29.23 formalizes the UI boundary proven by live V0.29.21/V0.29.22 testing:
+
+```text
+Main request
+├─ SSE ping                         → transport liveness
+└─ Proxy progress text/text_delta → visible `目前處理進度：...`
+
+Sub Agent request
+├─ SSE ping                         → transport liveness
+├─ Proxy text_delta progress       → disabled
+├─ Proxy thinking_delta progress   → disabled
+└─ final assistant/tool response   → normal Claude Code stream
+```
+
+Sub Agent requests still create a `ProgressStream` so the client connection receives the initial SSE `ping` and the configured 5-second keepalive pings while waiting for Base-model output. `visibleProgressEnabled=false` makes `update()`, startup banner output, and semantic progress heartbeat content no-ops for Sub Agent requests. This suppresses both `text_delta` and `thinking_delta` synthetic progress without suppressing the actual model response or tool-use handoff.
+
+Main Agent behavior is unchanged: visible progress, semantic heartbeat, model phase transitions, tool handoff messages, and the global `◆ CC TOOL PROXY ...` status line remain available. Runtime telemetry continues to count Sub Agent activity in aggregate `sessions / active / waiting`, while global phase/elapsed/bytes ownership stays Main-only.
+
+The Proxy still does not configure `subagentStatusLine`, does not freeze or rewrite Claude Code's native Sub Agent task description, and does not ship a Sub Agent row renderer. Claude Code remains free to update its own native activity description.
+
+Starting with V0.29.23, release change records are stored under `change_log/` rather than the project root. This includes `CHANGELOG.md`, all historical `V*-更新說明.md`, `V*-實作與驗證報告.md`, and diagnostic release notes. No new ENV variables are introduced. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
+
+## V0.29.22 Unified Visible Progress (superseded)
 
 V0.29.22 removes agent-context-based progress carrier selection. Every streamed `/v1/messages` turn now opens the same `ProgressStream` and emits Proxy-owned progress through a normal assistant text block:
 

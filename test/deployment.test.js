@@ -473,3 +473,29 @@ test('V0.29.22 restores one visible text progress carrier while leaving native S
   assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
   assert.doesNotMatch(proxyServerSource, /progressCarrier\s*=|carrier:\s*progressCarrier|carrier:\s*['\"]thinking['\"]/);
 });
+
+
+test('V0.29.23 keeps release change logs under change_log instead of project root', async () => {
+  const rootUrl = new URL('../', import.meta.url);
+  const rootEntries = await fs.readdir(rootUrl);
+  assert.equal(rootEntries.includes('CHANGELOG.md'), false);
+  assert.equal(rootEntries.some((name) => /^V\d.*(?:更新說明|實作與驗證報告|診斷說明)\.md$/.test(name)), false);
+
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('CHANGELOG.md'));
+  assert.ok(changeLogEntries.includes('V0.29.22-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.22-實作與驗證報告.md'));
+  assert.ok(changeLogEntries.includes('V0.29.23-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.23-實作與驗證報告.md'));
+});
+
+
+test('V0.29.23 makes Sub Agent progress liveness-only while Main keeps visible progress', async () => {
+  assert.match(readme, /V0\.29\.23 Sub Agent Liveness-Only Progress/);
+  assert.match(readme, /Sub Agent.*liveness-only|liveness-only.*Sub Agent/is);
+  assert.match(proxyServerSource, /visibleProgressEnabled:\s*claudeAgentRequestContext\?\.context !== 'subagent'/);
+  assert.match(proxyServerSource, /claude_agent_progress_policy/);
+  assert.match(proxyServerSource, /transport_liveness:\s*'sse_ping'/);
+  await assert.rejects(fs.access(new URL('../scripts/cc-tool-proxy-subagent-statusline.js', import.meta.url)));
+  assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
+});

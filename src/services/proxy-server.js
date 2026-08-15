@@ -1101,6 +1101,12 @@ export function createProxyServer(config, dependencies = {}) {
           stream: claudeAgentRequestContext.stream,
           message_count: claudeAgentRequestContext.message_count,
         });
+        log(config, 'info', 'claude_agent_progress_policy', {
+          requestId,
+          agent_context: claudeAgentRequestContext.context,
+          visible_progress: claudeAgentRequestContext.context !== 'subagent',
+          transport_liveness: 'sse_ping',
+        });
       }
 
       requestStage = 'request_trace';
@@ -1169,6 +1175,7 @@ export function createProxyServer(config, dependencies = {}) {
             heartbeatIntervalMs: config.progressHeartbeatMs,
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
+            visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
             locale: config.responseLanguage,
             onWrite: observeProgressWrite,
           });
@@ -1424,6 +1431,7 @@ export function createProxyServer(config, dependencies = {}) {
             heartbeatIntervalMs: config.progressHeartbeatMs,
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
+            visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
@@ -1693,6 +1701,7 @@ export function createProxyServer(config, dependencies = {}) {
             heartbeatIntervalMs: config.progressHeartbeatMs,
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
+            visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
@@ -1735,6 +1744,7 @@ export function createProxyServer(config, dependencies = {}) {
           heartbeatIntervalMs: config.progressHeartbeatMs,
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
+          visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
           locale: config.responseLanguage,
           getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
