@@ -1,3 +1,12 @@
+## 0.29.18 - 2026-08-15
+
+- Repeat the bound Sub Agent task title and localized progress header on every visible Sub Agent progress `text_delta`, not only the first delta.
+- Preserve V0.29.17 title binding across WebSearch/tool-result continuations; no registry or identity policy changes.
+- Keep Main Agent progress byte-compatible with V0.29.17: only the first visible Main progress delta carries the progress header and later deltas remain append-only messages.
+- Keep transport liveness and visible Sub Agent progress enabled; no suppression/deferred gate is introduced.
+- This is a targeted Claude Code TUI compatibility fix for collapsed Sub Agent rows that appear to follow the latest text delta.
+- No new ENV; cache generations remain `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.17 - 2026-08-15
 
 - Fix Sub Agent task rows being overwritten by `目前處理進度：…` after WebSearch/tool-result continuation turns.

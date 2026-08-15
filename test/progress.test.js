@@ -660,3 +660,49 @@ test('V0.29.17 history stripping removes title-anchored progress blocks from mod
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, []);
 });
+
+
+test('V0.29.18 title-anchored Sub Agent progress repeats the stable title and header on every visible delta', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    progressTitle: '分析 WebSearch 行為',
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    locale: 'zh-TW',
+  });
+  await progress.open();
+  await progress.update('等待模型第一個位元組…', { details: { phase: 'semantic_heartbeat' } });
+  await progress.update('主模型開始思考…', { details: { phase: 'model_stream_phase' } });
+  await progress.update('主模型正在處理工具…', { details: { phase: 'model_stream_phase' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const wire = response.chunks.join('');
+  const titleCount = (wire.match(/分析 WebSearch 行為/g) || []).length;
+  const headerCount = (wire.match(/目前處理進度：/g) || []).length;
+  assert.equal(titleCount, 3);
+  assert.equal(headerCount, 3);
+  assert.match(wire, /分析 WebSearch 行為\\n目前處理進度：\\n等待模型第一個位元組/);
+  assert.match(wire, /分析 WebSearch 行為\\n目前處理進度：\\n主模型開始思考/);
+  assert.match(wire, /分析 WebSearch 行為\\n目前處理進度：\\n主模型正在處理工具/);
+});
+
+test('V0.29.18 Main Agent progress keeps the V0.29.17 append-only format without repeated headers', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    locale: 'zh-TW',
+  });
+  await progress.open();
+  await progress.update('等待模型第一個位元組…', { details: { phase: 'semantic_heartbeat' } });
+  await progress.update('主模型開始思考…', { details: { phase: 'model_stream_phase' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const wire = response.chunks.join('');
+  const headerCount = (wire.match(/目前處理進度：/g) || []).length;
+  assert.equal(headerCount, 1);
+  assert.match(wire, /目前處理進度：\\n等待模型第一個位元組/);
+  assert.doesNotMatch(wire, /目前處理進度：\\n主模型開始思考/);
+});

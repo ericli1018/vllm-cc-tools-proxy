@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.17 anchors Sub Agent visible progress to the original Agent description across tool continuations; V0.29.16 restores the V0.29.12 progress baseline and adds diagnostic-first Claude Agent UI tracing; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.18 repeats the stable Sub Agent task title on every visible progress delta so Claude Code collapsed rows cannot drift to a bare progress message; V0.29.17 anchors Sub Agent visible progress to the original Agent description across tool continuations; V0.29.16 restores the V0.29.12 progress baseline and adds diagnostic-first Claude Agent UI tracing; V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
@@ -9,6 +9,12 @@
 
 
 
+
+## V0.29.18 Sub Agent Every-Delta Title Anchoring
+
+V0.29.18 keeps the V0.29.17 `SubagentDisplayRegistry` and changes only title-bearing progress rendering. When `progressTitle` is bound for a Sub Agent, every visible progress delta repeats the stable Agent description, the localized progress header, and the newest progress message. This targets Claude Code TUI behavior observed in real logs where a Sub Agent row starts correctly but later changes to `目前處理進度：…` after a 30-second semantic heartbeat or later phase delta.
+
+Main Agent progress is intentionally unchanged: without `progressTitle`, only the first visible delta contains `目前處理進度：`, and subsequent deltas remain append-only status lines. Sub Agent progress remains visible and transport heartbeat behavior is unchanged. Because Anthropic `text_delta` is append-only, the Sub Agent transcript will contain repeated title/header groups; this is an intentional compatibility trade-off for this release.
 
 ## V0.29.17 Sub Agent Title-Anchored Progress
 
