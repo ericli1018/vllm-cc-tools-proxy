@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.11'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.11'
+test "$(node -p "require('./package.json').version")" = '0.29.12'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.12'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.11'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.12'
 
 # V0.2.28.17 semantic model output telemetry
  test -f V0.2.28.17-更新說明.md
@@ -728,6 +728,25 @@ echo 'Verification complete.'
  grep -Fq 'V0.29.11 Base response mode defaults to auto and validates explicit modes' test/config.test.js
  grep -Fq 'V0.29.11 buffered Base response may stay silent after first bytes until the round completes' test/managed-loop.test.js
  grep -Fq 'V0.29.11 forced buffered Base mode does not treat SSE-framed coarse silence as a stall' test/proxy-server.test.js
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+
+
+# V0.29.12 Runtime Memory Lifecycle Hardening
+ test -f V0.29.12-更新說明.md
+ test -f V0.29.12-實作與驗證報告.md
+ test -f test/progress-memory.test.js
+ grep -Fq 'V0.29.12 Runtime Memory Lifecycle Hardening' README.md
+ grep -Fq 'async dispose()' src/proxy/progress.js
+ grep -Fq 'await progress?.dispose?.()' src/services/proxy-server.js
+ grep -Fq 'progressStreamFactory' src/services/proxy-server.js
+ grep -Fq 'DEFAULT_MAX_BYTES = 64 * 1024 * 1024' src/cache/media-continuation-cache.js
+ grep -Fq 'DEFAULT_MAX_BYTES_PER_SESSION = 16 * 1024 * 1024' src/cache/media-continuation-cache.js
+ grep -Fq 'continuation: mediaContinuationCache.health()' src/services/proxy-server.js
+ grep -Fq 'V0.29.12 disposed ProgressStream is collectible' test/progress-memory.test.js
+ grep -Fq 'V0.29.12 client disconnect disposes the active ProgressStream exactly once' test/proxy-server.test.js
+ grep -Fq 'V0.29.12 continuation cache evicts LRU entries when a session exceeds its byte budget' test/media-continuation-cache.test.js
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js

@@ -363,7 +363,16 @@ ${message}` },
     this.stopKeepalive();
     this.stopSemanticHeartbeat();
     this.#clearPending();
-    await this.queue;
+    try { await this.queue; } catch {}
+  }
+
+  async dispose() {
+    if (!this.res && !this.pingTimer && !this.semanticHeartbeatTimer && !this.pendingTimer && !this.pendingUpdate) return;
+    await this.stop();
+    this.res = null;
+    this.getReceivedBytes = null;
+    this.onWrite = () => {};
+    this.onStateChange = () => {};
   }
 }
 

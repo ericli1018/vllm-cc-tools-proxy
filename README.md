@@ -1,6 +1,6 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.12 hardens runtime memory lifecycle and bounds continuation evidence by bytes; V0.29.11 adds Base response-mode-aware timeout handling for streaming and buffered/coarse backends; V0.29.10 adds authoritative `VLLM_BASE_MODEL` routing while preserving client-facing model aliases; V0.29.9 prevents historical media from being re-analyzed on same-session Claude Code tool continuations, while V0.29.8 makes visual crop exhaustion terminal and recoverable instead of request-fatal, while V0.29.7 adds failure-aware Vision recovery with one original request plus up to three progressively simpler retries, while V0.29.6 makes generic zoom terminal and cache-safe while V0.29.5 separates visible-content detection from visual-detail sufficiency, so dense images can be recognized as real content while still triggering the existing precise-crop or overlapping-tile zoom path. It retains V0.29.4 generic zoom/provenance repair, V0.29.3 recursive PDF zoom, V0.29.2 machine-checkable Vision status, V0.29.1 recovery safety, and V0.29.0 progressive PDF reading.
 
 
 
@@ -9,6 +9,16 @@
 
 
 
+
+## V0.29.12 Runtime Memory Lifecycle Hardening
+
+V0.29.12 closes a confirmed long-lived `ProgressStream` retention path on client disconnect. Every request exit path now reaches an idempotent `ProgressStream.dispose()` safety net. `dispose()` clears the keepalive ping timer, semantic heartbeat timer, delayed visibility timer, and pending progress state, waits for queued writes to settle, then releases response and callback references. Normal `stop()` semantics remain compatible with final Anthropic SSE emission, where the response is ended after the progress stream itself stops. A real client-disconnect regression and a `WeakRef`/`--expose-gc` regression verify that the stream becomes collectible after disposal.
+
+The same release adds byte limits to the in-memory `MediaContinuationCache` introduced in V0.29.9. Existing 16-session, 64-entry-per-session and 30-minute retention bounds remain, with new fixed internal budgets of **64 MiB global** and **16 MiB per session**. Values are counted with an approximate JS-heap estimator without retaining a duplicate serialized copy. LRU eviction now reacts to entry count, per-session bytes, global bytes, TTL, and session count. A single entry larger than either byte budget is not retained. These limits are internal and add no new ENV settings.
+
+`GET /health` now exposes the bounded continuation store separately under `cache.continuation`, including `sessions`, `entries`, `bytes`, `maxBytes`, and `maxBytesPerSession`. This prevents the continuation evidence store from being confused with persistent media-cache disk usage.
+
+Persistent media/evidence serialization is unchanged, so cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`. DocumentSourceCache orphan-blob garbage collection is intentionally outside this release.
 
 ## V0.29.11 Base Response Mode-aware Timeout
 

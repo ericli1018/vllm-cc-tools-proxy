@@ -1,3 +1,13 @@
+## 0.29.12 - 2026-08-15
+
+- Add idempotent `ProgressStream.dispose()` and guarantee request-finally cleanup so client disconnect, abort, timeout, and error paths cannot retain keepalive/heartbeat/pending timers.
+- Preserve `ProgressStream.stop()` response compatibility while `dispose()` releases the final response/callback references.
+- Add real client-abort and `WeakRef`/`--expose-gc` regressions for ProgressStream lifetime.
+- Bound `MediaContinuationCache` by fixed 64 MiB global / 16 MiB per-session byte budgets in addition to the existing session, entry, and TTL limits.
+- Add LRU byte eviction, replacement/reset/TTL byte accounting, and oversized-entry rejection.
+- Expose continuation-cache byte telemetry under `GET /health` → `cache.continuation`.
+- Keep persistent cache generations at `media-v8` / `visual-v18` / `evidence-v14`; no new ENV is added.
+
 ## 0.29.11 - 2026-08-15
 
 - Added `VLLM_BASE_RESPONSE_MODE=auto|streaming|buffered` for Base response delivery semantics.

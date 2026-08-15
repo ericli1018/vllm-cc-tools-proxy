@@ -611,3 +611,30 @@ test('V0.2.28.20 progress history stripping does not clone untouched user Base64
   assert.equal(result[0], userMessage);
   assert.equal(result[0].content[0].source.data, 'QUJD');
 });
+
+test('V0.29.12 ProgressStream dispose clears every timer, pending state, and is idempotent', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.update('pending', { details: { phase: 'pending' } });
+  progress.startSemanticHeartbeat(() => 'heartbeat');
+
+  assert.ok(progress.pingTimer);
+  assert.ok(progress.semanticHeartbeatTimer);
+  assert.ok(progress.pendingTimer);
+  assert.ok(progress.pendingUpdate);
+
+  await progress.dispose();
+  await progress.dispose();
+
+  assert.equal(progress.closed, true);
+  assert.equal(progress.pingTimer, null);
+  assert.equal(progress.semanticHeartbeatTimer, null);
+  assert.equal(progress.pendingTimer, null);
+  assert.equal(progress.pendingUpdate, null);
+  assert.equal(progress.res, null);
+});

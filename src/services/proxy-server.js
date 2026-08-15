@@ -514,6 +514,7 @@ export function createProxyServer(config, dependencies = {}) {
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
   const mediaContinuationCache = dependencies.mediaContinuationCache || new MediaContinuationCache();
+  const progressStreamFactory = dependencies.progressStreamFactory || ((response, options) => new ProgressStream(response, options));
   const documentSourceCache = dependencies.documentSourceCache || new DocumentSourceCache({
     rootDir: config.cache?.rootDir || '',
     retentionMs: config.cache?.retentionMs,
@@ -959,7 +960,7 @@ export function createProxyServer(config, dependencies = {}) {
           status: cacheState.write_available ? 'ok' : 'degraded', service: 'proxy', version: VERSION, revision: config.gitRevision,
           vision: { active: state.vision.active, limit: state.vision.limit },
           web_fetch_processor: { active: state.webFetchProcessor.active, limit: state.webFetchProcessor.limit, queued: state.webFetchProcessor.queued },
-          cache: { ...cacheState, ...registryState },
+          cache: { ...cacheState, ...registryState, continuation: mediaContinuationCache.health() },
         });
       }
 
@@ -1111,7 +1112,7 @@ export function createProxyServer(config, dependencies = {}) {
           { response: childResponse },
         );
         if (original.stream === true) {
-          progress = new ProgressStream(res, {
+          progress = progressStreamFactory(res, {
             model: original.model || 'proxy',
             initialUsage: usageFromTokenCount({}),
             pingIntervalMs: config.progressPingIntervalMs,
@@ -1362,7 +1363,7 @@ export function createProxyServer(config, dependencies = {}) {
           response_language: config.responseLanguage || 'en-US',
         });
         if (original.stream === true) {
-          progress = new ProgressStream(res, {
+          progress = progressStreamFactory(res, {
             model: original.model || 'vllm',
             initialUsage: usageFromTokenCount({}),
             pingIntervalMs: config.progressPingIntervalMs,
@@ -1628,7 +1629,7 @@ export function createProxyServer(config, dependencies = {}) {
           return sendJson(res, 200, payload);
         }
         if (request.stream === true) {
-          progress = new ProgressStream(res, {
+          progress = progressStreamFactory(res, {
             model: request.model || 'vllm',
             initialUsage: usageFromTokenCount({}),
             pingIntervalMs: config.progressPingIntervalMs,
@@ -1667,7 +1668,7 @@ export function createProxyServer(config, dependencies = {}) {
 
       const openManagedProgress = async (usage) => {
         if (progress) return progress;
-        progress = new ProgressStream(res, {
+        progress = progressStreamFactory(res, {
           model: request.model || 'vllm',
           initialUsage: usage,
           pingIntervalMs: config.progressPingIntervalMs,
@@ -2049,6 +2050,7 @@ export function createProxyServer(config, dependencies = {}) {
       else res.destroy(error);
       completed = true;
     } finally {
+      try { await progress?.dispose?.(); } catch {}
       runtimeTelemetry.setBusy(requestId, false);
       releaseRuntimeRequest?.();
       await preparedMedia?.cleanup();

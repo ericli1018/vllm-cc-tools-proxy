@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { createProxyServer } from '../src/services/proxy-server.js';
+import { ProgressStream } from '../src/proxy/progress.js';
+import { MediaContinuationCache } from '../src/cache/media-continuation-cache.js';
 
 async function listen(server) { server.listen(0, '127.0.0.1'); await once(server, 'listening'); return `http://127.0.0.1:${server.address().port}`; }
 async function startJsonServer(handler) { const server = http.createServer(handler); const url = await listen(server); return { server, url }; }
@@ -28,10 +30,13 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.11', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.12', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
-    cache: { entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0 },
+    cache: {
+      entries: 0, bytes: 0, max_bytes: 0, limit_mode: 'filesystem', write_available: true, inflight_analyses: 0,
+      continuation: { sessions: 0, entries: 0, bytes: 0, maxBytes: 64 * 1024 * 1024, maxBytesPerSession: 16 * 1024 * 1024 },
+    },
   });
 });
 
@@ -3088,7 +3093,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.11/);
+  assert.match(first, /VERSION\s+0\.29\.12/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3118,10 +3123,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.11');
+  assert.equal(payload.version, '0.29.12');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.11/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.12/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3653,4 +3658,71 @@ test('V0.29.11 streaming stall request_failed log includes response mode and idl
   assert.ok(Number(failed?.idle_ms) >= 25);
   assert.ok(Number(failed?.received_bytes) > 0);
   assert.ok(['waiting', 'thinking', 'response', 'tool'].includes(failed?.model_phase));
+});
+
+
+test('V0.29.12 client disconnect disposes the active ProgressStream exactly once', async (t) => {
+  let disposeCalls = 0;
+  let factoryCalls = 0;
+  const upstream = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"up","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":0}}}\n\n');
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    vllmBaseResponseMode: 'streaming',
+    managedModelRoundTimeoutMs: 10_000,
+    managedModelStallTimeoutMs: 10_000,
+    progressPingIntervalMs: 60_000,
+  }), {
+    progressStreamFactory: (res, options) => {
+      factoryCalls += 1;
+      const progress = new ProgressStream(res, options);
+      const originalDispose = progress.dispose?.bind(progress);
+      progress.dispose = async () => {
+        disposeCalls += 1;
+        return originalDispose?.();
+      };
+      return progress;
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.closeAllConnections?.());
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.closeAllConnections?.());
+  t.after(() => proxy.close());
+
+  const controller = new AbortController();
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    signal: controller.signal,
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: 'hello' }] }),
+  });
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  await reader.read();
+  controller.abort();
+  try { await reader.read(); } catch {}
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(factoryCalls, 1);
+  assert.equal(disposeCalls, 1);
+});
+
+
+test('V0.29.12 health endpoint exposes continuation-cache byte budgets separately from persistent media cache', async (t) => {
+  const continuation = new MediaContinuationCache({ maxBytes: 4096, maxBytesPerSession: 2048 });
+  continuation.set('session-a', 'one', { block: { type: 'text', text: 'partial evidence' } });
+  const server = createProxyServer(config({ vllmBaseUrl: 'http://127.0.0.1:9' }), {
+    mediaContinuationCache: continuation,
+  });
+  const url = await listen(server);
+  t.after(() => server.close());
+  const response = await fetch(`${url}/health`);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.cache.continuation, continuation.health());
+  assert.ok(body.cache.continuation.bytes > 0);
 });

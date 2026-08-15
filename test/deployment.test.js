@@ -424,3 +424,15 @@ test('README documents V0.29.11 Base response mode-aware timeout policy', () => 
   assert.match(readme, /Ollama.*buffered/is);
   assert.match(readme, /base_response_mode_selected/);
 });
+
+test('README documents V0.29.12 runtime memory lifecycle hardening', () => {
+  assert.match(readme, /V0\.29\.12 Runtime Memory Lifecycle Hardening/i);
+  assert.match(readme, /ProgressStream.*dispose|dispose.*ProgressStream/is);
+  assert.match(readme, /client disconnect/i);
+  assert.match(readme, /64 MiB.*global|global.*64 MiB/is);
+  assert.match(readme, /16 MiB.*session|session.*16 MiB/is);
+  assert.match(readme, /cache\.continuation|continuation.*bytes/is);
+  assert.match(readme, /media-v8/);
+  assert.match(readme, /visual-v18/);
+  assert.match(readme, /evidence-v14/);
+});
