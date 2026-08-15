@@ -645,6 +645,7 @@ export function createProxyServer(config, dependencies = {}) {
     let claudeAgentRequestContext = null;
     let clientSessionId = '';
     let progressFirstVisibleAt = 0;
+    const progressCarrier = () => claudeAgentRequestContext?.context === 'subagent' ? 'thinking' : 'text';
     const observeProgressWrite = (entry = {}) => {
       if (progressFirstVisibleAt || entry.kind !== 'progress_block_start') return;
       progressFirstVisibleAt = Date.now();
@@ -652,6 +653,7 @@ export function createProxyServer(config, dependencies = {}) {
         requestId,
         agent_context: claudeAgentRequestContext?.context || 'unknown',
         content_index: 0,
+        progress_carrier: entry.carrier || progressCarrier(),
         phase: entry.phase || '',
         sequence: entry.sequence || 0,
         elapsed_ms: Math.max(0, progressFirstVisibleAt - requestObservedAt),
@@ -1169,6 +1171,7 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
+            carrier: progressCarrier(),
             onWrite: observeProgressWrite,
           });
           await progress.open();
@@ -1424,6 +1427,7 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
+            carrier: progressCarrier(),
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -1693,6 +1697,7 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             locale: config.responseLanguage,
+            carrier: progressCarrier(),
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -1735,6 +1740,7 @@ export function createProxyServer(config, dependencies = {}) {
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
           locale: config.responseLanguage,
+          carrier: progressCarrier(),
           getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {
@@ -1751,6 +1757,7 @@ export function createProxyServer(config, dependencies = {}) {
                 requestId,
                 kind: entry.kind,
                 phase: entry.phase,
+                progress_carrier: entry.carrier || progressCarrier(),
                 sequence: entry.sequence,
                 bytes: entry.bytes,
                 waited_ms: entry.waitedMs,
@@ -1761,6 +1768,7 @@ export function createProxyServer(config, dependencies = {}) {
                 requestId,
                 kind: entry.kind,
                 phase: entry.phase,
+                progress_carrier: entry.carrier || progressCarrier(),
                 sequence: entry.sequence,
                 bytes: entry.bytes,
                 revision: entry.revision,

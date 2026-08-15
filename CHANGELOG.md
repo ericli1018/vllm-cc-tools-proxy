@@ -1,3 +1,13 @@
+## 0.29.21 - 2026-08-15
+
+- Make Claude Code native Sub Agent task names immutable from Proxy semantic progress by moving Sub Agent Proxy-owned progress from assistant `text_delta` to a dedicated `thinking_delta` content block.
+- Keep Main progress byte/format behavior unchanged: Main still uses the existing visible text progress block.
+- Preserve identical progress lifecycle semantics for Main and Sub Agent turns, including 30-second heartbeat and fresh progress after WebSearch/WebFetch/Read/Bash tool-result continuations.
+- Extend `stripProgressHistory()` to remove the synthetic Sub Agent thinking-progress block before model reuse while preserving real model thinking/signatures.
+- Add `progress_carrier=text|thinking` diagnostics to first-visible/progress SSE log events.
+- Preserve V0.29.20 Main-owned global `statusLine` telemetry and keep V0.29.19 `subagentStatusLine` override retired.
+- No new ENV; cache generations remain `media-v8` / `visual-v18` / `evidence-v14`.
+
 ## 0.29.20 - 2026-08-15
 
 - Main and Sub Agent `/v1/messages` turns now share the same visible Proxy progress policy; Agent context no longer suppresses, prefixes, or otherwise changes semantic progress.

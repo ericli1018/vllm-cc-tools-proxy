@@ -461,3 +461,14 @@ test('V0.29.20 keeps Claude Code native Sub Agent task rows untouched and docume
   await assert.rejects(fs.access(new URL('../scripts/cc-tool-proxy-subagent-statusline.js', import.meta.url)));
   assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
 });
+
+
+test('V0.29.21 isolates Sub Agent semantic progress from assistant text while keeping native task rows untouched', async () => {
+  assert.match(readme, /V0\.29\.21 Sub Agent Immutable Task Name/);
+  assert.match(readme, /thinking_delta.*Sub Agent|Sub Agent.*thinking_delta/is);
+  assert.match(readme, /Main.*text_delta|text_delta.*Main/is);
+  assert.match(readme, /WebSearch.*continuation|tool-result continuation/is);
+  assert.match(readme, /statusLine.*Main|主線.*statusLine/is);
+  await assert.rejects(fs.access(new URL('../scripts/cc-tool-proxy-subagent-statusline.js', import.meta.url)));
+  assert.doesNotMatch(proxyServerSource, /SubagentDisplayRegistry|subagent_progress_title_bound|subagent_display_handoff_registered|progressTitle:/);
+});

@@ -1,6 +1,29 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.20 makes Main and Sub Agent model turns use the same Proxy progress lifecycle, while the global `statusLine` telemetry is owned only by the Main request. Sub Agent activity still contributes to aggregate counters, but cannot replace the Main phase shown by `◆ CC TOOL PROXY ...`. V0.29.19 `subagentStatusLine` row overriding is retired; Claude Code keeps its native Sub Agent task names unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.21 preserves the same progress lifecycle for Main and Sub Agent model turns while isolating the **Sub Agent progress carrier** from ordinary assistant text. Main progress remains a visible `text_delta`; Sub Agent progress uses a dedicated `thinking_delta` block so Proxy liveness/activity cannot replace Claude Code's native Sub Agent task name. The global `statusLine` remains Main-owned exactly as in V0.29.20.
+
+## V0.29.21 Sub Agent Immutable Task Name
+
+V0.29.21 makes Claude Code's native Sub Agent task name an immutable UI boundary from the Proxy's point of view. The Proxy still emits the same semantic progress lifecycle for every `/v1/messages` turn: waiting, thinking, response, tool handoff, 30-second semantic heartbeat, and a fresh lifecycle after WebSearch, WebFetch, Read, Bash, or another tool-result continuation. The distinction is only the wire carrier used for Proxy-owned progress content:
+
+```text
+Main request
+└─ Proxy progress → assistant text block / text_delta
+
+Sub Agent request
+└─ Proxy progress → thinking block / thinking_delta
+
+Claude Code native Sub Agent task row
+└─ no Proxy row override, no title prefix, no subagentStatusLine
+```
+
+The Sub Agent carrier is selected only after Claude Code request metadata identifies `agent_context=subagent`. This prevents Proxy-generated `目前處理進度：...` text from becoming ordinary assistant text that Claude Code can reuse as the latest Sub Agent activity/title summary. The model/tool lifecycle itself is not suppressed or deferred. WebSearch/tool-result continuation requests reopen the same Sub Agent thinking-progress carrier on every turn.
+
+`stripProgressHistory()` recognizes both historical text-based Proxy progress and the V0.29.21 synthetic thinking-progress block. The synthetic progress block is removed before model reuse, so an unsigned Proxy-owned thinking block cannot enter the next Base-model prompt. Real model thinking blocks and signatures are preserved unchanged.
+
+The global Claude Code `statusLine` remains **Main-owned** from V0.29.20: Proxy-wide counters include Main and Sub Agent work, but the phase/elapsed/bytes portion shown by `◆ CC TOOL PROXY ...` is selected only from Main request telemetry. V0.29.21 does not restore the retired V0.29.19 `subagentStatusLine` hook and does not ship any Sub Agent row renderer.
+
+No new ENV variables are introduced. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.20 Main-Owned Status Telemetry
 

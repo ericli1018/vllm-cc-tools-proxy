@@ -52,6 +52,46 @@ test('ProgressStream emits the V0.2.8 progress header without a V0.2.2 nonce sen
 
 
 
+
+
+test('V0.29.21 subagent progress carrier uses thinking deltas instead of assistant text', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    carrier: 'thinking',
+  });
+  await progress.open();
+  await progress.update('◐ 主模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 主模型思考中 · 30s · 657 B', { force: true, details: { phase: 'semantic_heartbeat' } });
+  await progress.closeProgress('主模型已產生下一步工具；正在交還 Claude Code 執行…', {
+    phase: 'handoff_to_claude_code',
+  });
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.match(stream, /"content_block":\{"type":"thinking","thinking":"","signature":""\}/);
+  assert.match(stream, /"type":"thinking_delta","thinking":"目前處理進度：\\n◐ 主模型開始思考/);
+  assert.match(stream, /主模型思考中/);
+  assert.doesNotMatch(stream, /"type":"text_delta","text":"目前處理進度：/);
+  assert.doesNotMatch(stream, /"content_block":\{"type":"text","text":""\}/);
+});
+
+test('V0.29.21 stripProgressHistory removes synthetic thinking progress without removing real model thinking', () => {
+  const messages = [{
+    role: 'assistant',
+    content: [
+      { type: 'thinking', thinking: `${PROGRESS_BLOCK_HEADER}\n◐ 主模型思考中 · 30s`, signature: '' },
+      { type: 'thinking', thinking: 'real model thought', signature: 'sig-real' },
+      { type: 'text', text: '真正答案' },
+    ],
+  }];
+  assert.equal(hasProgressHistory(messages), true);
+  assert.deepEqual(stripProgressHistory(messages)[0].content, [
+    { type: 'thinking', thinking: 'real model thought', signature: 'sig-real' },
+    { type: 'text', text: '真正答案' },
+  ]);
+});
 test('V0.2.28.14 progress header does not sample live upstream bytes during delayed visibility', async () => {
   const response = new FakeResponse();
   let samples = 0;

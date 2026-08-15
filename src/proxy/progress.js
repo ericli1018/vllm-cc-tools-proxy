@@ -46,8 +46,14 @@ function isDedicatedProgressText(text) {
   return Boolean(firstLine && lines[1] && isProgressHeaderLine(lines[1]));
 }
 
+function progressBlockText(block) {
+  if (block?.type === 'text') return block.text;
+  if (block?.type === 'thinking') return block.thinking;
+  return '';
+}
+
 function isDedicatedProgressBlock(block) {
-  return block?.type === 'text' && isDedicatedProgressText(block.text);
+  return ['text', 'thinking'].includes(block?.type) && isDedicatedProgressText(progressBlockText(block));
 }
 
 function textHasLegacyProgress(text) {
@@ -98,7 +104,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text',
   } = {}) {
     this.res = res;
     this.model = model;
@@ -112,6 +118,7 @@ export class ProgressStream {
     this.onStateChange = onStateChange;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
+    this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
     this.startedAt = Date.now();
     this.visible = false;
     this.closed = false;
@@ -257,26 +264,33 @@ export class ProgressStream {
         renderMode: 'append',
       };
       const message = String(entry.message);
+      const thinkingCarrier = this.carrier === 'thinking';
       if (!this.visible) {
         this.visible = true;
         await this.#write(event('content_block_start', {
           type: 'content_block_start',
           index: 0,
-          content_block: { type: 'text', text: '' },
-        }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt });
+          content_block: thinkingCarrier
+            ? { type: 'thinking', thinking: '', signature: '' }
+            : { type: 'text', text: '' },
+        }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier });
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${message}` },
-        }), metadata);
+          delta: thinkingCarrier
+            ? { type: 'thinking_delta', thinking: `${progressBlockHeader(this.locale)}\n${message}` }
+            : { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${message}` },
+        }), { ...metadata, carrier: this.carrier });
       } else {
         const deltaText = `
 ${message}`;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: deltaText },
-        }), metadata);
+          delta: thinkingCarrier
+            ? { type: 'thinking_delta', thinking: deltaText }
+            : { type: 'text_delta', text: deltaText },
+        }), { ...metadata, carrier: this.carrier });
       }
     });
   }
@@ -355,8 +369,10 @@ ${message}`;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
-          delta: { type: 'text_delta', text: '\n\n' },
-        }), { kind: 'progress_close_delta', phase });
+          delta: this.carrier === 'thinking'
+            ? { type: 'thinking_delta', thinking: '\n\n' }
+            : { type: 'text_delta', text: '\n\n' },
+        }), { kind: 'progress_close_delta', phase, carrier: this.carrier });
         await this.#write(event('content_block_stop', { type: 'content_block_stop', index: 0 }), {
           kind: 'progress_block_stop', phase,
         });
