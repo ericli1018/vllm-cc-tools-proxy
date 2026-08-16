@@ -679,8 +679,8 @@ export async function analyzeVisualAssets(assets, {
         } catch (error) {
           const recovered = recoverableCropToolError(error, { processing });
           if (!recovered) throw error;
-          if (error?.code === 'visual_crop_depth_limit') {
-            await exhaustCropBudget('visual_crop_depth_limit');
+          if (['visual_crop_count_limit', 'visual_crop_depth_limit', 'visual_crop_round_limit'].includes(error?.code)) {
+            await exhaustCropBudget(error.code);
           }
           result = recovered;
         }

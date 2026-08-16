@@ -122,6 +122,31 @@ export class VisualAssetRegistry {
     return asset;
   }
 
+  authorizeRegion(sourceId, bbox, { marginRatio = 0 } = {}) {
+    const asset = this.get(sourceId);
+    if (!Array.isArray(bbox) || bbox.length !== 4 || bbox.some((v) => !Number.isInteger(v) || v < 0 || v > 1000)) {
+      throw new HttpError(422, 'Invalid region coordinates.', { code: 'invalid_visual_region_coordinates' });
+    }
+    const [leftN, topN, rightN, bottomN] = bbox;
+    if (rightN <= leftN || bottomN <= topN) {
+      throw new HttpError(422, 'Invalid visual region rectangle.', { code: 'invalid_visual_region_rectangle' });
+    }
+    const requestedBbox = [...bbox];
+    const authorizedBbox = expandBox(bbox, marginRatio);
+    const rootBox = composeRootBox(asset.rootBox, authorizedBbox);
+    return {
+      sourceId,
+      rootSourceId: asset.rootSourceId,
+      requestedBbox,
+      bbox: authorizedBbox,
+      purpose: '',
+      depth: asset.depth,
+      rootBox,
+      pixelBox: pixelBox(authorizedBbox, asset.width, asset.height),
+      rootPixelBox: pixelBox(rootBox, asset.rootWidth, asset.rootHeight),
+    };
+  }
+
   authorizeCrop(sourceId, bbox, round, { marginRatio = 0 } = {}) {
     const asset = this.get(sourceId);
     if (!Number.isInteger(round) || round < 1 || round > this.maxCropRounds) {

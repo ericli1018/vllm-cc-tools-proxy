@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.25'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.25'
+test "$(node -p "require('./package.json').version")" = '0.29.26'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.26'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.25'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.26'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -922,3 +922,30 @@ echo 'Verification complete.'
  grep -Fq "pipelineVersion: 'media-v8'" src/config.js
  grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
  grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+
+
+# V0.29.26 Deterministic Zoom Budget Isolation
+ test -f change_log/V0.29.26-更新說明.md
+ test -f change_log/V0.29.26-實作與驗證報告.md
+ grep -Fq 'V0.29.26 Deterministic Zoom Budget Isolation' README.md
+ grep -Fq 'authorizeRegion(sourceId, bbox' src/visual/asset-registry.js
+ grep -Fq 'registry.authorizeRegion(rootAsset.sourceId, tile.bbox)' src/visual/generic-zoom.js
+ grep -Fq 'registry.registerRegion(rootAsset.sourceId' src/visual/generic-zoom.js
+ ! grep -Fq 'authorizeCrop(rootAsset.sourceId, tile.bbox, 1)' src/visual/generic-zoom.js
+ grep -Fq 'vision_zoom_budget_exhausted' src/visual/generic-zoom.js
+ grep -Fq 'budget_exhausted_count: zoom.budgetExhaustedCount' src/proxy/media-adapters.js
+ grep -Fq "['visual_crop_count_limit', 'visual_crop_depth_limit', 'visual_crop_round_limit']" src/visual/vision-client.js
+ grep -Fq 'V0.29.26 deterministic region authorization preserves lineage without consuming crop depth or count' test/asset-registry.test.js
+ grep -Fq 'V0.29.26 generic deterministic zoom tiles do not consume model crop quota' test/generic-zoom.test.js
+ grep -Fq 'V0.29.26 crop budget exhaustion inside a generic zoom worker is partial evidence, not fatal' test/generic-zoom.test.js
+ grep -Fq 'V0.29.26 root crop-count exhaustion disables further crop tools and completes from existing evidence' test/vision-client.test.js
+ grep -Fq 'V0.29.26 visual budget exhaustion progress is explicit and localized' test/response-language.test.js
+ grep -Fq 'V0.29.26 isolates deterministic zoom tiles from model crop quota and degrades budget exhaustion safely' test/deployment.test.js
+ ! grep -Eq '^VISUAL_GENERIC_ZOOM_CROP_LIMIT=' .env.example
+ ! grep -Eq '^VISUAL_CROP_BUDGET=' .env.example
+ grep -Fq "pipelineVersion: 'media-v8'" src/config.js
+ grep -Fq "visualPromptVersion: 'visual-v18'" src/config.js
+ grep -Fq "evidenceContractVersion: 'evidence-v14'" src/config.js
+ grep -Fq "visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent'" src/services/proxy-server.js
+ grep -Fq 'context_compact_client_stream_open' src/services/proxy-server.js
+ grep -Fq 'PROXY_MANAGED_RESPONSE_RECOVERY' src/proxy/managed-loop.js

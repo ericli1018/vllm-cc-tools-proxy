@@ -1,6 +1,14 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.25 adds **Managed Response Recovery**: a streamed managed Base-model response that stalls after semantic output can recover from the latest completed content-block boundary instead of immediately failing the Claude Code turn. Tool-phase inactivity now receives a longer derived stall budget, while Main/Sub Agent and Context Compact liveness policies remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.26 separates deterministic visual zoom tiles from model-requested crop quota and turns visual crop-budget exhaustion into bounded partial evidence instead of a request-fatal API error. V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain unchanged.
+
+## V0.29.26 Deterministic Zoom Budget Isolation
+
+V0.29.26 fixes a visual fallback accounting bug where automatic overlapping Generic Zoom tiles were created through `authorizeCrop()` and therefore consumed the same root crop quota reserved for model-requested `request_image_crop` operations. Generic Zoom now uses a deterministic region authorization path plus `registerRegion()`: the tile keeps root lineage and pixel coordinates but does not increment model crop count or crop depth. A precise crop requested from a zoom tile still starts at depth 1 and remains subject to the existing root crop safety limit.
+
+Crop count/depth/round exhaustion is treated as a terminal visual-budget condition rather than a fatal media-transform failure. The Vision worker disables further crop tools immediately, finishes from the original frame and successful crops, and preserves uncertainty. If a Generic Zoom tile encounters a visual budget condition, that tile is recorded as an evidence gap, the composite becomes non-cacheable partial evidence, and later tiles/images continue. `vision_zoom_summary` now includes `budget_exhausted_count`.
+
+Progress text distinguishes crop-budget exhaustion from ordinary vision failures, including `此圖片已達安全局部裁切上限` and `zoom tile N/M 將使用現有證據並繼續`. No crop quota is increased and no new ENV variable is introduced. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`; release records remain under `change_log/`.
 
 ## V0.29.25 Managed Response Recovery
 

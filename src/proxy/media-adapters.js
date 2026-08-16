@@ -321,6 +321,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             unresolved_count: zoom.unresolvedCount,
             partial_count: zoom.partialCount,
             failed_count: zoom.failedCount,
+            budget_exhausted_count: zoom.budgetExhaustedCount,
             terminal_status: zoom.terminalStatus,
             cacheable: zoom.cacheable,
           });

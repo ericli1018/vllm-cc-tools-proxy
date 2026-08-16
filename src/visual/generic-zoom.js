@@ -36,6 +36,17 @@ export function buildGenericZoomTiles({ width, height, overlap = 0.15, maxTiles 
   return tiles;
 }
 
+const VISUAL_BUDGET_CODES = new Set([
+  'visual_crop_count_limit',
+  'visual_crop_depth_limit',
+  'visual_crop_round_limit',
+  'visual_crop_batch_limit',
+]);
+
+function isVisualBudgetExhausted(error) {
+  return VISUAL_BUDGET_CODES.has(error?.code);
+}
+
 export async function analyzeGenericZoomFallback(rootAsset, {
   registry,
   cropImage,
@@ -59,11 +70,15 @@ export async function analyzeGenericZoomFallback(rootAsset, {
       await onProgress(`正在建立放大區塊 ${tile.index}/${tiles.length}…`, {
         phase: 'image_zoom_tile_render', completed: tile.index, total: tiles.length, overlap,
       });
-      const authorization = registry.authorizeCrop(rootAsset.sourceId, tile.bbox, 1);
+      const authorization = registry.authorizeRegion(rootAsset.sourceId, tile.bbox);
       authorization.purpose = `automatic generic zoom tile ${tile.index}/${tiles.length}`;
       const crop = await cropImage(rootAsset, authorization, { signal });
-      cropCount += 1;
-      const asset = registry.registerCrop(rootAsset.sourceId, crop, authorization, { purpose: authorization.purpose });
+      const asset = registry.registerRegion(rootAsset.sourceId, crop, {
+        rootBox: authorization.rootBox,
+        label: authorization.purpose,
+        regionKind: 'generic_zoom_tile',
+        sourceMetadata: { tileIndex: tile.index, tileCount: tiles.length, overlap },
+      });
       await onProgress(`正在分析放大區塊 ${tile.index}/${tiles.length}…`, {
         phase: 'image_zoom_tile_analyze', completed: tile.index, total: tiles.length, overlap,
       });
@@ -73,12 +88,21 @@ export async function analyzeGenericZoomFallback(rootAsset, {
       const status = result?.needsZoom ? 'unresolved' : (result?.cacheable === false || result?.visualCompleteness === 'partial' ? 'partial' : 'resolved');
       regions.push({ tile, sourceId: asset.sourceId, markdown: String(result?.markdown || ''), status });
     } catch (error) {
-      if (!isRecoverable(error)) throw error;
+      const budgetExhausted = isVisualBudgetExhausted(error);
+      if (!budgetExhausted && !isRecoverable(error)) throw error;
+      const code = String(error?.code || 'vision_service_error');
       warnings.push(`image_zoom_tile_unavailable:${tile.index}`);
-      regions.push({ tile, sourceId: '', markdown: `VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: zoom tile ${tile.index} unavailable (${String(error?.code || 'vision_service_error')}).`, status: 'failed' });
-      await onProgress(`放大區塊 ${tile.index}/${tiles.length} 分析失敗，已略過並繼續…`, {
-        phase: 'image_zoom_tile_failed', tile: tile.index, completed: tile.index, total: tiles.length, error_code: error?.code || 'vision_service_error',
-      });
+      if (budgetExhausted) warnings.push(`vision_zoom_budget_exhausted:${code}`);
+      regions.push({ tile, sourceId: '', markdown: `VISUAL_STATUS: UNREADABLE\nVISUAL_REASON: zoom tile ${tile.index} unavailable (${code}).`, status: 'failed' });
+      await onProgress(
+        budgetExhausted
+          ? `圖片局部裁切額度已達安全上限；放大區塊 ${tile.index}/${tiles.length} 將使用現有證據並繼續…`
+          : `放大區塊 ${tile.index}/${tiles.length} 分析失敗，已略過並繼續…`,
+        {
+          phase: budgetExhausted ? 'image_zoom_budget_exhausted' : 'image_zoom_tile_failed',
+          tile: tile.index, completed: tile.index, total: tiles.length, error_code: code,
+        },
+      );
     }
   }
 
@@ -86,6 +110,7 @@ export async function analyzeGenericZoomFallback(rootAsset, {
   const unresolvedCount = regions.filter((region) => region.status === 'unresolved').length;
   const partialCount = regions.filter((region) => region.status === 'partial').length;
   const failedCount = regions.filter((region) => region.status === 'failed').length;
+  const budgetExhaustedCount = warnings.filter((warning) => warning.startsWith('vision_zoom_budget_exhausted:')).length;
   const cacheable = unresolvedCount === 0 && partialCount === 0 && failedCount === 0;
   const terminalStatus = cacheable ? 'resolved' : ((resolvedCount + partialCount) > 0 ? 'partial' : 'unreadable');
   if (unresolvedCount > 0) warnings.push(`vision_generic_zoom_unresolved:${unresolvedCount}`);
@@ -113,6 +138,7 @@ export async function analyzeGenericZoomFallback(rootAsset, {
     unresolvedCount,
     partialCount,
     failedCount,
+    budgetExhaustedCount,
     cacheable,
     terminalStatus,
   };

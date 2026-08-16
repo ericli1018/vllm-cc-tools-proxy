@@ -80,3 +80,23 @@ test('V0.29.3 default crop depth is capped at two', () => {
   const crop2 = registry.registerCrop(crop1.sourceId, { buffer: Buffer.from('c2'), mediaType: 'image/png', width: 240, height: 240 }, second);
   assert.throws(() => registry.authorizeCrop(crop2.sourceId, [200, 200, 800, 800], 3), (error) => error?.code === 'visual_crop_depth_limit');
 });
+
+test('V0.29.26 deterministic region authorization preserves lineage without consuming crop depth or count', () => {
+  const registry = new VisualAssetRegistry({ maxCropsPerRoot: 1, maxDepth: 2 });
+  const root = registry.add({
+    buffer: Buffer.from('root'), mediaType: 'image/png', width: 1000, height: 500,
+    originalBuffer: Buffer.from('original'), originalMediaType: 'image/png', originalWidth: 2000, originalHeight: 1000,
+  });
+  const regionAuth = registry.authorizeRegion(root.sourceId, [100, 100, 700, 900]);
+  assert.equal(regionAuth.depth, 0);
+  assert.deepEqual(regionAuth.rootBox, [100, 100, 700, 900]);
+  assert.deepEqual(regionAuth.rootPixelBox, { left: 200, top: 100, width: 1200, height: 800 });
+  const region = registry.registerRegion(root.sourceId, {
+    buffer: Buffer.from('region'), mediaType: 'image/png', width: 600, height: 400,
+  }, { rootBox: regionAuth.rootBox, regionKind: 'generic_zoom_tile' });
+  assert.equal(region.depth, 0);
+
+  const precise = registry.authorizeCrop(region.sourceId, [100, 100, 700, 700], 1);
+  assert.equal(precise.depth, 1);
+  assert.throws(() => registry.authorizeCrop(region.sourceId, [200, 200, 800, 800], 1), (error) => error?.code === 'visual_crop_count_limit');
+});

@@ -198,6 +198,7 @@ const PROFILES = Object.freeze({
       visionCropRejected: () => '視覺模型正在重新定位局部區域…',
       visionCrop: ({ count = 0 }) => `視覺模型要求檢視 ${count} 個局部區域…`,
       visionNeedsZoom: () => '整頁內容過於密集，需要放大局部區域…',
+      visionCropBudgetExhausted: () => '此圖片已達安全局部裁切上限；將使用現有畫面與已取得證據繼續分析…',
       pdfZoomTile: ({ page = 0, count = 0 }) => `第 ${page} 頁將切成 ${count} 個重疊 zoom tiles…`,
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 頁 zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 頁 zoom tile ${completed}/${total}…`,
@@ -206,6 +207,7 @@ const PROFILES = Object.freeze({
       imageZoomTileRender: ({ completed = 0, total = 0 }) => `正在建立圖片 zoom tile ${completed}/${total}…`,
       imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `正在分析圖片 zoom tile ${completed}/${total}…`,
       imageZoomTileFailed: ({ tile = 0 }) => `圖片 zoom tile ${tile} 分析失敗；保留缺口並繼續…`,
+      imageZoomBudgetExhausted: ({ tile = 0, total = 0 }) => `圖片局部裁切額度已達安全上限；zoom tile ${tile}/${total} 將使用現有證據並繼續…`,
       currentStepWaiting: ({ seconds = 0 }) => `目前處理步驟仍在進行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -280,6 +282,7 @@ const PROFILES = Object.freeze({
       visionCropRejected: () => '视觉模型正在重新定位局部区域…',
       visionCrop: ({ count = 0 }) => `视觉模型要求查看 ${count} 个局部区域…`,
       visionNeedsZoom: () => '整页内容过于密集，需要放大局部区域…',
+      visionCropBudgetExhausted: () => '此图片已达安全局部裁切上限；将使用现有画面与已取得证据继续分析…',
       pdfZoomTile: ({ page = 0, count = 0 }) => `第 ${page} 页将切成 ${count} 个重叠 zoom tiles…`,
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `正在建立第 ${page} 页 zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `正在分析第 ${page} 页 zoom tile ${completed}/${total}…`,
@@ -288,6 +291,7 @@ const PROFILES = Object.freeze({
       imageZoomTileRender: ({ completed = 0, total = 0 }) => `正在建立图片 zoom tile ${completed}/${total}…`,
       imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `正在分析图片 zoom tile ${completed}/${total}…`,
       imageZoomTileFailed: ({ tile = 0 }) => `图片 zoom tile ${tile} 分析失败；保留缺口并继续…`,
+      imageZoomBudgetExhausted: ({ tile = 0, total = 0 }) => `图片局部裁切额度已达安全上限；zoom tile ${tile}/${total} 将使用现有证据并继续…`,
       currentStepWaiting: ({ seconds = 0 }) => `当前处理步骤仍在进行，已等待 ${seconds} 秒…`,
     }),
     media: Object.freeze({
@@ -362,6 +366,7 @@ const PROFILES = Object.freeze({
       visionCropRejected: () => 'The visual model is repositioning the local region…',
       visionCrop: ({ count = 0 }) => `The visual model requested ${count} local crop(s)…`,
       visionNeedsZoom: () => 'The page is too dense at whole-frame scale; enlarging local regions…',
+      visionCropBudgetExhausted: () => 'The safe local crop budget for this image has been exhausted; continuing from the existing frame and recovered evidence…',
       pdfZoomTile: ({ page = 0, count = 0 }) => `PDF page ${page} will be split into ${count} overlapping zoom tiles…`,
       pdfZoomTileRender: ({ page = 0, completed = 0, total = 0 }) => `Preparing PDF page ${page} zoom tile ${completed}/${total}…`,
       pdfZoomTileAnalyze: ({ page = 0, completed = 0, total = 0 }) => `Analyzing PDF page ${page} zoom tile ${completed}/${total}…`,
@@ -370,6 +375,7 @@ const PROFILES = Object.freeze({
       imageZoomTileRender: ({ completed = 0, total = 0 }) => `Preparing image zoom tile ${completed}/${total}…`,
       imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `Analyzing image zoom tile ${completed}/${total}…`,
       imageZoomTileFailed: ({ tile = 0 }) => `Image zoom tile ${tile} failed; preserving the evidence gap and continuing…`,
+      imageZoomBudgetExhausted: ({ tile = 0, total = 0 }) => `The safe local crop budget has been exhausted; image zoom tile ${tile}/${total} will continue from existing evidence…`,
       currentStepWaiting: ({ seconds = 0 }) => `The current processing step is still running. Waiting for ${seconds}s…`,
     }),
     media: Object.freeze({
@@ -452,6 +458,7 @@ const PROFILES = Object.freeze({
       imageZoomTileRender: ({ completed = 0, total = 0 }) => `画像ズームタイル ${completed}/${total} を作成中…`,
       imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `画像ズームタイル ${completed}/${total} を解析中…`,
       imageZoomTileFailed: ({ tile = 0 }) => `画像ズームタイル ${tile} の解析に失敗しました。欠落を保持して続行します…`,
+      imageZoomBudgetExhausted: ({ tile = 0, total = 0 }) => `安全な局所クロップ上限に達しました。画像ズームタイル ${tile}/${total} は既存の証拠を使用して続行します…`,
       currentStepWaiting: ({ seconds = 0 }) => `現在の処理手順は継続中です。${seconds}秒経過しました…`,
     }),
     media: Object.freeze({
@@ -534,6 +541,7 @@ const PROFILES = Object.freeze({
       imageZoomTileRender: ({ completed = 0, total = 0 }) => `이미지 줌 타일 ${completed}/${total} 생성 중…`,
       imageZoomTileAnalyze: ({ completed = 0, total = 0 }) => `이미지 줌 타일 ${completed}/${total} 분석 중…`,
       imageZoomTileFailed: ({ tile = 0 }) => `이미지 줌 타일 ${tile} 분석 실패; 증거 공백을 유지하고 계속합니다…`,
+      imageZoomBudgetExhausted: ({ tile = 0, total = 0 }) => `안전한 로컬 크롭 한도에 도달했습니다. 이미지 줌 타일 ${tile}/${total}은 기존 증거로 계속 분석합니다…`,
       currentStepWaiting: ({ seconds = 0 }) => `현재 처리 단계가 계속 진행 중입니다. ${seconds}초 경과…`,
     }),
     media: Object.freeze({
@@ -622,6 +630,7 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
     vision_crop_rejected: 'visionCropRejected',
     vision_crop: 'visionCrop',
     vision_needs_zoom: 'visionNeedsZoom',
+    vision_crop_budget_exhausted: 'visionCropBudgetExhausted',
     pdf_zoom_tile: 'pdfZoomTile',
     pdf_zoom_tile_render: 'pdfZoomTileRender',
     pdf_zoom_tile_analyze: 'pdfZoomTileAnalyze',
@@ -630,6 +639,7 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
     image_zoom_tile_render: 'imageZoomTileRender',
     image_zoom_tile_analyze: 'imageZoomTileAnalyze',
     image_zoom_tile_failed: 'imageZoomTileFailed',
+    image_zoom_budget_exhausted: 'imageZoomBudgetExhausted',
   };
   if (phase === 'queue_wait') return statusText(locale, 'queueWait', { position: details.position ?? 0 });
   const key = phaseToKey[phase];

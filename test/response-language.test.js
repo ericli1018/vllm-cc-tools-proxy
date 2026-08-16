@@ -307,3 +307,11 @@ test('V0.29.4 localizes generic image zoom-tile progress phases', () => {
   assert.match(ja, /画像|ズーム/);
   assert.match(ko, /이미지|줌/);
 });
+
+test('V0.29.26 visual budget exhaustion progress is explicit and localized', () => {
+  assert.match(language.localizeProgressMessage('zh-TW', 'fallback', { phase: 'vision_crop_budget_exhausted' }), /安全局部裁切上限/);
+  assert.match(language.localizeProgressMessage('zh-TW', 'fallback', { phase: 'image_zoom_budget_exhausted', tile: 2, total: 4 }), /zoom tile 2\/4/);
+  assert.match(language.localizeProgressMessage('en-US', 'fallback', { phase: 'image_zoom_budget_exhausted', tile: 2, total: 4 }), /safe local crop budget/i);
+  assert.doesNotMatch(language.localizeProgressMessage('ja-JP', 'fallback', { phase: 'image_zoom_budget_exhausted', tile: 2, total: 4 }), /処理中/);
+  assert.doesNotMatch(language.localizeProgressMessage('ko-KP', 'fallback', { phase: 'image_zoom_budget_exhausted', tile: 2, total: 4 }), /처리 중/);
+});

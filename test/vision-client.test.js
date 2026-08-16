@@ -1097,3 +1097,31 @@ test('V0.29.8 stubborn zoom tile crop request after budget exhaustion is recover
   const overlay = requests[2].messages.filter((m) => m.role === 'user' && typeof m.content === 'string').at(-1)?.content || '';
   assert.match(overlay, /Crop tools are exhausted|do not request another crop/i);
 });
+
+test('V0.29.26 root crop-count exhaustion disables further crop tools and completes from existing evidence', async (t) => {
+  const requests = [];
+  const diagnostics = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'over-budget-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [150,150,850,850], purpose: 'read label' }) } }] }
+      : { content: 'VISUAL_STATUS: CONTENT\nVISUAL_DETAIL: SUFFICIENT\nVISUAL_COMPLETENESS: PARTIAL\nVISUAL_EVIDENCE:\n- Existing frame still provides reliable partial evidence.', tool_calls: [] };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+
+  const registry = new VisualAssetRegistry({ maxCropsPerRoot: 0 });
+  const asset = registry.add({ buffer: Buffer.from('root'), mediaType: 'image/png', width: 1200, height: 800 });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', think: false, registry,
+    onDiagnostic: async (event, details) => diagnostics.push({ event, details }),
+    cropImage: async () => { throw new Error('cropImage must not run after quota rejection'); },
+  });
+
+  assert.equal(requests.length, 2);
+  assert.equal(Array.isArray(requests[0].tools), true);
+  assert.equal(requests[1].tools, undefined, 'crop tools must be removed immediately after root crop quota exhaustion');
+  assert.equal(diagnostics.some((entry) => entry.event === 'vision_crop_budget_exhausted' && entry.details.reason === 'visual_crop_count_limit'), true);
+  assert.match(result.markdown, /reliable partial evidence/i);
+  assert.equal(result.cacheable, false);
+});
