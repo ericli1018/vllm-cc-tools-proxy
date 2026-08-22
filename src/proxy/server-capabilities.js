@@ -23,7 +23,7 @@ function requestDefinition(tool) {
   if (NATIVE_WEB_SEARCH.test(type)) return { family: 'web_search', status: 'bridged', type, variant: '' };
   if (NATIVE_WEB_FETCH.test(type)) return { family: 'web_fetch', status: 'bridged', type, variant: '' };
   const search = TOOL_SEARCH.exec(type);
-  if (search) return { family: 'tool_search', status: 'discovery_only', type, variant: search[1] };
+  if (search) return { family: 'tool_search', status: 'local_bridge', type, variant: search[1] };
   if (CODE_EXECUTION.test(type)) return { family: 'code_execution', status: 'unsupported', type, variant: '' };
   if (ADVISOR.test(type)) return { family: 'advisor', status: 'unsupported', type, variant: '' };
   if (type === 'mcp_toolset') return { family: 'mcp_toolset', status: 'unsupported', type, variant: '' };
@@ -35,7 +35,7 @@ function responseServerToolName(name) {
   if (value === 'web_search') return { family: 'web_search', status: 'bridged', variant: '' };
   if (value === 'web_fetch') return { family: 'web_fetch', status: 'bridged', variant: '' };
   const search = /^tool_search_tool_(regex|bm25)$/.exec(value);
-  if (search) return { family: 'tool_search', status: 'discovery_only', variant: search[1] };
+  if (search) return { family: 'tool_search', status: 'local_bridge', variant: search[1] };
   if (value === 'code_execution') return { family: 'code_execution', status: 'unsupported', variant: '' };
   if (value === 'advisor') return { family: 'advisor', status: 'unsupported', variant: '' };
   return { family: 'unknown', status: 'unknown', variant: '' };
@@ -66,6 +66,7 @@ export function inspectAnthropicServerCapabilities(request) {
   const toolSearch = definitions.filter((entry) => entry.family === 'tool_search');
   const unsupported = definitions.filter((entry) => entry.status === 'unsupported');
   const bridged = definitions.filter((entry) => entry.status === 'bridged');
+  const localBridge = definitions.filter((entry) => entry.status === 'local_bridge');
   const deferredToolCount = tools.filter((tool) => tool?.defer_loading === true).length;
   const variants = [...new Set(toolSearch.map((entry) => entry.variant).filter(Boolean))].sort();
 
@@ -73,7 +74,8 @@ export function inspectAnthropicServerCapabilities(request) {
     server_tool_count: definitions.length,
     bridged_count: bridged.length,
     tool_search_count: toolSearch.length,
-    discovery_only_count: toolSearch.length,
+    discovery_only_count: definitions.filter((entry) => entry.status === 'discovery_only').length,
+    local_bridge_count: localBridge.length,
     unsupported_count: unsupported.length,
     unsupported_families: [...new Set(unsupported.map((entry) => entry.family))].sort(),
     definitions,

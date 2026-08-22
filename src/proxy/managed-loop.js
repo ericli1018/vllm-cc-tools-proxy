@@ -19,6 +19,13 @@ import {
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 import { prepareContinuationState } from './continuation-state.js';
+import {
+  isToolSearchToolName,
+  executeLocalToolSearch,
+  materializeLocalToolSearchTools,
+  createLocalToolSearchResult,
+  localToolSearchStateSnapshot,
+} from './tool-search.js';
 
 
 const DEFAULT_MANAGED_TASK_TIMEOUT_MS = 0;
@@ -625,6 +632,7 @@ export async function runManagedLoop(initialRequest, {
   writeProtocolDiagnostics,
   diagnosticPassthroughWebTools,
   passthroughManagedWebTools = false,
+  localToolSearch = null,
   onManagedWebToolHandoff = () => {},
   onTrace = () => {},
   signal,
@@ -870,6 +878,53 @@ export async function runManagedLoop(initialRequest, {
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
     if (toolUses.length === 0) return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+
+    const toolSearchUses = localToolSearch?.enabled
+      ? toolUses.filter((block) => isToolSearchToolName(block?.name))
+      : [];
+    if (toolSearchUses.length > 0) {
+      const searchResults = [];
+      let disableSearch = false;
+      for (const toolUse of toolSearchUses) {
+        const result = executeLocalToolSearch(localToolSearch, toolUse);
+        if (!result) continue;
+        disableSearch = disableSearch || result.exhausted;
+        searchResults.push(createLocalToolSearchResult(toolUse, result));
+        await onDiagnostic('local_tool_search_executed', {
+          round: round + 1,
+          variant: result.variant,
+          query: result.query,
+          requested_limit: result.limit,
+          matched_tool_count: result.matches.length,
+          matched_tool_names: result.matches,
+          newly_materialized_count: result.newlyMaterialized.length,
+          newly_materialized_tool_names: result.newlyMaterialized,
+          search_budget_exhausted: result.exhausted,
+          ...(result.error ? { error_code: result.error.code, error_message: result.error.message } : {}),
+          ...localToolSearchStateSnapshot(localToolSearch),
+        });
+      }
+      const deferredClientToolUses = toolUses.filter((block) => !isToolSearchToolName(block?.name));
+      if (deferredClientToolUses.length > 0) {
+        await onDiagnostic('local_tool_search_mixed_client_tools_deferred', {
+          round: round + 1,
+          client_tool_names: deferredClientToolUses.map((block) => String(block?.name || '')),
+        });
+      }
+      request.messages.push({
+        role: 'assistant',
+        content: (Array.isArray(response?.content) ? response.content : [])
+          .filter((block) => block?.type !== 'tool_use' || isToolSearchToolName(block?.name))
+          .map((block) => structuredClone(block)),
+      });
+      request.messages.push({ role: 'user', content: searchResults });
+      const materializedRequest = materializeLocalToolSearchTools(request, localToolSearch, { disableSearch });
+      request.tools = materializedRequest.tools;
+      if (request.tool_choice?.type === 'tool' && isToolSearchToolName(request.tool_choice?.name)) {
+        request.tool_choice = { type: 'auto' };
+      }
+      continue;
+    }
     if (typeof diagnosticPassthroughWebTools === 'function' && toolUses.some((block) => isManagedToolName(block.name))) {
       const decision = await diagnosticPassthroughWebTools({
         round: round + 1,

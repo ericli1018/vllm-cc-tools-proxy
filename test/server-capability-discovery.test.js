@@ -58,7 +58,7 @@ function sseEvent(name, payload) {
   return `event: ${name}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-test('V0.29.27 observes ToolSearch and fingerprints deferred tool catalogs without mutating the request', async (t) => {
+test('V0.29.28 inventories ToolSearch as a local bridge and suppresses deferred schemas before Base vLLM', async (t) => {
   const logs = [];
   let upstreamBody = null;
   const upstream = await startServer(async (req, res) => {
@@ -98,12 +98,14 @@ test('V0.29.27 observes ToolSearch and fingerprints deferred tool catalogs witho
   assert.equal(response.status, 200);
   await response.json();
 
-  assert.deepEqual(upstreamBody.tools, body.tools);
+  assert.deepEqual(upstreamBody.tools.map((tool) => tool.name), ['tool_search_tool_regex']);
+  assert.ok(upstreamBody.tools.every((tool) => tool.defer_loading !== true));
   const inventory = logs.find((entry) => entry.event === 'anthropic_server_capability_inventory');
   assert.ok(inventory);
   assert.equal(inventory.server_tool_count, 1);
   assert.equal(inventory.tool_search_count, 1);
-  assert.equal(inventory.discovery_only_count, 1);
+  assert.equal(inventory.discovery_only_count, 0);
+  assert.equal(inventory.local_bridge_count, 1);
   assert.equal(inventory.unsupported_count, 0);
 
   const observed = logs.find((entry) => entry.event === 'tool_search_request_observed');
@@ -113,6 +115,7 @@ test('V0.29.27 observes ToolSearch and fingerprints deferred tool catalogs witho
   assert.equal(observed.eager_tool_count, 1);
   assert.equal(observed.total_tool_count, 3);
   assert.match(observed.tool_catalog_sha256, /^[a-f0-9]{64}$/);
+  assert.equal(observed.execution_mode, 'local_bridge');
 });
 
 test('V0.29.27 emits explicit diagnostics for known unsupported Anthropic server tool declarations', async (t) => {

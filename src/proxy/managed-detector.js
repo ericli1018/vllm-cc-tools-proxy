@@ -1,6 +1,7 @@
 import { countAdaptableMedia } from './content-blocks.js';
 import { isManagedToolName } from './web-tools.js';
 import { isNativeWebToolDefinition } from './native-web-tools.js';
+import { isToolSearchDefinition } from './tool-search.js';
 
 export function classifyMessagesRequest(request) {
   const mediaCount = countAdaptableMedia(request?.messages);
@@ -12,6 +13,9 @@ export function classifyMessagesRequest(request) {
   }
   if (Array.isArray(request?.tools) && request.tools.some(isNativeWebToolDefinition)) {
     reasons.push('native_web_tool');
+  }
+  if (Array.isArray(request?.tools) && request.tools.some(isToolSearchDefinition)) {
+    reasons.push('tool_search');
   }
   return { managed: reasons.length > 0, reasons, mediaCount };
 }

@@ -12,6 +12,7 @@ const assetRegistrySource = await fs.readFile(new URL('../src/visual/asset-regis
 const genericZoomSource = await fs.readFile(new URL('../src/visual/generic-zoom.js', import.meta.url), 'utf8');
 const visionClientSource = await fs.readFile(new URL('../src/visual/vision-client.js', import.meta.url), 'utf8');
 const serverCapabilitiesSource = await fs.readFile(new URL('../src/proxy/server-capabilities.js', import.meta.url), 'utf8');
+const toolSearchSource = await fs.readFile(new URL('../src/proxy/tool-search.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -571,4 +572,21 @@ test('V0.29.27 adds diagnostic-only Anthropic server capability discovery withou
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.ok(changeLogEntries.includes('V0.29.27-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.27-實作與驗證報告.md'));
+});
+
+
+test('V0.29.28 locally bridges ToolSearch while keeping core WebSearch and WebFetch eager', async () => {
+  assert.match(readme, /V0\.29\.28 Local ToolSearch \/ Deferred Tool Loading/);
+  assert.match(readme, /ENABLE_TOOL_SEARCH=true/);
+  assert.match(readme, /WebSearch.*WebFetch/s);
+  assert.match(toolSearchSource, /prepareLocalToolSearchRequest/);
+  assert.match(toolSearchSource, /executeLocalToolSearch/);
+  assert.match(toolSearchSource, /MAX_LOCAL_TOOL_SEARCH_ROUNDS = 3/);
+  assert.match(toolSearchSource, /MAX_LOCAL_RESULT_LIMIT = 16/);
+  assert.match(proxyServerSource, /local_tool_search_catalog_prepared/);
+  assert.match(managedLoopSource, /local_tool_search_executed/);
+  assert.doesNotMatch(envExample, /^TOOL_SEARCH_/m);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.28-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.28-實作與驗證報告.md'));
 });

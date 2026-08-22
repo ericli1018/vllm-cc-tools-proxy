@@ -1,6 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.27 adds diagnostic-only Anthropic server-capability discovery and a ToolSearch / `tool_reference` compatibility foundation without changing request execution. V0.29.26 visual budget isolation, V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.28 adds local ToolSearch / deferred tool loading so large MCP/plugin catalogs no longer need to enter Base-model context eagerly. WebSearch/WebFetch and Claude Code core tools remain eager; actual MCP/native tool execution remains Claude Code-owned. V0.29.27 capability diagnostics, V0.29.26 visual budget isolation, V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain intact.
+
+## V0.29.28 Local ToolSearch / Deferred Tool Loading
+
+V0.29.28 turns the V0.29.27 ToolSearch foundation into a bounded local execution bridge. When Claude Code declares `tool_search_tool_regex_*` or `tool_search_tool_bm25_*`, the Proxy keeps `defer_loading:true` MCP/plugin definitions in a request-local catalog instead of forwarding all of those schemas to Base vLLM. The Base model receives the ToolSearch schema, eager/core tools, and only deferred tools that have been materialized for the current task.
+
+For Claude Code using a custom `ANTHROPIC_BASE_URL`, enable its ToolSearch feature with `ENABLE_TOOL_SEARCH=true`; Claude Code otherwise disables MCP ToolSearch by default for non-first-party gateways. The Proxy does **not** auto-defer arbitrary tools when ToolSearch is absent: a request without a ToolSearch declaration is preserved unchanged, including any `defer_loading` fields.
+
+Core/eager tools remain immediately visible. This includes Claude Code basics such as `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `Agent`/`Task`, plus `WebSearch` / `WebFetch` and the ToolSearch tool itself. Native WebSearch/WebFetch declarations are normalized by the existing web bridge before deferred filtering, so web research remains directly available and does not require a ToolSearch round.
+
+Local ToolSearch is deterministic and does not call another LLM. Regex mode searches tool names, descriptions, argument names, and argument descriptions with case-insensitive JavaScript `RegExp`; BM25 mode searches the same local catalog by natural-language relevance. The default result limit is 5 and the local hard cap is 16 materialized results per search. JavaScript regex syntax is a compatibility subset rather than a claim of exact Python-regex parity with Anthropic's hosted implementation.
+
+A ToolSearch call is consumed internally by the Proxy. Matching deferred definitions are materialized into the next Base-model round; Claude Code receives only the final real MCP/native `tool_use`, so actual tool execution and `tool_result` lifecycle remain Claude Code-owned. Deferred tools already present in assistant `tool_use` history are sticky-materialized on the next request to avoid unnecessary rediscovery.
+
+ToolSearch has an independent hard budget of three internal search rounds. The fourth search returns a bounded `tool_search_budget_exhausted` tool result without executing another search or failing the top-level `/v1/messages` request. Invalid regex is similarly converted into a bounded local tool-result error. This budget is separate from Managed Response Recovery and existing managed WebSearch/WebFetch round controls.
+
+No persistent Tool Catalog cache is introduced in V0.29.28; catalog state/indexing is request-local. No new Proxy ENV variables are added. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`. Main Agent progress, Sub Agent liveness-only behavior, Context Compact ping-only liveness, Managed Response Recovery, and Vision/PDF/Image behavior are unchanged. Release records remain under `change_log/`.
 
 ## V0.29.27 Server Capability Discovery / ToolSearch Foundation
 

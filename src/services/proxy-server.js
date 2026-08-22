@@ -37,6 +37,7 @@ import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetr
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { inspectAnthropicServerCapabilities, inspectAnthropicServerResponse } from '../proxy/server-capabilities.js';
+import { prepareLocalToolSearchRequest, localToolSearchStateSnapshot } from '../proxy/tool-search.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
 import { runContextCompact } from './context-compact-client.js';
@@ -1180,6 +1181,7 @@ export function createProxyServer(config, dependencies = {}) {
             bridged_count: serverCapabilityInventory.bridged_count,
             tool_search_count: serverCapabilityInventory.tool_search_count,
             discovery_only_count: serverCapabilityInventory.discovery_only_count,
+            local_bridge_count: serverCapabilityInventory.local_bridge_count,
             unsupported_count: serverCapabilityInventory.unsupported_count,
             unsupported_families: serverCapabilityInventory.unsupported_families,
           });
@@ -1188,7 +1190,7 @@ export function createProxyServer(config, dependencies = {}) {
           log(config, 'info', 'tool_search_request_observed', {
             requestId,
             ...serverCapabilityInventory.tool_search,
-            execution_mode: 'diagnostic_passthrough',
+            execution_mode: 'local_bridge',
           });
         }
         for (const entry of serverCapabilityInventory.definitions.filter((item) => item.status === 'unsupported')) {
@@ -1616,7 +1618,8 @@ export function createProxyServer(config, dependencies = {}) {
       validateMessagesRequest(original);
       const serverWebUiDeclaration = detectServerWebUiDeclaration(original);
       const normalizedWebTools = normalizeNativeWebToolsRequest({ ...original, messages: cleanedMessages });
-      let request = normalizedWebTools.request;
+      const localToolSearchPrepared = prepareLocalToolSearchRequest(normalizedWebTools.request);
+      let request = localToolSearchPrepared.request;
       const managedWebPolicyEnforcer = createManagedWebPolicyEnforcer(normalizedWebTools.policies);
       if (normalizedWebTools.changed) {
         log(config, 'info', 'native_web_tools_normalized', {
@@ -1630,11 +1633,21 @@ export function createProxyServer(config, dependencies = {}) {
           forced_tool_choice: normalizedWebTools.forcedNativeSearchChoice,
         });
       }
+      if (localToolSearchPrepared.changed) {
+        log(config, 'info', 'local_tool_search_catalog_prepared', {
+          requestId,
+          ...localToolSearchStateSnapshot(localToolSearchPrepared.state),
+          visible_tool_count: Array.isArray(request.tools) ? request.tools.length : 0,
+          execution_mode: 'local_bridge',
+        });
+      }
       const usagePreflightRequest = request.stream === true
         ? { ...request, messages: request.messages }
         : null;
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
+      const hasLocalToolSearch = Boolean(localToolSearchPrepared.state?.enabled) && messagesPath === '/v1/messages';
+      const hasManagedLoop = hasManagedTools || hasLocalToolSearch;
       const passthroughClientWebTools = hasManagedTools
         && serverWebUiDeclaration.native_count === 0
         && serverWebUiDeclaration.alias_count > 0;
@@ -1767,7 +1780,7 @@ export function createProxyServer(config, dependencies = {}) {
         allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
       }
 
-      const needsManagedWork = hasManagedTools || (hasMedia && !allMediaCached);
+      const needsManagedWork = hasManagedLoop || (hasMedia && !allMediaCached);
       const adapterDependencies = {
         allowedMediaPaths: preparedMedia?.allowedPaths,
         acquireVision: (options) => admission.acquireVision(options),
@@ -1999,7 +2012,7 @@ export function createProxyServer(config, dependencies = {}) {
       original = null;
 
       const inputTokens = totalAnthropicInputTokens(initialStreamUsage);
-      const lane = nativeWebSearchFastLane ? 'native_web_search' : 'managed';
+      const lane = nativeWebSearchFastLane ? 'native_web_search' : hasLocalToolSearch && !hasManagedTools ? 'tool_search' : 'managed';
       log(config, 'info', 'managed_request_started', {
         requestId,
         lane,
@@ -2027,7 +2040,7 @@ export function createProxyServer(config, dependencies = {}) {
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
-      if (hasManagedTools) {
+      if (hasManagedLoop) {
         let result = await runManagedLoop(request, {
           upstream,
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
@@ -2092,6 +2105,7 @@ export function createProxyServer(config, dependencies = {}) {
             ? (context) => webToolDiagnosticController.decide(context)
             : undefined,
           passthroughManagedWebTools: passthroughClientWebTools,
+          localToolSearch: localToolSearchPrepared.state,
           onManagedWebToolHandoff: ({ toolUses }) => {
             clientWebToolLifecycleRegistry.recordToolUses(clientSessionId, toolUses);
           },
@@ -2220,7 +2234,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       completed = true;
-      log(config, 'info', 'request_completed', { requestId, hasMedia, managed: hasManagedTools });
+      log(config, 'info', 'request_completed', { requestId, hasMedia, managed: hasManagedLoop });
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
