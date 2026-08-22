@@ -1,6 +1,16 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.26 separates deterministic visual zoom tiles from model-requested crop quota and turns visual crop-budget exhaustion into bounded partial evidence instead of a request-fatal API error. V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.27 adds diagnostic-only Anthropic server-capability discovery and a ToolSearch / `tool_reference` compatibility foundation without changing request execution. V0.29.26 visual budget isolation, V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain unchanged.
+
+## V0.29.27 Server Capability Discovery / ToolSearch Foundation
+
+V0.29.27 inventories Anthropic server-tool declarations before the existing `/v1/messages` routing logic. `tool_search_tool_regex_*` and `tool_search_tool_bm25_*` declarations are identified as discovery-only capabilities. The Proxy records only bounded metadata: ToolSearch variants, eager/deferred tool counts, total catalog size, and a SHA-256 catalog fingerprint. Tool descriptions, schemas, prompts, and tool arguments are not copied into these diagnostics.
+
+This release is deliberately **diagnostic passthrough**, not a ToolSearch execution bridge. The incoming request remains unchanged. Known currently unsupported Anthropic server-tool declarations (`code_execution_*`, `advisor_*`, and `mcp_toolset`) produce explicit warning diagnostics instead of silently passing without observability, but V0.29.27 still does not emulate or execute those services. No new server-tool type is converted into a Claude Code client tool.
+
+Response observation now inventories `server_tool_use`, `tool_search_tool_result`, and nested `tool_reference` blocks while preserving the response object/SSE lifecycle unchanged. Unknown response-side `server_tool_use` names produce an explicit warning, and referenced tool names are represented only by a SHA-256 fingerprint in diagnostics. This foundation is intended to capture real Claude Code ToolSearch traffic before a later release implements local execution semantics.
+
+No new ENV variables are introduced. Cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`. Main Agent progress, Sub Agent liveness-only behavior, Context Compact ping-only liveness, Managed Response Recovery, and Vision/PDF/Image behavior are unchanged. Release records remain under `change_log/`.
 
 ## V0.29.26 Deterministic Zoom Budget Isolation
 

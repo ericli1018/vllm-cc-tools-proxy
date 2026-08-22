@@ -11,6 +11,7 @@ const sseCollectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse
 const assetRegistrySource = await fs.readFile(new URL('../src/visual/asset-registry.js', import.meta.url), 'utf8');
 const genericZoomSource = await fs.readFile(new URL('../src/visual/generic-zoom.js', import.meta.url), 'utf8');
 const visionClientSource = await fs.readFile(new URL('../src/visual/vision-client.js', import.meta.url), 'utf8');
+const serverCapabilitiesSource = await fs.readFile(new URL('../src/proxy/server-capabilities.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -552,4 +553,22 @@ test('V0.29.26 isolates deterministic zoom tiles from model crop quota and degra
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.ok(changeLogEntries.includes('V0.29.26-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.26-實作與驗證報告.md'));
+});
+
+
+test('V0.29.27 adds diagnostic-only Anthropic server capability discovery without new ENV settings', async () => {
+  assert.match(readme, /V0\.29\.27 Server Capability Discovery \/ ToolSearch Foundation/);
+  assert.match(serverCapabilitiesSource, /tool_search_tool_\(regex\|bm25\)/);
+  assert.match(serverCapabilitiesSource, /inspectAnthropicServerCapabilities/);
+  assert.match(serverCapabilitiesSource, /inspectAnthropicServerResponse/);
+  assert.match(proxyServerSource, /anthropic_server_capability_inventory/);
+  assert.match(proxyServerSource, /tool_search_request_observed/);
+  assert.match(proxyServerSource, /anthropic_server_tool_unsupported/);
+  assert.match(proxyServerSource, /anthropic_server_response_inventory/);
+  assert.match(proxyServerSource, /anthropic_server_tool_use_unknown/);
+  assert.doesNotMatch(envExample, /^TOOL_SEARCH_/m);
+  assert.doesNotMatch(envExample, /^SERVER_CAPABILITY_/m);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.27-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.27-實作與驗證報告.md'));
 });

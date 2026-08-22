@@ -36,6 +36,7 @@ import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
+import { inspectAnthropicServerCapabilities, inspectAnthropicServerResponse } from '../proxy/server-capabilities.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
 import { runContextCompact } from './context-compact-client.js';
@@ -729,6 +730,31 @@ export function createProxyServer(config, dependencies = {}) {
         handoffs,
       });
     };
+    const observeServerResponseCapabilities = (response, stage = 'base_response') => {
+      const inventory = inspectAnthropicServerResponse(response);
+      if (inventory.server_tool_use_count > 0
+          || inventory.tool_search_result_count > 0
+          || inventory.tool_reference_count > 0) {
+        log(config, 'info', 'anthropic_server_response_inventory', {
+          requestId,
+          stage,
+          server_tool_use_count: inventory.server_tool_use_count,
+          tool_search_result_count: inventory.tool_search_result_count,
+          tool_reference_count: inventory.tool_reference_count,
+          unknown_server_tool_use_count: inventory.unknown_server_tool_use_count,
+          tool_reference_names_sha256: inventory.tool_reference_names_sha256,
+        });
+      }
+      for (const entry of inventory.unknown_server_tool_uses) {
+        log(config, 'warn', 'anthropic_server_tool_use_unknown', {
+          requestId,
+          stage,
+          server_tool_name: entry.name,
+          server_tool_id: entry.id,
+        });
+      }
+      return response;
+    };
     const modelRoundProgress = {
       active: false,
       round: 0,
@@ -1146,6 +1172,34 @@ export function createProxyServer(config, dependencies = {}) {
 
       clientSessionId = claudeCodeSessionId(req.headers, original);
       if (messagesPath === '/v1/messages') {
+        const serverCapabilityInventory = inspectAnthropicServerCapabilities(original);
+        if (serverCapabilityInventory.tool_search_count > 0 || serverCapabilityInventory.unsupported_count > 0) {
+          log(config, 'info', 'anthropic_server_capability_inventory', {
+            requestId,
+            server_tool_count: serverCapabilityInventory.server_tool_count,
+            bridged_count: serverCapabilityInventory.bridged_count,
+            tool_search_count: serverCapabilityInventory.tool_search_count,
+            discovery_only_count: serverCapabilityInventory.discovery_only_count,
+            unsupported_count: serverCapabilityInventory.unsupported_count,
+            unsupported_families: serverCapabilityInventory.unsupported_families,
+          });
+        }
+        if (serverCapabilityInventory.tool_search_count > 0) {
+          log(config, 'info', 'tool_search_request_observed', {
+            requestId,
+            ...serverCapabilityInventory.tool_search,
+            execution_mode: 'diagnostic_passthrough',
+          });
+        }
+        for (const entry of serverCapabilityInventory.definitions.filter((item) => item.status === 'unsupported')) {
+          log(config, 'warn', 'anthropic_server_tool_unsupported', {
+            requestId,
+            family: entry.family,
+            native_type: entry.type,
+            declared_name: entry.name,
+            action: 'diagnostic_passthrough',
+          });
+        }
         claudeAgentRequestContext = describeClaudeAgentRequest(req.headers, original);
         log(config, 'info', 'claude_agent_request_observed', {
           requestId,
@@ -1540,6 +1594,7 @@ export function createProxyServer(config, dependencies = {}) {
               onResponseMode: onBaseResponseMode,
             },
           );
+          response = observeServerResponseCapabilities(response, 'direct_stream');
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, original);
@@ -1548,6 +1603,7 @@ export function createProxyServer(config, dependencies = {}) {
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
           let response = await callUpstreamJson(original, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
+          response = observeServerResponseCapabilities(response, 'direct_json');
           response = await applyFinalPresentationLanguage(response, original);
           observeAgentHandoff(response);
           sendJson(res, 200, response);
@@ -1784,11 +1840,13 @@ export function createProxyServer(config, dependencies = {}) {
           let response = await callUpstreamManagedStream(
             request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent, onResponseMode: onBaseResponseMode },
           );
+          response = observeServerResponseCapabilities(response, 'cached_transform_stream');
           response = await applyFinalPresentationLanguage(response, request);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
           let response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
+          response = observeServerResponseCapabilities(response, 'cached_transform_json');
           response = await applyFinalPresentationLanguage(response, request);
           observeAgentHandoff(response);
           sendJson(res, 200, response);
@@ -1955,14 +2013,17 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
-      const upstream = (body, signal, runtimeOptions = {}) => callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
-        onResponseChunk: onBaseResponseChunk,
-        onStreamPhase: onManagedModelStreamPhase,
-        onSemanticDelta: onModelSemanticDelta,
-        ...(typeof runtimeOptions.onCheckpoint === 'function' ? { onCheckpoint: runtimeOptions.onCheckpoint } : {}),
-        onBusyEvent: onBaseBusyEvent,
-        onResponseMode: onBaseResponseMode,
-      });
+      const upstream = async (body, signal, runtimeOptions = {}) => {
+        const response = await callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
+          onResponseChunk: onBaseResponseChunk,
+          onStreamPhase: onManagedModelStreamPhase,
+          onSemanticDelta: onModelSemanticDelta,
+          ...(typeof runtimeOptions.onCheckpoint === 'function' ? { onCheckpoint: runtimeOptions.onCheckpoint } : {}),
+          onBusyEvent: onBaseBusyEvent,
+          onResponseMode: onBaseResponseMode,
+        });
+        return observeServerResponseCapabilities(response, 'managed_round');
+      };
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
         : null;
