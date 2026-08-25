@@ -36,7 +36,7 @@ function extensionFor(mediaType) {
   }[mediaType] || '.bin';
 }
 
-export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signal, cacheKeyContext = {} } = {}) {
+export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signal, cacheKeyContext = {}, passthroughPaths = new Set() } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'vllm-cc-media-'));
   const allowedPaths = new Set();
   const mediaEntries = [];
@@ -62,6 +62,7 @@ export async function prepareMediaHandles(messages, { maxDecodedBytes }, { signa
         return;
       }
     if (isExternalBase64Media(value)) {
+      if (value.type === 'image' && passthroughPaths.has(JSON.stringify(currentPath))) return;
       const mediaType = value.source.media_type;
       const buffer = decodeBase64Media(value.source.data, maxDecodedBytes, mediaType);
       const fingerprint = buildMediaCacheKey({

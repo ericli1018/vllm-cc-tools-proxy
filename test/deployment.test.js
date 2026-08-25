@@ -612,3 +612,14 @@ test('V0.29.29 routes ordinary Read/direct images to Base Native Vision while pr
   assert.ok(changeLogEntries.includes('V0.29.29-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.29-實作與驗證報告.md'));
 });
+
+test('V0.29.30 keeps Read/direct Native Vision image blocks raw instead of staging and rebuilding them', async () => {
+  assert.match(readme, /V0\.29\.30 Native Vision Raw Passthrough/);
+  assert.match(readme, /original.*tool_result.*image.*unchanged/s);
+  assert.match(readme, /no.*proxy_file.*rehydration/s);
+  assert.match(mediaAdaptersSource, /native_vision_raw_passthrough_selected/);
+  assert.match(proxyServerSource, /passthroughPaths/);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.30-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.30-實作與驗證報告.md'));
+});

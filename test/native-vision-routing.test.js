@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { createMediaAdapters } from '../src/proxy/media-adapters.js';
+import { prepareMediaHandles } from '../src/proxy/media-preflight.js';
 
 function baseAdapterConfig(overrides = {}) {
   return {
@@ -455,4 +456,80 @@ test('V0.29.29 transient Base count-token failures do not trigger Proxy Vision f
   assert.equal(messageCalls, 1);
   assert.equal(logs.some((entry) => entry.event === 'native_vision_fallback_selected'), false);
   assert.ok(logs.some((entry) => entry.event === 'native_vision_base_probe_failed' && entry.fallback === false));
+});
+
+test('V0.29.30 media preflight leaves explicitly bypassed Native Vision image blocks byte-for-byte untouched', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const canonical = png.toString('base64');
+  const decorated = `${canonical.slice(0, 73)}\n${canonical.slice(73)}`;
+  const pathValue = ['messages', 1, 'content', 0, 'content', 0];
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-raw-1', name: 'Read', input: { file_path: '/workspace/screenshots/raw.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-raw-1', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: decorated } }] }] },
+  ];
+  const original = structuredClone(messages);
+  const prepared = await prepareMediaHandles(messages, { maxDecodedBytes: 5_000_000 }, {
+    passthroughPaths: new Set([JSON.stringify(pathValue)]),
+  });
+  try {
+    assert.deepEqual(prepared.messages, original);
+    assert.equal(prepared.mediaEntries.length, 0);
+    assert.equal(prepared.mediaOccurrences.length, 0);
+  } finally {
+    await prepared.cleanup();
+  }
+});
+
+test('V0.29.30 Claude Code Read(image) reaches Base vLLM with the original tool_result image block unchanged', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const canonical = png.toString('base64');
+  const decorated = `${canonical.slice(0, 61)}\n${canonical.slice(61)}`;
+  const source = {
+    type: 'base64',
+    media_type: 'image/png',
+    data: decorated,
+    width: 600,
+    height: 180,
+  };
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-raw-2', name: 'Read', input: { file_path: '/workspace/screenshots/home.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-raw-2', content: [{ type: 'image', source }] }] },
+  ];
+  const expectedMessages = structuredClone(messages);
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    observed.push({ url: req.url, payload });
+    assert.deepEqual(payload.messages, expectedMessages);
+    assert.equal(JSON.stringify(payload).includes('proxy_file'), false);
+    assert.equal(JSON.stringify(payload).includes('VCC_PROXY_EVIDENCE_BEGIN'), false);
+    if (req.url.includes('/count_tokens')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 91 }));
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'raw-read-native', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'raw native ok' }], stop_reason: 'end_turn', usage: { input_tokens: 91, output_tokens: 3 } }));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  let visionCalls = 0;
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl, logLevel: 'info', logSink: (entry) => logs.push(entry) }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180 }),
+      analyzeVisualAssets: async () => { visionCalls += 1; return { markdown: 'SHOULD NOT RUN', warnings: [], cropCount: 0, needsZoom: false }; },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'raw native ok');
+  assert.equal(visionCalls, 0);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.ok(logs.some((entry) => entry.event === 'native_vision_raw_passthrough_selected'));
 });

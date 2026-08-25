@@ -252,6 +252,24 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         && config.visionNativePassthrough === true
         && ['direct_image', 'read_image'].includes(provenance.sourceKind);
       if (nativeVisionPassthrough) {
+        if (block.source?.type === 'base64') {
+          onVisionEvent('native_vision_raw_passthrough_selected', {
+            media_type: block.source.media_type,
+            origin: provenance.origin,
+            origin_tool: provenance.originTool,
+            source_kind: provenance.sourceKind,
+            read_source_ref: provenance.readSourceRef,
+          });
+          onVisionEvent('native_vision_passthrough_selected', {
+            media_type: block.source.media_type,
+            origin: provenance.origin,
+            origin_tool: provenance.originTool,
+            source_kind: provenance.sourceKind,
+            read_source_ref: provenance.readSourceRef,
+            passthrough_mode: 'raw',
+          });
+          return structuredClone(block);
+        }
         const sourceBuffer = await readSource(block.source, block.source.media_type);
         onVisionEvent('native_vision_passthrough_selected', {
           media_type: block.source.media_type,

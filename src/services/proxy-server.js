@@ -1702,15 +1702,34 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionFallbackRequest = null;
       let nativeVisionProbeUsage = null;
       let nativeVisionProbePayload = null;
+      let nativeVisionPassthroughPaths = new Set();
 
       if (hasMedia) {
         requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
+        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
+        const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
+          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
+          : [];
+        nativeVisionEligibleCount = nativeVisionEligible.length;
+        nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
+        if (nativeVisionEligibleCount > 0) {
+          nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
+          log(config, 'info', 'native_vision_route_selected', {
+            requestId,
+            eligible_image_count: nativeVisionEligibleCount,
+            source_kinds: [...new Set(nativeVisionEligible.map((entry) => entry.sourceKind))].sort(),
+            base_vision_enabled: true,
+            native_passthrough_enabled: true,
+            passthrough_mode: 'raw',
+          });
+        }
         await cacheReady;
         requestStage = 'media_preflight';
         preparedMedia = await prepareMediaHandles(request.messages, config.limits, {
           signal: abortController.signal,
+          passthroughPaths: nativeVisionPassthroughPaths,
           cacheKeyContext: {
             pipelineVersion: config.cache?.pipelineVersion,
             visualPromptVersion: config.cache?.visualPromptVersion,
@@ -1724,21 +1743,6 @@ export function createProxyServer(config, dependencies = {}) {
         });
         request.messages = preparedMedia.messages;
         requestStage = 'media_progress';
-        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
-        const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
-          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
-          : [];
-        nativeVisionEligibleCount = nativeVisionEligible.length;
-        if (nativeVisionEligibleCount > 0) {
-          nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
-          log(config, 'info', 'native_vision_route_selected', {
-            requestId,
-            eligible_image_count: nativeVisionEligibleCount,
-            source_kinds: [...new Set(nativeVisionEligible.map((entry) => entry.sourceKind))].sort(),
-            base_vision_enabled: true,
-            native_passthrough_enabled: true,
-          });
-        }
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
         for (const occurrence of mediaOccurrences) {
           if (!String(occurrence.mediaType || '').startsWith('image/')) continue;
