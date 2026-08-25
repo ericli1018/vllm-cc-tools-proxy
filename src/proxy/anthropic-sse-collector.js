@@ -89,6 +89,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
   let currentStreamPhase = 'waiting';
   const completedIndexes = new Set();
   let openIndex = null;
+  const eventCounts = Object.create(null);
+  const eventSequence = [];
+  const MAX_EVENT_FINGERPRINT_ITEMS = 32;
 
   const checkpointSnapshot = () => {
     const completedBlocks = [...completedIndexes]
@@ -135,6 +138,10 @@ export async function collectAnthropicMessageFromSse(upstream, {
     const parsed = parseSseBlock(rawBlock);
     const payload = parsePayload(parsed);
 
+    if (parsed.name !== 'ping') {
+      eventCounts[parsed.name] = (eventCounts[parsed.name] || 0) + 1;
+      if (eventSequence.length < MAX_EVENT_FINGERPRINT_ITEMS) eventSequence.push(parsed.name);
+    }
     if (parsed.name === 'ping') return;
     if (parsed.name === 'error' || payload?.type === 'error') {
       const upstreamError = payload?.error || {};
@@ -257,6 +264,14 @@ export async function collectAnthropicMessageFromSse(upstream, {
   message.content = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
   message.usage = message.usage || {};
   if (!sawMessageStop) throw invalidStream('vLLM Anthropic SSE ended without message_stop.');
-  try { await onComplete({ firstModelEventObserved }); } catch {}
+  try {
+    await onComplete({
+      firstModelEventObserved,
+      event_sequence: [...eventSequence],
+      event_counts: Object.fromEntries(Object.entries(eventCounts)),
+      content_block_count: blocks.size,
+      fingerprint_truncated: eventSequence.length >= MAX_EVENT_FINGERPRINT_ITEMS,
+    });
+  } catch {}
   return message;
 }

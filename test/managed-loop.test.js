@@ -1257,3 +1257,55 @@ test('V0.29.25 recovers a stalled tool-phase response from completed blocks and 
   assert.match(JSON.stringify(requests[1].messages), /PROXY_MANAGED_RESPONSE_RECOVERY/);
   assert.match(progress.join('\n'), /恢復|recover/i);
 });
+
+test('V0.29.31 empty end_turn is regenerated once from the original semantic request without 0-char continuation state', async () => {
+  const requests = [];
+  const diagnostics = [];
+  const progress = [];
+  const initial = {
+    model: 'm',
+    output_config: { effort: 'xhigh' },
+    tools: [{ name: 'Read', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'inspect the screenshot and continue' }] }],
+  };
+  const result = await runManagedLoop(initial, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) return response([], 'end_turn');
+      return response([{ type: 'text', text: 'regenerated successfully' }], 'end_turn');
+    },
+    executeTool: async () => assert.fail('empty end_turn regeneration must not execute a tool by itself'),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    onProgress: (message, details) => progress.push({ message, details }),
+  });
+
+  assert.equal(result.content[0].text, 'regenerated successfully');
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1].messages, requests[0].messages);
+  assert.deepEqual(requests[1].tools, requests[0].tools);
+  assert.deepEqual(requests[1].output_config, requests[0].output_config);
+  assert.equal(JSON.stringify(requests[1]).includes('Complete exactly one valid next action'), false);
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_final_response_inspected'
+    && entry.details.reasons.includes('upstream_empty_end_turn')));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_empty_end_turn_regeneration_started'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_empty_end_turn_regeneration_success'));
+  assert.equal(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'), false);
+  assert.equal(progress.some((entry) => /0 (?:字元|字符)|0 characters/.test(entry.message)), false);
+});
+
+test('V0.29.31 a second empty end_turn fails with a dedicated bounded-regeneration error', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  await assert.rejects(
+    runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'go' }] }, {
+      upstream: async () => { calls += 1; return response([], 'end_turn'); },
+      executeTool: async () => ({}),
+      onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    }),
+    (error) => error.code === 'empty_end_turn_recovery_exhausted',
+  );
+  assert.equal(calls, 2);
+  assert.equal(diagnostics.filter((entry) => entry.event === 'managed_empty_end_turn_regeneration_started').length, 1);
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_empty_end_turn_regeneration_exhausted'));
+  assert.equal(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'), false);
+});

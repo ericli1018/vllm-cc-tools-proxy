@@ -1,6 +1,19 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.30 makes Native Vision a true raw image passthrough for ordinary direct images and Claude Code `Read(image)` results: the original tool/result/image relationship reaches Base vLLM without Proxy media staging or image-block reconstruction. PDF/technical media still use the existing Proxy Vision pipeline. V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and Managed Response Recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.31 hardens Native Vision against upstream `end_turn` responses that contain no semantic output, removes full-image capability probing from the normal raw-image path, and keeps runtime fallback on the actual `/v1/messages` request. V0.29.30 raw image passthrough, PDF/technical Proxy Vision, V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and the existing stall-recovery contract remain intact.
+
+
+## V0.29.31 Empty End-Turn Recovery / Native Vision Probe Reduction
+
+V0.29.31 addresses an observed Base-vLLM failure mode where a valid Anthropic SSE stream can terminate with `stop_reason=end_turn` while containing no text, thinking, or tool blocks. Such a response is now classified as `upstream_empty_end_turn` rather than ordinary missing-visible-text continuation. The Proxy does not preserve a meaningless 0-character state and does not append a continuation instruction. It regenerates the **original semantic request once**; a second empty end-turn fails with the dedicated bounded error `empty_end_turn_recovery_exhausted`.
+
+The bounded regeneration preserves the client's original reasoning effort and request semantics. V0.29.31 deliberately does **not** introduce automatic model-specific effort lowering. Diagnostics record safe metadata such as requested effort, message/image counts, generation parameters, and a bounded SSE event-name/count fingerprint without logging prompt text, image Base64, or model content.
+
+For Native raw Vision (`VLLM_BASE_VISION_ENABLED=true` and `VISION_NATIVE_PASSTHROUGH=true`), the operator capability declaration is now trusted on the normal path. Raw image blocks are sent to the actual Base `/v1/messages` inference request and are no longer duplicated into a full-image internal `/v1/messages/count_tokens` capability probe. Streaming requests may still use a text-only placeholder usage bootstrap for progress accounting; that bootstrap contains no raw image. Explicit client calls to `/v1/messages/count_tokens` retain normal count-token semantics.
+
+If the actual `/v1/messages` request explicitly rejects image/vision input with a supported 400/415/422 capability error, the Proxy performs the existing Proxy Vision transformation and retries Base once. This runtime fallback applies to managed and non-managed streaming/non-streaming paths. Generic Base 5xx/network failures remain Base failures and are not silently converted into Vision fallback.
+
+No new ENV variables are added. `media-v8`, `visual-v18`, and `evidence-v14` stay unchanged. `read_pdf_image`, PDF/technical media, ToolSearch, WebSearch/WebFetch, Main/Sub progress, Context Compact, and the existing phase-aware stall-recovery behavior are unchanged.
 
 ## V0.29.30 Native Vision Raw Passthrough
 

@@ -64,7 +64,9 @@ export function inspectManagedFinalResponse(response) {
   const inventory = inventoryProtocolTags(protocolContent);
   const reasons = [];
   if (inventory.total > 0) reasons.push('control_tag_leak');
-  if (toolUses.length === 0 && !visibleTextPresent) reasons.push(thinkingTextPresent ? 'final_answer_in_thinking' : 'missing_visible_text');
+  const emptyEndTurn = response?.stop_reason === 'end_turn' && content.length === 0;
+  if (emptyEndTurn) reasons.push('upstream_empty_end_turn');
+  else if (toolUses.length === 0 && !visibleTextPresent) reasons.push(thinkingTextPresent ? 'final_answer_in_thinking' : 'missing_visible_text');
   return {
     valid: reasons.length === 0,
     reasons,
@@ -117,7 +119,9 @@ export function classifyManagedRecovery(response, inspection = inspectManagedFin
     && substantial
     && structured
     && !continuationIntent;
-  const route = answerLike ? 'final_channel' : 'continuation';
+  const route = inspection.reasons.includes('upstream_empty_end_turn')
+    ? 'regeneration'
+    : answerLike ? 'final_channel' : 'continuation';
   return {
     route,
     tools_preserved: route === 'continuation',
@@ -150,6 +154,13 @@ function appendInstruction(messages, instruction) {
     }
   }
   messages.push({ role: 'user', content: [{ type: 'text', text: instruction }] });
+}
+
+
+export function buildManagedEmptyEndTurnRecoveryRequest(request) {
+  const recovery = structuredClone(request);
+  recovery.stream = false;
+  return recovery;
 }
 
 export function buildManagedContinuationRecoveryRequest(request, response, preparedState = null) {

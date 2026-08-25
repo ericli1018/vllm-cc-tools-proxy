@@ -179,7 +179,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
   return payload;
 }
 
-async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onCheckpoint = null, onBusyEvent = null, onResponseMode = null } = {}) {
+async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onCheckpoint = null, onBusyEvent = null, onResponseMode = null, onStreamSummary = null } = {}) {
   const response = await fetchUpstream({ ...request, stream: true }, config, incomingHeaders, signal, path, { onResponseChunk, onBusyEvent });
   if (!response.ok) {
     const text = await response.text();
@@ -207,6 +207,7 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
     ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
     ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
     ...(typeof onCheckpoint === 'function' ? { onCheckpoint } : {}),
+    ...(typeof onStreamSummary === 'function' ? { onComplete: onStreamSummary } : {}),
   });
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
@@ -712,6 +713,7 @@ export function createProxyServer(config, dependencies = {}) {
       : '';
     let modelOutputBytes = 0; // semantic thinking/text/tool JSON payload bytes only
     let lastModelOutputDeltaAt = 0;
+    let lastManagedSseSummary = null;
     let claudeAgentRequestContext = null;
     let clientSessionId = '';
     let progressFirstVisibleAt = 0;
@@ -1703,6 +1705,8 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionProbeUsage = null;
       let nativeVisionProbePayload = null;
       let nativeVisionPassthroughPaths = new Set();
+      let mediaBootstrapUsage = null;
+      let nativeVisionRuntimeFallbackUsed = false;
 
       if (hasMedia) {
         requestStage = 'media_observation';
@@ -2003,6 +2007,7 @@ export function createProxyServer(config, dependencies = {}) {
             failureEvent: 'managed_usage_bootstrap_failed',
           },
         );
+        mediaBootstrapUsage = bootstrapUsage;
         await openManagedProgress(bootstrapUsage);
         mediaProgressOpenedEarly = true;
       }
@@ -2015,7 +2020,7 @@ export function createProxyServer(config, dependencies = {}) {
         const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount);
         if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
 
-        if (nativeVisionEligibleCount > 0 && config.usagePreflightEnabled !== false) {
+        if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages/count_tokens' && config.usagePreflightEnabled !== false) {
           requestStage = 'native_vision_capability_preflight';
           try {
             nativeVisionProbePayload = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages/count_tokens');
@@ -2076,6 +2081,21 @@ export function createProxyServer(config, dependencies = {}) {
             total_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
             source: 'native_vision_capability_preflight',
           });
+        } else if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages') {
+          initialStreamUsage = mediaBootstrapUsage || usageFromTokenCount({});
+          log(config, 'info', 'managed_usage_preflight_succeeded', {
+            requestId,
+            input_tokens: initialStreamUsage.input_tokens || 0,
+            cache_creation_input_tokens: initialStreamUsage.cache_creation_input_tokens || 0,
+            cache_read_input_tokens: initialStreamUsage.cache_read_input_tokens || 0,
+            total_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
+            source: mediaBootstrapUsage ? 'native_vision_placeholder_bootstrap' : 'native_vision_raw_passthrough_no_probe',
+          });
+          log(config, 'info', 'native_vision_image_probe_skipped', {
+            requestId,
+            eligible_image_count: nativeVisionEligibleCount,
+            reason: 'operator_declared_base_vision_capability',
+          });
         } else {
           initialStreamUsage = await preflightManagedUsage(
             request,
@@ -2117,16 +2137,50 @@ export function createProxyServer(config, dependencies = {}) {
         return sendJson(res, 200, payload);
       }
 
+      const materializeRuntimeNativeVisionFallback = async (body) => {
+        if (nativeVisionRuntimeFallbackUsed || nativeVisionEligibleCount <= 0) return null;
+        nativeVisionRuntimeFallbackUsed = true;
+        const fallbackConfig = { ...config, visionNativePassthrough: false };
+        const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
+        let fallbackBody = {
+          ...structuredClone(body),
+          messages: await adaptMessages(structuredClone(body?.messages || []), fallbackAdapters),
+        };
+        fallbackBody = injectEvidenceContract(fallbackBody);
+        if (body && typeof body === 'object') {
+          body.messages = fallbackBody.messages;
+          body.system = fallbackBody.system;
+        }
+        nativeVisionEligibleCount = 0;
+        return body;
+      };
+
       const upstream = async (body, signal, runtimeOptions = {}) => {
-        const response = await callUpstreamManagedStream(body, config, req.headers, signal, '/v1/messages', {
+        const invoke = (requestBody) => callUpstreamManagedStream(requestBody, config, req.headers, signal, '/v1/messages', {
           onResponseChunk: onBaseResponseChunk,
           onStreamPhase: onManagedModelStreamPhase,
           onSemanticDelta: onModelSemanticDelta,
           ...(typeof runtimeOptions.onCheckpoint === 'function' ? { onCheckpoint: runtimeOptions.onCheckpoint } : {}),
           onBusyEvent: onBaseBusyEvent,
           onResponseMode: onBaseResponseMode,
+          onStreamSummary: (summary) => { lastManagedSseSummary = structuredClone(summary || {}); },
         });
-        return observeServerResponseCapabilities(response, 'managed_round');
+        try {
+          const response = await invoke(body);
+          return observeServerResponseCapabilities(response, 'managed_round');
+        } catch (error) {
+          if (!isNativeVisionCapabilityRejection(error) || nativeVisionEligibleCount <= 0 || nativeVisionRuntimeFallbackUsed) throw error;
+          log(config, 'warn', 'native_vision_fallback_selected', {
+            requestId,
+            reason: 'base_image_capability_rejected_runtime',
+            status: error.status,
+            code: error.code,
+            eligible_image_count: nativeVisionEligibleCount,
+          });
+          const fallbackBody = await materializeRuntimeNativeVisionFallback(body);
+          const response = await invoke(fallbackBody);
+          return observeServerResponseCapabilities(response, 'managed_round');
+        }
       };
       const serverToolBridge = request.stream === true && progress && serverWebUiDeclaration.native_count > 0
         ? createServerToolStreamBridge(progress)
@@ -2186,7 +2240,19 @@ export function createProxyServer(config, dependencies = {}) {
           onProgress,
           onServerToolEvent: serverToolBridge ? (event) => serverToolBridge.emit(event) : null,
           materializeServerToolBlocks: !serverToolBridge,
-          onDiagnostic: (event, fields) => log(config, diagnosticLogLevel(event), event, { requestId, ...fields }),
+          onDiagnostic: (event, fields) => {
+            const includeSseFingerprint = String(event || '').startsWith('managed_empty_end_turn_') && lastManagedSseSummary;
+            log(config, diagnosticLogLevel(event), event, {
+              requestId,
+              ...fields,
+              ...(includeSseFingerprint ? {
+                sse_event_sequence: lastManagedSseSummary.event_sequence || [],
+                sse_event_counts: lastManagedSseSummary.event_counts || {},
+                sse_content_block_count: Number(lastManagedSseSummary.content_block_count || 0),
+                sse_fingerprint_truncated: Boolean(lastManagedSseSummary.fingerprint_truncated),
+              } : {}),
+            });
+          },
           showInitialModelProgress: hasMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),
           writeProtocolDiagnostics: protocolDiagnosticStore
@@ -2270,7 +2336,7 @@ export function createProxyServer(config, dependencies = {}) {
           runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: progressTiming.startedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
-          let response = await collectManagedBase(request, config, req.headers, abortController.signal, {
+          const collectBase = () => collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
             onSemanticDelta: onModelSemanticDelta,
             onBusyEvent: onBaseBusyEvent,
@@ -2311,13 +2377,42 @@ export function createProxyServer(config, dependencies = {}) {
               }
             },
           });
+          let response;
+          try {
+            response = await collectBase();
+          } catch (error) {
+            if (!isNativeVisionCapabilityRejection(error) || nativeVisionEligibleCount <= 0 || nativeVisionRuntimeFallbackUsed) throw error;
+            log(config, 'warn', 'native_vision_fallback_selected', {
+              requestId,
+              reason: 'base_image_capability_rejected_runtime',
+              status: error.status,
+              code: error.code,
+              eligible_image_count: nativeVisionEligibleCount,
+            });
+            await materializeRuntimeNativeVisionFallback(request);
+            response = await collectBase();
+          }
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, request);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
-          let response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
+          let response;
+          try {
+            response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
+          } catch (error) {
+            if (!isNativeVisionCapabilityRejection(error) || nativeVisionEligibleCount <= 0 || nativeVisionRuntimeFallbackUsed) throw error;
+            log(config, 'warn', 'native_vision_fallback_selected', {
+              requestId,
+              reason: 'base_image_capability_rejected_runtime',
+              status: error.status,
+              code: error.code,
+              eligible_image_count: nativeVisionEligibleCount,
+            });
+            await materializeRuntimeNativeVisionFallback(request);
+            response = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent });
+          }
           response = await applyFinalPresentationLanguage(response, request);
           observeAgentHandoff(response);
           sendJson(res, 200, response);

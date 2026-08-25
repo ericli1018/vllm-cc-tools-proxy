@@ -623,3 +623,20 @@ test('V0.29.30 keeps Read/direct Native Vision image blocks raw instead of stagi
   assert.ok(changeLogEntries.includes('V0.29.30-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.30-實作與驗證報告.md'));
 });
+
+
+test('V0.29.31 hardens empty end_turn recovery and keeps Native raw image probes off count_tokens', async () => {
+  assert.match(readme, /V0\.29\.31 Empty End-Turn Recovery \/ Native Vision Probe Reduction/);
+  assert.match(managedLoopSource, /upstream_empty_end_turn/);
+  assert.match(managedLoopSource, /empty_end_turn_recovery_exhausted/);
+  assert.match(managedLoopSource, /managed_empty_end_turn_regeneration_started/);
+  assert.match(proxyServerSource, /native_vision_image_probe_skipped/);
+  assert.match(proxyServerSource, /operator_declared_base_vision_capability/);
+  assert.match(proxyServerSource, /base_image_capability_rejected_runtime/);
+  assert.match(sseCollectorSource, /event_sequence/);
+  assert.match(sseCollectorSource, /event_counts/);
+  assert.doesNotMatch(envExample, /^EMPTY_END_TURN_/m);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.31-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.31-實作與驗證報告.md'));
+});

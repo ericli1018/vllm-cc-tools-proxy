@@ -2,6 +2,7 @@ import { statusText } from '../i18n/response-language.js';
 import { HttpError } from '../lib/http.js';
 import {
   buildManagedContinuationRecoveryRequest,
+  buildManagedEmptyEndTurnRecoveryRequest,
   buildManagedFinalChannelRecoveryRequest,
   classifyManagedRecovery,
   inspectManagedFinalResponse,
@@ -433,6 +434,24 @@ async function emitDetailedFinalDiagnostics(request, response, inspection, {
   }
 }
 
+
+function requestReasoningEffort(request) {
+  const direct = request?.output_config?.effort ?? request?.reasoning_effort ?? request?.effort;
+  return typeof direct === 'string' && direct.trim() ? direct.trim() : 'unspecified';
+}
+
+function countImageBlocks(value) {
+  let count = 0;
+  const walk = (item) => {
+    if (Array.isArray(item)) { for (const entry of item) walk(entry); return; }
+    if (!item || typeof item !== 'object') return;
+    if (item.type === 'image' && item.source && typeof item.source === 'object') count += 1;
+    for (const entry of Object.values(item)) walk(entry);
+  };
+  walk(value);
+  return count;
+}
+
 async function recoverInvalidResponse(request, response, {
   upstream, signal, onDiagnostic, onProgress, round, logProtocolSnippets,
   writeProtocolDiagnostics, locale = 'zh-TW', compressContinuationWindow,
@@ -463,6 +482,68 @@ async function recoverInvalidResponse(request, response, {
   }
 
   const recovery = classifyManagedRecovery(response, inspection);
+  if (recovery.route === 'regeneration') {
+    const totalImages = countImageBlocks(request?.messages || []);
+    const currentTurnImages = countImageBlocks(Array.isArray(request?.messages) ? request.messages.at(-1) : null);
+    const diagnosticBase = {
+      round,
+      stop_reason: inspection.stop_reason,
+      requested_effort: requestReasoningEffort(request),
+      message_count: Array.isArray(request?.messages) ? request.messages.length : 0,
+      image_count_total: totalImages,
+      image_count_current_turn: currentTurnImages,
+      max_tokens: Number.isFinite(Number(request?.max_tokens)) ? Number(request.max_tokens) : null,
+      temperature: Number.isFinite(Number(request?.temperature)) ? Number(request.temperature) : null,
+      top_p: Number.isFinite(Number(request?.top_p)) ? Number(request.top_p) : null,
+      top_k: Number.isFinite(Number(request?.top_k)) ? Number(request.top_k) : null,
+    };
+    await onDiagnostic('managed_empty_end_turn_regeneration_started', diagnosticBase);
+    await onProgress(statusText(locale, 'emptyEndTurnRegeneration'), {
+      phase: 'managed_empty_end_turn_regeneration_start',
+      round,
+      recovery_route: 'regeneration',
+      force: true,
+    });
+    const recoveryRequest = buildManagedEmptyEndTurnRecoveryRequest(request);
+    const recoveredResponse = await upstream(recoveryRequest, signal);
+    const recoveredInspection = await inspectFinal(recoveredResponse, {
+      onDiagnostic, round, repair: true,
+    });
+    if (recoveredInspection.valid) {
+      await onDiagnostic('managed_empty_end_turn_regeneration_success', {
+        ...diagnosticBase,
+        text_bytes: recoveredInspection.text_bytes,
+        thinking_bytes: recoveredInspection.thinking_bytes,
+        tool_use_count: recoveredInspection.tool_use_count,
+      });
+      return {
+        response: recoveredResponse,
+        recovered: true,
+        recovery: { route: 'regeneration', tools_preserved: true },
+      };
+    }
+    if (recoveredInspection.reasons.includes('upstream_empty_end_turn')) {
+      await onDiagnostic('managed_empty_end_turn_regeneration_exhausted', diagnosticBase);
+      throw new HttpError(502, 'Base model returned an empty end_turn twice.', {
+        code: 'empty_end_turn_recovery_exhausted',
+        retryable: true,
+        details: { recovery_route: 'regeneration' },
+      });
+    }
+    await onDiagnostic('managed_final_response_rejected', {
+      round,
+      recovery_route: 'regeneration',
+      tools_preserved: true,
+      reasons: recoveredInspection.reasons,
+      control_tag_count: recoveredInspection.control_tag_count,
+      control_tag_counts: recoveredInspection.control_tag_counts,
+    });
+    throw new HttpError(502, 'Base model did not produce a valid next action after empty-response regeneration.', {
+      code: 'response_recovery_exhausted',
+      retryable: true,
+      details: { recovery_route: 'regeneration' },
+    });
+  }
   await onDiagnostic('managed_final_response_repair_start', {
     round,
     reasons: inspection.reasons,

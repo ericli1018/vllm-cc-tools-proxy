@@ -111,7 +111,10 @@ test('V0.2.26.4 collector preserves first-event usage and completion callbacks w
   assert.equal(usages[0].usage.input_tokens, 321);
   assert.equal(usages[1].stage, 'message_delta');
   assert.equal(usages[1].usage.output_tokens, 9);
-  assert.deepEqual(completed, [{ firstModelEventObserved: true }]);
+  assert.equal(completed.length, 1);
+  assert.equal(completed[0].firstModelEventObserved, true);
+  assert.deepEqual(completed[0].event_sequence, ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop']);
+  assert.equal(completed[0].content_block_count, 1);
 });
 
 test('V0.2.28.7 collector reports meaningful stream phase transitions once', async () => {
@@ -217,4 +220,24 @@ test('V0.29.25 collector exposes only completed blocks as a recovery checkpoint 
   assert.deepEqual(last.completed_blocks, [{ type: 'text', text: 'Preserved text.' }]);
   assert.deepEqual(last.partial_block, { index: 1, type: 'tool_use', id: 'tool-partial', name: 'Bash' });
   assert.equal(last.phase, 'tool');
+});
+
+test('V0.29.31 collector emits a bounded semantic-safe SSE fingerprint for empty end_turn diagnostics', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'empty-031', type: 'message', role: 'assistant', model: 'qwen', content: [], usage: { input_tokens: 100, output_tokens: 0 },
+    } }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 0 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+  const completed = [];
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]), {
+    onComplete: async (entry) => completed.push(entry),
+  });
+  assert.deepEqual(result.content, []);
+  assert.equal(result.stop_reason, 'end_turn');
+  assert.equal(completed.length, 1);
+  assert.deepEqual(completed[0].event_sequence, ['message_start', 'message_delta', 'message_stop']);
+  assert.deepEqual(completed[0].event_counts, { message_start: 1, message_delta: 1, message_stop: 1 });
+  assert.equal(completed[0].content_block_count, 0);
 });

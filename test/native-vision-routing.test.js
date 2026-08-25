@@ -239,10 +239,10 @@ test('V0.29.29 Proxy sends eligible direct images natively to Base after a succe
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'native vision ok');
   assert.equal(visionCalls, 0);
-  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages']);
 });
 
-test('V0.29.29 explicit Base image-capability rejection falls back to the existing Proxy Vision pipeline instead of failing the request', async (t) => {
+test('V0.29.31 explicit Base image-capability rejection at /v1/messages falls back to the existing Proxy Vision pipeline', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   const observed = [];
@@ -250,25 +250,15 @@ test('V0.29.29 explicit Base image-capability rejection falls back to the existi
     const payload = JSON.parse(await readRequest(req));
     const serialized = JSON.stringify(payload);
     observed.push({ url: req.url, serialized });
-    if (req.url.includes('/count_tokens') && serialized.includes(base64)) {
+    assert.equal(req.url, '/v1/messages');
+    if (serialized.includes(base64)) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'This model does not support image input.' } }));
       return;
     }
-    if (req.url === '/v1/messages') {
-      assert.equal(serialized.includes(base64), false);
-      assert.match(serialized, /FALLBACK VISION EVIDENCE/);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id: 'fallback-ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'fallback ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }));
-      return;
-    }
-    if (req.url.includes('/count_tokens')) {
-      assert.match(serialized, /FALLBACK VISION EVIDENCE/);
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ input_tokens: 10 }));
-      return;
-    }
-    res.writeHead(500).end();
+    assert.match(serialized, /FALLBACK VISION EVIDENCE/);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'fallback-ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'fallback ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }));
   });
   const upstreamUrl = await listen(upstream);
   t.after(() => upstream.close());
@@ -289,8 +279,8 @@ test('V0.29.29 explicit Base image-capability rejection falls back to the existi
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'fallback ok');
   assert.equal(visionCalls, 1);
-  assert.equal(observed[0].url, '/v1/messages/count_tokens');
-  assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected'));
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages', '/v1/messages']);
+  assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected_runtime'));
 });
 
 test('V0.29.29 actual Claude Code Read(image) provenance routes the returned image to Base Native Vision', async (t) => {
@@ -332,7 +322,7 @@ test('V0.29.29 actual Claude Code Read(image) provenance routes the returned ima
   });
   assert.equal(response.status, 200);
   assert.equal(visionCalls, 0);
-  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages']);
 });
 
 test('V0.29.29 actual Claude Code Read(PDF) image provenance stays on Proxy Vision', async (t) => {
@@ -415,7 +405,7 @@ test('V0.29.29 mixed Native and Proxy-routed images preserve the raw Native imag
   assert.equal(visionCalls, 1);
 });
 
-test('V0.29.29 transient Base count-token failures do not trigger Proxy Vision fallback or reinterpret a healthy Native Vision route', async (t) => {
+test('V0.29.31 Native raw route no longer depends on a full-image count_tokens probe', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   let countCalls = 0;
@@ -452,10 +442,10 @@ test('V0.29.29 transient Base count-token failures do not trigger Proxy Vision f
   });
   assert.equal(response.status, 200);
   assert.equal(visionCalls, 0);
-  assert.equal(countCalls, 1);
+  assert.equal(countCalls, 0);
   assert.equal(messageCalls, 1);
   assert.equal(logs.some((entry) => entry.event === 'native_vision_fallback_selected'), false);
-  assert.ok(logs.some((entry) => entry.event === 'native_vision_base_probe_failed' && entry.fallback === false));
+  assert.equal(logs.some((entry) => entry.event === 'native_vision_base_probe_failed'), false);
 });
 
 test('V0.29.30 media preflight leaves explicitly bypassed Native Vision image blocks byte-for-byte untouched', async () => {
@@ -530,6 +520,248 @@ test('V0.29.30 Claude Code Read(image) reaches Base vLLM with the original tool_
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'raw native ok');
   assert.equal(visionCalls, 0);
-  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages']);
   assert.ok(logs.some((entry) => entry.event === 'native_vision_raw_passthrough_selected'));
+});
+
+test('V0.29.31 Native raw Read(image) sends the original image only to /v1/messages and skips full-image count_tokens probing', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    observed.push({ url: req.url, payload });
+    if (req.url.includes('/count_tokens')) {
+      assert.equal(JSON.stringify(payload).includes(base64), false, 'raw image must never be sent to count_tokens');
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 12 }));
+      return;
+    }
+    assert.equal(req.url, '/v1/messages');
+    assert.equal(JSON.stringify(payload).includes(base64), true);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'native-direct-031', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 90, output_tokens: 1 } }));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-031', name: 'Read', input: { file_path: '/workspace/screenshot.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-031', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'ok');
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages']);
+});
+
+test('V0.29.31 explicit image-capability rejection from /v1/messages falls back once to Proxy Vision without a capability probe', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    const serialized = JSON.stringify(payload);
+    observed.push({ url: req.url, serialized });
+    assert.equal(req.url, '/v1/messages');
+    if (serialized.includes(base64)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'This model does not support image input.' } }));
+      return;
+    }
+    assert.match(serialized, /RUNTIME FALLBACK VISION EVIDENCE/);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'fallback-runtime-031', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'fallback ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  let visionCalls = 0;
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl, logLevel: 'info', logSink: (entry) => logs.push(entry) }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180 }),
+      analyzeVisualAssets: async () => { visionCalls += 1; return { markdown: 'RUNTIME FALLBACK VISION EVIDENCE', warnings: [], cropCount: 0, needsZoom: false }; },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'fallback ok');
+  assert.equal(visionCalls, 1);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages', '/v1/messages']);
+  assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected_runtime'));
+});
+
+test('V0.29.31 streaming Native raw Read(image) uses only placeholder usage bootstrap before sending the original image to /v1/messages', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    const serialized = JSON.stringify(payload);
+    observed.push({ url: req.url, payload, serialized });
+    if (req.url === '/v1/messages/count_tokens') {
+      assert.equal(serialized.includes(base64), false);
+      assert.match(serialized, /VCC pending image evidence/);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 70 }));
+      return;
+    }
+    assert.equal(req.url, '/v1/messages');
+    assert.equal(serialized.includes(base64), true);
+    assert.equal(payload.stream, true);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m031","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":90,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl, logLevel: 'info', logSink: (entry) => logs.push(entry) }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-stream-031', name: 'Read', input: { file_path: '/workspace/screenshot.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-stream-031', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /OK/);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages']);
+  assert.ok(logs.some((entry) => entry.event === 'native_vision_image_probe_skipped'));
+  assert.equal(logs.some((entry) => entry.event === 'native_vision_base_probe_succeeded'), false);
+});
+
+test('V0.29.31 empty Native Vision SSE recovery logs the upstream event fingerprint and keeps raw image off count_tokens', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let messageCalls = 0;
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    const serialized = JSON.stringify(payload);
+    if (req.url === '/v1/messages/count_tokens') {
+      assert.equal(serialized.includes(base64), false);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 70 }));
+      return;
+    }
+    assert.equal(req.url, '/v1/messages');
+    assert.equal(serialized.includes(base64), true);
+    messageCalls += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    if (messageCalls === 1) {
+      res.end([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"empty031","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"usage":{"input_tokens":90,"output_tokens":0}}}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ].join(''));
+      return;
+    }
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"ok031","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"usage":{"input_tokens":90,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"RECOVERED"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl, logLevel: 'info', logSink: (entry) => logs.push(entry) }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const tools = [
+    { name: 'WebSearch', description: 'search', input_schema: { type: 'object', properties: { query: { type: 'string' } } } },
+    { name: 'WebFetch', description: 'fetch', input_schema: { type: 'object', properties: { url: { type: 'string' } } } },
+  ];
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-empty-031', name: 'Read', input: { file_path: '/workspace/screenshot.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-empty-031', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, output_config: { effort: 'xhigh' }, tools, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /RECOVERED/);
+  assert.equal(messageCalls, 2);
+  const start = logs.find((entry) => entry.event === 'managed_empty_end_turn_regeneration_started');
+  assert.ok(start);
+  assert.equal(start.requested_effort, 'xhigh');
+  assert.deepEqual(start.sse_event_sequence, ['message_start', 'message_delta', 'message_stop']);
+  assert.deepEqual(start.sse_event_counts, { message_start: 1, message_delta: 1, message_stop: 1 });
+  assert.equal(start.sse_content_block_count, 0);
+});
+
+test('V0.29.31 streaming Native Vision without managed tools falls back on /v1/messages capability rejection', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const observed = [];
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    const serialized = JSON.stringify(payload);
+    observed.push({ url: req.url, serialized });
+    if (req.url === '/v1/messages/count_tokens') {
+      assert.equal(serialized.includes(base64), false);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 70 }));
+      return;
+    }
+    if (serialized.includes(base64)) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'This model does not support image input.' } }));
+      return;
+    }
+    assert.match(serialized, /STREAM FALLBACK EVIDENCE/);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"sf031","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":70,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"FALLBACK_OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  let visionCalls = 0;
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({ vllmBaseUrl: upstreamUrl, logLevel: 'info', logSink: (entry) => logs.push(entry) }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180 }),
+      analyzeVisualAssets: async () => { visionCalls += 1; return { markdown: 'STREAM FALLBACK EVIDENCE', warnings: [], cropCount: 0, needsZoom: false }; },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /FALLBACK_OK/);
+  assert.equal(visionCalls, 1);
+  assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages', '/v1/messages']);
+  assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected_runtime'));
 });
