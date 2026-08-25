@@ -116,6 +116,8 @@ export function loadConfig(env = process.env) {
   const vllmBaseApiKey = env.VLLM_BASE_API_KEY || '';
   const vllmBaseModel = String(env.VLLM_BASE_MODEL || '').trim();
   const vllmBaseResponseMode = enumValue(env.VLLM_BASE_RESPONSE_MODE, 'auto', 'VLLM_BASE_RESPONSE_MODE', ['auto', 'streaming', 'buffered']);
+  const vllmBaseVisionEnabled = booleanValue(env.VLLM_BASE_VISION_ENABLED, false, 'VLLM_BASE_VISION_ENABLED');
+  const visionNativePassthrough = booleanValue(env.VISION_NATIVE_PASSTHROUGH, false, 'VISION_NATIVE_PASSTHROUGH');
   const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
   const webToolDiagnostic = Object.freeze({
     enabled: booleanValue(env.DIAGNOSTIC_WEB_TOOL_PASSTHROUGH, false, 'DIAGNOSTIC_WEB_TOOL_PASSTHROUGH'),
@@ -227,6 +229,8 @@ export function loadConfig(env = process.env) {
     vllmBaseModel,
     vllmBaseResponseMode,
     vllmBaseApiKey,
+    vllmBaseVisionEnabled,
+    visionNativePassthrough,
     vllmBaseTimeouts: Object.freeze({
       connectTimeoutMs: intValue(env.VLLM_BASE_CONNECT_TIMEOUT_MS, 10000, 'VLLM_BASE_CONNECT_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
       headersTimeoutMs: intValue(env.VLLM_BASE_HEADERS_TIMEOUT_MS, 900000, 'VLLM_BASE_HEADERS_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),

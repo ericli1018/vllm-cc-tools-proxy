@@ -13,6 +13,7 @@ const genericZoomSource = await fs.readFile(new URL('../src/visual/generic-zoom.
 const visionClientSource = await fs.readFile(new URL('../src/visual/vision-client.js', import.meta.url), 'utf8');
 const serverCapabilitiesSource = await fs.readFile(new URL('../src/proxy/server-capabilities.js', import.meta.url), 'utf8');
 const toolSearchSource = await fs.readFile(new URL('../src/proxy/tool-search.js', import.meta.url), 'utf8');
+const mediaAdaptersSource = await fs.readFile(new URL('../src/proxy/media-adapters.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -589,4 +590,25 @@ test('V0.29.28 locally bridges ToolSearch while keeping core WebSearch and WebFe
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.ok(changeLogEntries.includes('V0.29.28-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.28-實作與驗證報告.md'));
+});
+
+
+test('V0.29.29 routes ordinary Read/direct images to Base Native Vision while preserving PDF and technical-image Proxy Vision', async () => {
+  assert.match(readme, /V0\.29\.29 Native Vision Provenance Routing/);
+  assert.match(readme, /VLLM_BASE_VISION_ENABLED=true/);
+  assert.match(readme, /VISION_NATIVE_PASSTHROUGH=true/);
+  assert.match(readme, /read_image.*direct_image.*Native Vision/s);
+  assert.match(readme, /read_pdf_image.*Proxy Vision/s);
+  assert.match(envExample, /^VLLM_BASE_VISION_ENABLED=false$/m);
+  assert.match(envExample, /^VISION_NATIVE_PASSTHROUGH=false$/m);
+  assert.match(compose, /VLLM_BASE_VISION_ENABLED:\s*\$\{VLLM_BASE_VISION_ENABLED:-false\}/);
+  assert.match(compose, /VISION_NATIVE_PASSTHROUGH:\s*\$\{VISION_NATIVE_PASSTHROUGH:-false\}/);
+  assert.match(mediaAdaptersSource, /\['direct_image', 'read_image'\]\.includes\(provenance\.sourceKind\)/);
+  assert.match(proxyServerSource, /native_vision_route_selected/);
+  assert.match(proxyServerSource, /native_vision_base_probe_succeeded/);
+  assert.match(proxyServerSource, /native_vision_fallback_selected/);
+  assert.match(proxyServerSource, /base_image_capability_rejected/);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.29.29-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.29-實作與驗證報告.md'));
 });

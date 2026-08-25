@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { VERSION } from '../src/version.js';
 
-test('V0.29.28 runtime and npm metadata match the release', async () => {
+test('V0.29.29 runtime and npm metadata match the release', async () => {
   const packageJson = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(VERSION, '0.29.28');
-  assert.equal(packageJson.version, '0.29.28');
+  assert.equal(VERSION, '0.29.29');
+  assert.equal(packageJson.version, '0.29.29');
 });

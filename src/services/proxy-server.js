@@ -220,6 +220,18 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
 }
 
 
+function isNativeVisionCapabilityRejection(error) {
+  if (!(error instanceof HttpError) || ![400, 415, 422].includes(Number(error.status))) return false;
+  const text = [
+    error.message || '',
+    error.code || '',
+    typeof error.details === 'string' ? error.details : JSON.stringify(error.details || {}),
+  ].join(' ').toLowerCase();
+  const mentionsVisualInput = /(?:\bimage(?:s)?\b|\bvision\b|\bvisual\b|multimodal|multi-modal)/.test(text);
+  const explicitlyUnsupported = /(?:not\s+support(?:ed)?|does\s+not\s+support|doesn't\s+support|unsupported|not\s+allowed|cannot\s+(?:accept|process|handle)|can't\s+(?:accept|process|handle)|not\s+capable)/.test(text);
+  return mentionsVisualInput && explicitlyUnsupported;
+}
+
 async function preflightManagedUsage(request, config, incomingHeaders, signal, onDiagnostic = () => {}, {
   successEvent = 'managed_usage_preflight_succeeded',
   failureEvent = 'managed_usage_preflight_failed',
@@ -1686,6 +1698,10 @@ export function createProxyServer(config, dependencies = {}) {
 
       const preloadedCache = new Map();
       let allMediaCached = false;
+      let nativeVisionEligibleCount = 0;
+      let nativeVisionFallbackRequest = null;
+      let nativeVisionProbeUsage = null;
+      let nativeVisionProbePayload = null;
 
       if (hasMedia) {
         requestStage = 'media_observation';
@@ -1709,6 +1725,20 @@ export function createProxyServer(config, dependencies = {}) {
         request.messages = preparedMedia.messages;
         requestStage = 'media_progress';
         mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
+        const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
+          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
+          : [];
+        nativeVisionEligibleCount = nativeVisionEligible.length;
+        if (nativeVisionEligibleCount > 0) {
+          nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
+          log(config, 'info', 'native_vision_route_selected', {
+            requestId,
+            eligible_image_count: nativeVisionEligibleCount,
+            source_kinds: [...new Set(nativeVisionEligible.map((entry) => entry.sourceKind))].sort(),
+            base_vision_enabled: true,
+            native_passthrough_enabled: true,
+          });
+        }
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
         for (const occurrence of mediaOccurrences) {
           if (!String(occurrence.mediaType || '').startsWith('image/')) continue;
@@ -1780,7 +1810,7 @@ export function createProxyServer(config, dependencies = {}) {
         allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
       }
 
-      const needsManagedWork = hasManagedLoop || (hasMedia && !allMediaCached);
+      const needsManagedWork = hasManagedLoop || (hasMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
       const adapterDependencies = {
         allowedMediaPaths: preparedMedia?.allowedPaths,
         acquireVision: (options) => admission.acquireVision(options),
@@ -1978,7 +2008,52 @@ export function createProxyServer(config, dependencies = {}) {
         if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
-        request = injectEvidenceContract(request);
+        const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount);
+        if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
+
+        if (nativeVisionEligibleCount > 0 && config.usagePreflightEnabled !== false) {
+          requestStage = 'native_vision_capability_preflight';
+          try {
+            nativeVisionProbePayload = await callUpstreamJson(request, config, req.headers, abortController.signal, '/v1/messages/count_tokens');
+            if (!Number.isInteger(nativeVisionProbePayload?.input_tokens) || nativeVisionProbePayload.input_tokens < 0) {
+              throw new HttpError(502, 'Token count response did not contain input_tokens.', {
+                code: 'vllm_invalid_token_count', retryable: true,
+              });
+            }
+            nativeVisionProbeUsage = usageFromTokenCount(nativeVisionProbePayload);
+            log(config, 'info', 'native_vision_base_probe_succeeded', {
+              requestId,
+              eligible_image_count: nativeVisionEligibleCount,
+              input_tokens: nativeVisionProbeUsage.input_tokens,
+            });
+          } catch (error) {
+            if (isNativeVisionCapabilityRejection(error) && nativeVisionFallbackRequest) {
+              log(config, 'warn', 'native_vision_fallback_selected', {
+                requestId,
+                reason: 'base_image_capability_rejected',
+                status: error.status,
+                code: error.code,
+                eligible_image_count: nativeVisionEligibleCount,
+              });
+              const fallbackConfig = { ...config, visionNativePassthrough: false };
+              const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
+              request = { ...nativeVisionFallbackRequest, messages: await adaptMessages(nativeVisionFallbackRequest.messages, fallbackAdapters) };
+              request = injectEvidenceContract(request);
+              nativeVisionEligibleCount = 0;
+              nativeVisionProbeUsage = null;
+              nativeVisionProbePayload = null;
+            } else {
+              log(config, error?.retryable ? 'warn' : 'info', 'native_vision_base_probe_failed', {
+                requestId,
+                code: error?.code || 'native_vision_probe_failed',
+                status: error?.status || null,
+                retryable: Boolean(error?.retryable),
+                fallback: false,
+              });
+            }
+          }
+        }
+
         await preparedMedia.cleanup(); preparedMedia = null;
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
@@ -1987,15 +2062,27 @@ export function createProxyServer(config, dependencies = {}) {
 
       if (request.stream === true) {
         requestStage = 'managed_usage_preflight';
-        initialStreamUsage = await preflightManagedUsage(
-          request,
-          config,
-          req.headers,
-          abortController.signal,
-          (event, fields) => {
-            log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
-          },
-        );
+        if (nativeVisionProbeUsage) {
+          initialStreamUsage = nativeVisionProbeUsage;
+          log(config, 'info', 'managed_usage_preflight_succeeded', {
+            requestId,
+            input_tokens: initialStreamUsage.input_tokens,
+            cache_creation_input_tokens: initialStreamUsage.cache_creation_input_tokens || 0,
+            cache_read_input_tokens: initialStreamUsage.cache_read_input_tokens || 0,
+            total_input_tokens: totalAnthropicInputTokens(initialStreamUsage),
+            source: 'native_vision_capability_preflight',
+          });
+        } else {
+          initialStreamUsage = await preflightManagedUsage(
+            request,
+            config,
+            req.headers,
+            abortController.signal,
+            (event, fields) => {
+              log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
+            },
+          );
+        }
         if (!progress) await openManagedProgress(initialStreamUsage);
         else if (mediaProgressOpenedEarly) {
           await progress.updateUsage(initialStreamUsage, { phase: 'media_usage_exact' });
@@ -2021,7 +2108,7 @@ export function createProxyServer(config, dependencies = {}) {
       });
 
       if (messagesPath === '/v1/messages/count_tokens') {
-        const payload = await callUpstreamJson(request, config, req.headers, abortController.signal, messagesPath);
+        const payload = nativeVisionProbePayload || await callUpstreamJson(request, config, req.headers, abortController.signal, messagesPath);
         completed = true;
         return sendJson(res, 200, payload);
       }

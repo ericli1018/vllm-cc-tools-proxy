@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.28 adds local ToolSearch / deferred tool loading so large MCP/plugin catalogs no longer need to enter Base-model context eagerly. WebSearch/WebFetch and Claude Code core tools remain eager; actual MCP/native tool execution remains Claude Code-owned. V0.29.27 capability diagnostics, V0.29.26 visual budget isolation, V0.29.25 Managed Response Recovery, Sub Agent liveness-only, and Context Compact ping-only liveness remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.29 adds provenance-based Base Native Vision passthrough for ordinary direct images and Claude Code `Read(image)` results while preserving the existing Proxy Vision pipeline for PDF/technical media. V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and Managed Response Recovery remain intact.
+
+## V0.29.29 Native Vision Provenance Routing
+
+V0.29.29 lets a vision-capable Base/main model inspect ordinary images directly instead of forcing every image through the auxiliary Vision worker first. The feature is opt-in and requires both settings:
+
+```env
+VLLM_BASE_VISION_ENABLED=true
+VISION_NATIVE_PASSTHROUGH=true
+```
+
+Both default to `false`, so upgrading without changing ENV preserves the V0.29.28 media path. When both are enabled, provenance controls routing rather than filename or screenshot heuristics: Claude Code `Read(image)` (`read_image`) and `direct_image` stay as image content for Base Native Vision, while `read_pdf_image`, PDF documents, and generic `tool_result_image` continue through the existing Proxy Vision/evidence pipeline. No `screenshot.png`-style filename classifier is used.
+
+The Proxy preflight still stages large/base64 media as request-scoped `proxy_file` handles. Before Base Native Vision, an eligible image is safely rehydrated into a clean Anthropic base64 image block; internal paths, cache keys, and media hashes are not exposed upstream. A native-only request does not receive the Proxy visual evidence contract. Mixed requests may contain raw Native Vision images together with Proxy-generated evidence for PDF/technical media; the evidence contract is injected only when Proxy evidence is actually present.
+
+For eligible Native Vision requests, the existing Base `/v1/messages/count_tokens` usage preflight also acts as a capability probe. If Base explicitly returns a 400/415/422-style rejection stating that image/vision input is unsupported, V0.29.29 falls back to the configured `VLLM_VISION_*` Proxy Vision pipeline and continues with visual evidence. Transient Base 5xx/network/preflight failures are **not** reclassified as lack of vision support; the request keeps normal Base error semantics instead of silently switching models.
+
+`VLLM_VISION_URL`, `VLLM_VISION_MODEL`, `VLLM_VISION_PROVIDER`, and the rest of the existing Vision settings remain responsible for PDF/technical analysis and Native Vision fallback. If no usable Proxy Vision backend is configured, an explicitly rejected Native Vision request has no external analyzer to fall back to.
+
+V0.29.29 does not change `media-v8`, `visual-v18`, or `evidence-v14`. Local ToolSearch, WebSearch/WebFetch, Main Agent visible progress, Sub Agent liveness-only behavior, Context Compact ping-only liveness, and Managed Response Recovery are unchanged. Release records remain under `change_log/`.
 
 ## V0.29.28 Local ToolSearch / Deferred Tool Loading
 

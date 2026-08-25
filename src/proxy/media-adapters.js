@@ -248,6 +248,28 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         readSourceRef: tracked?.readSourceRef || '',
         requestedPages: Array.isArray(tracked?.pageScope?.pages) ? tracked.pageScope.pages : null,
       };
+      const nativeVisionPassthrough = config.vllmBaseVisionEnabled === true
+        && config.visionNativePassthrough === true
+        && ['direct_image', 'read_image'].includes(provenance.sourceKind);
+      if (nativeVisionPassthrough) {
+        const sourceBuffer = await readSource(block.source, block.source.media_type);
+        onVisionEvent('native_vision_passthrough_selected', {
+          media_type: block.source.media_type,
+          decoded_bytes: sourceBuffer.length,
+          origin: provenance.origin,
+          origin_tool: provenance.originTool,
+          source_kind: provenance.sourceKind,
+          read_source_ref: provenance.readSourceRef,
+        });
+        return {
+          ...block,
+          source: {
+            type: 'base64',
+            media_type: block.source.media_type,
+            data: sourceBuffer.toString('base64'),
+          },
+        };
+      }
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       const fallback = {
         mediaType: block.source.media_type,
