@@ -1707,6 +1707,7 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionPassthroughPaths = new Set();
       let mediaBootstrapUsage = null;
       let nativeVisionRuntimeFallbackUsed = false;
+      let nativeVisionRawOnly = false;
 
       if (hasMedia) {
         requestStage = 'media_observation';
@@ -1718,6 +1719,8 @@ export function createProxyServer(config, dependencies = {}) {
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
+        nativeVisionRawOnly = nativeVisionEligibleCount > 0
+          && nativeVisionEligibleCount === mediaProgress.descriptors.length;
         if (nativeVisionEligibleCount > 0) {
           nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
           log(config, 'info', 'native_vision_route_selected', {
@@ -1727,6 +1730,7 @@ export function createProxyServer(config, dependencies = {}) {
             base_vision_enabled: true,
             native_passthrough_enabled: true,
             passthrough_mode: 'raw',
+            progress_mode: nativeVisionRawOnly ? 'main_model_only' : 'media_aware',
           });
         }
         await cacheReady;
@@ -1911,7 +1915,9 @@ export function createProxyServer(config, dependencies = {}) {
       const onProgress = async (message, details = {}) => {
         const { force = false, ...stateDetails } = details;
         const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
-        const rendered = mediaProgress?.render(localized, stateDetails) || localized;
+        const rendered = nativeVisionRawOnly
+          ? localized
+          : (mediaProgress?.render(localized, stateDetails) || localized);
         log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
         if (progress) await progress.update(rendered, { force, details: stateDetails });
         else deferredProgress.push({ rendered, force, stateDetails });
@@ -1980,7 +1986,7 @@ export function createProxyServer(config, dependencies = {}) {
               sampleModelHeartbeat(),
             );
           }
-          return mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() })
+          return (!nativeVisionRawOnly ? mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() }) : null)
             || statusText(config.responseLanguage, 'currentStepWaiting', {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
             });
@@ -2008,13 +2014,15 @@ export function createProxyServer(config, dependencies = {}) {
           },
         );
         mediaBootstrapUsage = bootstrapUsage;
-        await openManagedProgress(bootstrapUsage);
-        mediaProgressOpenedEarly = true;
+        if (!nativeVisionRawOnly) {
+          await openManagedProgress(bootstrapUsage);
+          mediaProgressOpenedEarly = true;
+        }
       }
 
       if (hasMedia) {
         requestStage = 'media_transform';
-        if (!allMediaCached) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
+        if (!allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
         const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount);
@@ -2049,6 +2057,7 @@ export function createProxyServer(config, dependencies = {}) {
               request = { ...nativeVisionFallbackRequest, messages: await adaptMessages(nativeVisionFallbackRequest.messages, fallbackAdapters) };
               request = injectEvidenceContract(request);
               nativeVisionEligibleCount = 0;
+              nativeVisionRawOnly = false;
               nativeVisionProbeUsage = null;
               nativeVisionProbePayload = null;
             } else {
@@ -2064,9 +2073,11 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        const readyMessage = mediaProgress?.renderMediaReady()
-          || statusText(config.responseLanguage, 'mediaReady');
-        log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
+        if (!nativeVisionRawOnly) {
+          const readyMessage = mediaProgress?.renderMediaReady()
+            || statusText(config.responseLanguage, 'mediaReady');
+          log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
+        }
       }
 
       if (request.stream === true) {
@@ -2113,7 +2124,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (hasMedia) {
+      if (hasMedia && !nativeVisionRawOnly) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
@@ -2140,6 +2151,7 @@ export function createProxyServer(config, dependencies = {}) {
       const materializeRuntimeNativeVisionFallback = async (body) => {
         if (nativeVisionRuntimeFallbackUsed || nativeVisionEligibleCount <= 0) return null;
         nativeVisionRuntimeFallbackUsed = true;
+        nativeVisionRawOnly = false;
         const fallbackConfig = { ...config, visionNativePassthrough: false };
         const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
         let fallbackBody = {

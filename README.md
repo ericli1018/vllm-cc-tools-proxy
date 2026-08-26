@@ -1,7 +1,14 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.31 hardens Native Vision against upstream `end_turn` responses that contain no semantic output, removes full-image capability probing from the normal raw-image path, and keeps runtime fallback on the actual `/v1/messages` request. V0.29.30 raw image passthrough, PDF/technical Proxy Vision, V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.32 cleans Native Vision raw-bypass progress so `Read(image)` no longer looks like Proxy media processing: raw-only image requests expose only Main-model thinking/response/tool progress while PDF/Proxy Vision keeps file/page/image progress. V0.29.31 empty-end-turn recovery and raw-image probe reduction remain intact. V0.29.30 raw image passthrough, PDF/technical Proxy Vision, V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
+
+
+## V0.29.32 Clean Native Vision Raw Progress
+
+When `VLLM_BASE_VISION_ENABLED=true` and `VISION_NATIVE_PASSTHROUGH=true`, a request whose media is entirely eligible `read_image` / `direct_image` raw passthrough now uses **Main-model-only progress presentation**. The Proxy no longer emits `media_cache_miss`, `media_ready`, `檔案：...`, `圖片 n/n`, or other media wrapper text for that raw-only path. The original image block is still sent only to Base `/v1/messages`, exactly as in V0.29.31.
+
+Mixed requests and any request that actually enters PDF/Proxy Vision keep the existing media progress UI. If Base `/v1/messages` rejects image capability and runtime fallback activates, the Proxy immediately leaves raw-only progress mode so the real Proxy Vision work is visible again. No new ENV is introduced.
 
 ## V0.29.31 Empty End-Turn Recovery / Native Vision Probe Reduction
 

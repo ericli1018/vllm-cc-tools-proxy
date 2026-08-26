@@ -765,3 +765,60 @@ test('V0.29.31 streaming Native Vision without managed tools falls back on /v1/m
   assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages/count_tokens', '/v1/messages', '/v1/messages']);
   assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected_runtime'));
 });
+
+test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only main-model progress', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const upstream = http.createServer(async (req, res) => {
+    const payload = JSON.parse(await readRequest(req));
+    const serialized = JSON.stringify(payload);
+    if (req.url === '/v1/messages/count_tokens') {
+      assert.equal(serialized.includes(base64), false);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 70 }));
+      return;
+    }
+    assert.equal(req.url, '/v1/messages');
+    assert.equal(serialized.includes(base64), true);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    setTimeout(() => res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"clean032","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":90,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"看圖"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join('')), 20);
+  });
+  const upstreamUrl = await listen(upstream);
+  t.after(() => upstream.close());
+  const logs = [];
+  const proxy = createProxyServer(proxyConfig({
+    vllmBaseUrl: upstreamUrl,
+    responseLanguage: 'zh-TW',
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => proxy.close());
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-clean-032', name: 'Read', input: { file_path: '/workspace/preview.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-clean-032', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, messages }),
+  });
+  assert.equal(response.status, 200);
+  const stream = await response.text();
+  assert.match(stream, /OK/);
+  assert.doesNotMatch(stream, /檔案：preview\.png/);
+  assert.doesNotMatch(stream, /圖片 1\/1/);
+  assert.doesNotMatch(stream, /文件與圖片內容已就緒/);
+  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
+  assert.match(stream, /主模型開始思考/);
+});
