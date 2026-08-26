@@ -1,8 +1,34 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.32 cleans Native Vision raw-bypass progress so `Read(image)` no longer looks like Proxy media processing: raw-only image requests expose only Main-model thinking/response/tool progress while PDF/Proxy Vision keeps file/page/image progress. V0.29.31 empty-end-turn recovery and raw-image probe reduction remain intact. V0.29.30 raw image passthrough, PDF/technical Proxy Vision, V0.29.28 local ToolSearch, WebSearch/WebFetch eager routing, Main/Sub progress policy, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.33 makes visible model progress role-neutral and timestamped: the progress block starts with a localized `Model processing · HH:mm:ss` header and no longer claims that the request belongs to a Main Agent when Main/Sub attribution is not reliable. V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
 
+
+
+## V0.29.33 Neutral Timestamped Model Progress
+
+V0.29.33 changes only the user-visible model-progress presentation. The first visible progress block now captures the Proxy process local time once and renders a stable 24-hour `HH:mm:ss` timestamp for the lifetime of that block. Traditional Chinese output is:
+
+```text
+模型處理中 · 09:43:02
+  ◐ 模型開始思考 · 0 B
+  ◐ 模型思考中 · 2s · 6 B · 6 B/s
+  ◆ 模型開始回應 · 596 B
+  ◇ 模型建立工具動作 · 713 B
+  模型已產生下一步工具；正在交還 Claude Code 執行…
+```
+
+The same contract is localized for every supported response locale:
+
+- `zh-TW`: `模型處理中 · HH:mm:ss`
+- `zh-CN`: `模型处理中 · HH:mm:ss`
+- `en-US`: `Model processing · HH:mm:ss`
+- `ja-JP`: `モデル処理中 · HH:mm:ss`
+- `ko-KP`: `모델 처리 중 · HH:mm:ss`
+
+Visible progress wording is role-neutral in all five locales: `主模型` / `Main model` / `メインモデル` / `주 모델` labels are replaced with neutral `模型` / `Model` / `モデル` / `모델`. This is presentation-only and does not change model routing, Main/Sub detection, progress ownership, Native Vision, PDF/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact, or recovery behavior.
+
+History stripping remains backward-compatible with the previous localized headers (`目前處理進度：`, `当前处理进度：`, `Current progress:`, `現在の処理状況：`, `현재 처리 상태:`) and the older byte-bearing progress header forms, so prior transcripts are still removed before model reuse.
 
 ## V0.29.32 Clean Native Vision Raw Progress
 

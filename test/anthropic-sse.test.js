@@ -57,7 +57,7 @@ test('describeFinalAnthropicProgress distinguishes visible answers from Claude C
     content: [{ type: 'text', text: 'Done' }],
     stop_reason: 'end_turn',
   }), {
-    message: '主模型已完成本輪回答；正在回傳結果…',
+    message: '模型已完成本輪回答；正在回傳結果…',
     phase: 'returning_visible_response',
     details: {
       terminal_for_proxy: true,
@@ -71,7 +71,7 @@ test('describeFinalAnthropicProgress distinguishes visible answers from Claude C
     content: [{ type: 'thinking', thinking: 'plan' }, { type: 'tool_use', id: 'w1', name: 'Write', input: {} }],
     stop_reason: 'tool_use',
   }), {
-    message: '主模型已產生下一步 Write；正在交還 Claude Code 執行…',
+    message: '模型已產生下一步 Write；正在交還 Claude Code 執行…',
     phase: 'handoff_to_claude_code',
     details: {
       terminal_for_proxy: true,
@@ -86,7 +86,7 @@ test('describeFinalAnthropicProgress distinguishes visible answers from Claude C
       { type: 'tool_use', id: 'r1', name: 'Read', input: {} },
       { type: 'tool_use', id: 'b1', name: 'Bash', input: {} },
     ],
-  }).message, '主模型已產生下一步工具；正在交還 Claude Code 執行…');
+  }).message, '模型已產生下一步工具；正在交還 Claude Code 執行…');
 
   assert.equal(describeFinalAnthropicProgress({
     content: [{ type: 'thinking', thinking: 'internal only' }],
@@ -110,7 +110,7 @@ test('emitFinalAnthropicResponse closes progress with tool-handoff semantics', a
     usage: { output_tokens: 5 },
   });
   assert.deepEqual(closes, [{
-    message: '主模型已產生下一步 Write；正在交還 Claude Code 執行…',
+    message: '模型已產生下一步 Write；正在交還 Claude Code 執行…',
     options: {
       phase: 'handoff_to_claude_code',
       details: {
@@ -146,7 +146,7 @@ test('pipeAnthropicUpstreamStream closes visible progress according to the first
   ];
   await pipeAnthropicUpstreamStream(progress, { body: Readable.from(chunks.map((chunk) => Buffer.from(chunk))) });
   assert.deepEqual(closes, [{
-    message: '主模型已開始回傳下一步工具…',
+    message: '模型已開始回傳下一步工具…',
     options: {
       phase: 'streaming_tool_action',
       details: {
@@ -286,7 +286,7 @@ test('V0.2.20 live server-tool bridge closes progress once and advances final co
 
 test('V0.2.23 Anthropic progress descriptions use the configured locale', () => {
   assert.equal(describeFinalAnthropicProgress({ content: [{ type: 'tool_use', id: 'w1', name: 'Write', input: {} }] }, { locale: 'en-US' }).message,
-    'The main model produced the next Write action; handing control back to Claude Code…');
+    'The model produced the next Write action; handing control back to Claude Code…');
   assert.equal(describeFinalAnthropicProgress({ content: [{ type: 'text', text: 'ok' }] }, { locale: 'ja-JP' }).message,
-    'メインモデルの応答が完了しました。結果を返しています…');
+    'モデルの応答が完了しました。結果を返しています…');
 });

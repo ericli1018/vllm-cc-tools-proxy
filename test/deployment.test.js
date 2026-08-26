@@ -102,7 +102,7 @@ test('README documents V0.2.24 cumulative Base vLLM response byte progress', () 
   assert.match(readme, /B \/ KB \/ MB \/ GB/);
   assert.match(readme, /Base vLLM response body/);
   assert.match(readme, /目前處理進度（已收到 20 B）：/);
-  assert.match(readme, /主模型仍在處理本輪請求，已等待 30 秒（已收到 1\.22 KB）/);
+  assert.match(readme, /模型仍在處理本輪請求，已等待 30 秒（已收到 1\.22 KB）/);
 });
 
 
@@ -650,4 +650,19 @@ test('V0.29.32 cleans raw Native Vision progress without changing Proxy Vision p
   assert.match(readme, /V0\.29\.32 Clean Native Vision Raw Progress/);
   assert.ok(changeLogEntries.includes('V0.29.32-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.32-實作與驗證報告.md'));
+});
+
+
+test('V0.29.33 localizes neutral timestamped model progress and preserves legacy history stripping', async () => {
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const languageSource = await fs.readFile(new URL('../src/i18n/response-language.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(progressSource, /progressHeader = progressBlockHeader\(this\.locale, \{ timestampMs: this\.startedAt \}\)/);
+  assert.match(languageSource, /progressHeader: '模型處理中'/);
+  assert.match(languageSource, /progressHeader: 'Model processing'/);
+  assert.doesNotMatch(languageSource, /主模型|Main model|main model|main-model|メインモデル|주 모델/);
+  assert.match(readme, /V0\.29\.33 Neutral Timestamped Model Progress/);
+  assert.ok(changeLogEntries.includes('V0.29.33-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.33-實作與驗證報告.md'));
 });

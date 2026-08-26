@@ -766,7 +766,7 @@ test('V0.29.31 streaming Native Vision without managed tools falls back on /v1/m
   assert.ok(logs.some((entry) => entry.event === 'native_vision_fallback_selected' && entry.reason === 'base_image_capability_rejected_runtime'));
 });
 
-test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only main-model progress', async (t) => {
+test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only model progress', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   const upstream = http.createServer(async (req, res) => {
@@ -820,5 +820,5 @@ test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only
   assert.doesNotMatch(stream, /圖片 1\/1/);
   assert.doesNotMatch(stream, /文件與圖片內容已就緒/);
   assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
-  assert.match(stream, /主模型開始思考/);
+  assert.match(stream, /模型開始思考/);
 });

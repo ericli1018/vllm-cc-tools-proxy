@@ -35,7 +35,7 @@ class FakeResponse extends EventEmitter {
 }
 
 test('ProgressStream emits the V0.2.8 progress header without a V0.2.2 nonce sentinel', async () => {
-  assert.equal(PROGRESS_BLOCK_HEADER, '目前處理進度：');
+  assert.equal(PROGRESS_BLOCK_HEADER, '模型處理中');
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
   await progress.open();
@@ -61,18 +61,18 @@ test('V0.29.22 Main and Sub Agent progress use the same visible text carrier', a
     pingIntervalMs: 60_000,
   });
   await progress.open();
-  await progress.update('◐ 主模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase' } });
-  await progress.update('◐ 主模型思考中 · 30s · 657 B', { force: true, details: { phase: 'semantic_heartbeat' } });
-  await progress.closeProgress('主模型已產生下一步工具；正在交還 Claude Code 執行…', {
+  await progress.update('◐ 模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型思考中 · 30s · 657 B', { force: true, details: { phase: 'semantic_heartbeat' } });
+  await progress.closeProgress('模型已產生下一步工具；正在交還 Claude Code 執行…', {
     phase: 'handoff_to_claude_code',
   });
   await progress.stop();
 
   const stream = response.chunks.join('');
   assert.match(stream, /"content_block":\{"type":"text","text":""\}/);
-  assert.match(stream, /"type":"text_delta","text":"目前處理進度：\\n◐ 主模型開始思考/);
-  assert.match(stream, /主模型思考中/);
-  assert.doesNotMatch(stream, /"type":"thinking_delta","thinking":"目前處理進度：/);
+  assert.match(stream, /"type":"text_delta","text":"模型處理中 · \d{2}:\d{2}:\d{2}\\n◐ 模型開始思考/);
+  assert.match(stream, /模型思考中/);
+  assert.doesNotMatch(stream, /"type":"thinking_delta","thinking":"模型處理中 · /);
   assert.doesNotMatch(stream, /"content_block":\{"type":"thinking"/);
 });
 
@@ -80,7 +80,7 @@ test('V0.29.21 stripProgressHistory removes synthetic thinking progress without 
   const messages = [{
     role: 'assistant',
     content: [
-      { type: 'thinking', thinking: `${PROGRESS_BLOCK_HEADER}\n◐ 主模型思考中 · 30s`, signature: '' },
+      { type: 'thinking', thinking: `${PROGRESS_BLOCK_HEADER}\n◐ 模型思考中 · 30s`, signature: '' },
       { type: 'thinking', thinking: 'real model thought', signature: 'sig-real' },
       { type: 'text', text: '真正答案' },
     ],
@@ -104,14 +104,14 @@ test('V0.2.28.14 progress header does not sample live upstream bytes during dela
     },
   });
   await progress.open();
-  await progress.update('◐ 主模型開始思考 · 510 B', { details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型開始思考 · 510 B', { details: { phase: 'model_stream_phase' } });
   await new Promise((resolve) => setTimeout(resolve, 30));
   await progress.closeProgress();
   await progress.stop();
 
   const stream = response.chunks.join('');
-  assert.match(stream, /目前處理進度：/);
-  assert.match(stream, /◐ 主模型開始思考 · 510 B/);
+  assert.match(stream, /模型處理中 · \d{2}:\d{2}:\d{2}/);
+  assert.match(stream, /◐ 模型開始思考 · 510 B/);
   assert.doesNotMatch(stream, /目前處理進度（已收到/);
   assert.equal(samples, 0);
 });
@@ -230,14 +230,14 @@ test('semantic heartbeat emits real text deltas and reports successful writes', 
   });
   await progress.open();
   await progress.update('檔案：board.pdf｜狀態：正在處理…', { force: true, details: { phase: 'pdf_start' } });
-  progress.startSemanticHeartbeat(() => `檔案：board.pdf｜狀態：主模型仍在處理中，已等待 ${++ticks * 15} 毫秒…`);
+  progress.startSemanticHeartbeat(() => `檔案：board.pdf｜狀態：模型仍在處理中，已等待 ${++ticks * 15} 毫秒…`);
   await new Promise((resolve) => setTimeout(resolve, 42));
   progress.stopSemanticHeartbeat();
   await progress.closeProgress();
   await progress.stop();
 
   const stream = response.chunks.join('');
-  assert.match(stream, /主模型仍在處理中/);
+  assert.match(stream, /模型仍在處理中/);
   assert.ok((stream.match(/content_block_delta/g) || []).length >= 2);
   assert.ok(writes.some((entry) => entry.kind === 'semantic_heartbeat' && entry.bytes > 0));
   assert.ok(writes.some((entry) => entry.kind === 'progress_delta' && entry.phase === 'pdf_start'));
@@ -247,8 +247,8 @@ test('upstream progress remains open through first-event wait and heartbeat stop
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000, heartbeatIntervalMs: 10 });
   await progress.open();
-  await progress.update('檔案：board.pdf｜狀態：正在交給主模型分析…', { force: true });
-  progress.startSemanticHeartbeat(() => '檔案：board.pdf｜狀態：主模型仍在處理中…');
+  await progress.update('檔案：board.pdf｜狀態：正在交給模型分析…', { force: true });
+  progress.startSemanticHeartbeat(() => '檔案：board.pdf｜狀態：模型仍在處理中…');
   const encoder = new TextEncoder();
   const upstream = new Response(new ReadableStream({
     start(controller) {
@@ -262,7 +262,7 @@ test('upstream progress remains open through first-event wait and heartbeat stop
   }), { headers: { 'content-type': 'text/event-stream' } });
   await pipeAnthropicUpstreamStream(progress, upstream);
   const stream = response.chunks.join('');
-  const heartbeatAt = stream.indexOf('主模型仍在處理中');
+  const heartbeatAt = stream.indexOf('模型仍在處理中');
   const modelAt = stream.indexOf('MODEL');
   assert.ok(heartbeatAt >= 0 && heartbeatAt < modelAt);
   assert.ok(stream.indexOf('content_block_stop') < modelAt);
@@ -324,8 +324,8 @@ test('closeProgress preserves response-aware phase and terminal scope metadata',
     onStateChange: (entry) => changes.push(entry),
   });
   await progress.open();
-  await progress.update('主模型仍在處理本輪請求…', { force: true, details: { phase: 'waiting_for_model' } });
-  await progress.closeProgress('主模型已產生下一步 Write；正在交還 Claude Code 執行…', {
+  await progress.update('模型仍在處理本輪請求…', { force: true, details: { phase: 'waiting_for_model' } });
+  await progress.closeProgress('模型已產生下一步 Write；正在交還 Claude Code 執行…', {
     phase: 'handoff_to_claude_code',
     details: {
       terminal_for_proxy: true,
@@ -365,7 +365,7 @@ test('V0.2.23 ProgressStream emits localized headers and strips every supported 
   await progress.open();
   await progress.update('処理中…', { force: true });
   await progress.stop();
-  assert.match(response.chunks.join(''), /現在の処理状況：/);
+  assert.match(response.chunks.join(''), /モデル処理中 · \d{2}:\d{2}:\d{2}/);
 
   for (const header of ['目前處理進度：', '当前处理进度：', 'Current progress:', '現在の処理状況：', '현재 처리 상태:']) {
     const messages = [{ role: 'assistant', content: [{ type: 'text', text: `${header}\nstatus` }, { type: 'text', text: 'answer' }] }];
@@ -384,12 +384,12 @@ test('V0.2.28.14 ProgressStream keeps the first visible header stable while byte
     getReceivedBytes: () => receivedBytes,
   });
   await progress.open();
-  await progress.update('正在將內容送往主模型…', { force: true });
+  await progress.update('正在將內容送往模型…', { force: true });
   await progress.closeProgress();
   await progress.stop();
 
   const stream = response.chunks.join('');
-  assert.match(stream, /目前處理進度：/);
+  assert.match(stream, /模型處理中 · \d{2}:\d{2}:\d{2}/);
   assert.doesNotMatch(stream, /目前處理進度（已收到/);
 });
 
@@ -398,7 +398,7 @@ test('V0.2.24 dynamic byte progress header is recognized and stripped from histo
   const messages = [{
     role: 'assistant',
     content: [
-      { type: 'text', text: `${header}\n主模型仍在處理本輪請求，已等待 30 秒（已收到 1.22 KB）…` },
+      { type: 'text', text: `${header}\n模型仍在處理本輪請求，已等待 30 秒（已收到 1.22 KB）…` },
       { type: 'text', text: '真正答案' },
     ],
   }];
@@ -550,9 +550,9 @@ test('V0.2.28.16 semantic heartbeat appends each liveness sample as a new visibl
     locale: 'zh-TW',
   });
   await progress.open();
-  await progress.update('◐ 主模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
-  await progress.update('◐ 主模型思考中 · 29s · 20.87 KB', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
-  await progress.update('◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.update('◐ 模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型思考中 · 29s · 20.87 KB', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.update('◓ 模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
   await progress.closeProgress();
   await progress.stop();
 
@@ -562,9 +562,9 @@ test('V0.2.28.16 semantic heartbeat appends each liveness sample as a new visibl
     .filter((data) => data?.type === 'content_block_delta')
     .map((data) => data.delta?.text || '');
 
-  assert.equal(deltas[0], '目前處理進度：\n◐ 主模型開始思考 · 510 B');
-  assert.equal(deltas[1], '\n◐ 主模型思考中 · 29s · 20.87 KB');
-  assert.equal(deltas[2], '\n◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s');
+  assert.match(deltas[0], /^模型處理中 · \d{2}:\d{2}:\d{2}\n◐ 模型開始思考 · 510 B$/);
+  assert.equal(deltas[1], '\n◐ 模型思考中 · 29s · 20.87 KB');
+  assert.equal(deltas[2], '\n◓ 模型思考中 · 59s · 44.02 KB · 790 B/s');
   assert.doesNotMatch(deltas.join(''), /\x1b\[/);
 });
 
@@ -572,9 +572,9 @@ test('V0.2.28.16 milestone after heartbeat appends normally without cursor contr
   const response = new FakeResponse();
   const progress = new ProgressStream(response, { visibleAfterMs: 0, pingIntervalMs: 60_000, locale: 'zh-TW' });
   await progress.open();
-  await progress.update('◐ 主模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
-  await progress.update('◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
-  await progress.update('◆ 主模型開始回應 · 44.61 KB', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型開始思考 · 510 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◓ 模型思考中 · 59s · 44.02 KB · 790 B/s', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
+  await progress.update('◆ 模型開始回應 · 44.61 KB', { force: true, details: { phase: 'model_stream_phase' } });
   await progress.closeProgress();
   await progress.stop();
 
@@ -584,8 +584,8 @@ test('V0.2.28.16 milestone after heartbeat appends normally without cursor contr
     .filter((data) => data?.type === 'content_block_delta')
     .map((data) => data.delta?.text || '');
 
-  assert.equal(deltas[1], '\n◓ 主模型思考中 · 59s · 44.02 KB · 790 B/s');
-  assert.equal(deltas[2], '\n◆ 主模型開始回應 · 44.61 KB');
+  assert.equal(deltas[1], '\n◓ 模型思考中 · 59s · 44.02 KB · 790 B/s');
+  assert.equal(deltas[2], '\n◆ 模型開始回應 · 44.61 KB');
 });
 
 test('V0.2.28.16 shorter heartbeat is appended without padding or ANSI cursor control', async () => {
@@ -612,7 +612,7 @@ test('V0.2.28.15 progress history containing carriage-return live updates is sti
   const messages = [{
     role: 'assistant',
     content: [
-      { type: 'text', text: '目前處理進度：\n◐ 主模型開始思考 · 510 B\n◐ 主模型思考中 · 29s\r◓ 主模型思考中 · 59s\n◆ 主模型開始回應 · 44.61 KB' },
+      { type: 'text', text: '目前處理進度：\n◐ 模型開始思考 · 510 B\n◐ 模型思考中 · 29s\r◓ 模型思考中 · 59s\n◆ 模型開始回應 · 44.61 KB' },
       { type: 'text', text: '真正答案' },
     ],
   }];
@@ -628,9 +628,9 @@ test('V0.2.28.16 semantic heartbeat keeps append-only 30-second liveness lines a
     heartbeatIntervalMs: 60_000,
   });
   await progress.open();
-  await progress.update('◐ 主模型開始思考 · 511 B', { force: true, details: { phase: 'model_stream_phase' } });
-  await progress.update('◐ 主模型思考中 · 29s · 22.56 KB', { force: true, kind: 'semantic_heartbeat' });
-  await progress.update('◓ 主模型思考中 · 59s · 44.83 KB · 760 B/s', { force: true, kind: 'semantic_heartbeat' });
+  await progress.update('◐ 模型開始思考 · 511 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型思考中 · 29s · 22.56 KB', { force: true, kind: 'semantic_heartbeat' });
+  await progress.update('◓ 模型思考中 · 59s · 44.83 KB · 760 B/s', { force: true, kind: 'semantic_heartbeat' });
   await progress.stop();
 
   const deltas = response.chunks.join('').split(/\r?\n/)
@@ -638,14 +638,14 @@ test('V0.2.28.16 semantic heartbeat keeps append-only 30-second liveness lines a
     .map((line) => JSON.parse(line.slice(6)))
     .filter((data) => data?.type === 'content_block_delta')
     .map((data) => data.delta?.text || '');
-  assert.equal(deltas[1], '\n◐ 主模型思考中 · 29s · 22.56 KB');
-  assert.equal(deltas[2], '\n◓ 主模型思考中 · 59s · 44.83 KB · 760 B/s');
+  assert.equal(deltas[1], '\n◐ 模型思考中 · 29s · 22.56 KB');
+  assert.equal(deltas[2], '\n◓ 模型思考中 · 59s · 44.83 KB · 760 B/s');
   assert.doesNotMatch(deltas.join(''), /\r|\x1b/);
 });
 
 test('V0.2.28.20 progress history stripping does not clone untouched user Base64 media messages', () => {
   const userMessage = { role: 'user', content: [{ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'QUJD' } }] };
-  const progressMessage = { role: 'assistant', content: [{ type: 'text', text: '目前處理進度：\n  ◐ 主模型思考中' }] };
+  const progressMessage = { role: 'assistant', content: [{ type: 'text', text: '目前處理進度：\n  ◐ 模型思考中' }] };
   const result = stripProgressHistory([userMessage, progressMessage]);
   assert.equal(result[0], userMessage);
   assert.equal(result[0].content[0].source.data, 'QUJD');
@@ -679,7 +679,7 @@ test('V0.29.12 ProgressStream dispose clears every timer, pending state, and is 
 });
 
 test('V0.29.19 history stripping remains backward-compatible with V0.29.17/18 title-anchored progress blocks', () => {
-  const messages = [{ role: 'assistant', content: [{ type: 'text', text: '分析 WebSearch 行為\n目前處理進度：\n主模型仍在處理…' }] }];
+  const messages = [{ role: 'assistant', content: [{ type: 'text', text: '分析 WebSearch 行為\n目前處理進度：\n模型仍在處理…' }] }];
   assert.equal(hasProgressHistory(messages), true);
   assert.deepEqual(stripProgressHistory(messages)[0].content, []);
 });
@@ -695,14 +695,14 @@ test('V0.29.19 semantic progress ignores the retired progressTitle compatibility
   });
   await progress.open();
   await progress.update('等待模型第一個位元組…', { details: { phase: 'semantic_heartbeat' } });
-  await progress.update('主模型開始思考…', { details: { phase: 'model_stream_phase' } });
+  await progress.update('模型開始思考…', { details: { phase: 'model_stream_phase' } });
   await progress.closeProgress();
   await progress.stop();
   const wire = response.chunks.join('');
   assert.doesNotMatch(wire, /分析 WebSearch 行為/);
-  assert.equal((wire.match(/目前處理進度：/g) || []).length, 1);
-  assert.match(wire, /目前處理進度：\\n等待模型第一個位元組/);
-  assert.match(wire, /\\n主模型開始思考/);
+  assert.equal((wire.match(/模型處理中 · \d{2}:\d{2}:\d{2}/g) || []).length, 1);
+  assert.match(wire, /模型處理中 · \d{2}:\d{2}:\d{2}\\n等待模型第一個位元組/);
+  assert.match(wire, /\\n模型開始思考/);
 });
 
 

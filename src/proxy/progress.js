@@ -3,8 +3,13 @@ import { writeChunk } from '../lib/http.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
 import { allProgressBlockHeaders, progressBlockHeader } from '../i18n/response-language.js';
 
-export const PROGRESS_BLOCK_HEADER = '目前處理進度：';
+export const PROGRESS_BLOCK_HEADER = '模型處理中';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
+  '目前處理進度：',
+  '当前处理进度：',
+  'Current progress:',
+  '現在の処理状況：',
+  '현재 처리 상태:',
   'VLLM-CC-TOOLS-PROXY 進度：',
 ]);
 const STARTUP_BANNER_PREFIX = '╭─◆ CC TOOL PROXY ';
@@ -32,6 +37,7 @@ function stripLegacyText(text) {
 function isProgressHeaderLine(line) {
   return ALL_PROGRESS_BLOCK_HEADERS.some((header) => {
     if (line === header) return true;
+    if (line.startsWith(`${header} · `)) return true;
     const stem = header.replace(/[：:]$/, '');
     return line.startsWith(`${stem}（`) || line.startsWith(`${stem} (`);
   });
@@ -121,6 +127,7 @@ export class ProgressStream {
     this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
     this.visibleProgressEnabled = visibleProgressEnabled !== false;
     this.startedAt = Date.now();
+    this.progressHeader = progressBlockHeader(this.locale, { timestampMs: this.startedAt });
     this.visible = false;
     this.closed = false;
     this.progressClosed = false;
@@ -279,8 +286,8 @@ export class ProgressStream {
           type: 'content_block_delta',
           index: 0,
           delta: thinkingCarrier
-            ? { type: 'thinking_delta', thinking: `${progressBlockHeader(this.locale)}\n${message}` }
-            : { type: 'text_delta', text: `${progressBlockHeader(this.locale)}\n${message}` },
+            ? { type: 'thinking_delta', thinking: `${this.progressHeader}\n${message}` }
+            : { type: 'text_delta', text: `${this.progressHeader}\n${message}` },
         }), { ...metadata, carrier: this.carrier });
       } else {
         const deltaText = `

@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.32', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.33', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -366,7 +366,7 @@ test('quick managed stream does not show a progress block only to announce compl
   assert.match(stream, /QUICK_FINAL/);
   assert.doesNotMatch(stream, /目前處理進度/);
   assert.doesNotMatch(stream, /VLLM-CC-TOOLS-PROXY 進度/);
-  assert.doesNotMatch(stream, /正在請主模型規劃下一步/);
+  assert.doesNotMatch(stream, /正在請模型規劃下一步/);
   assert.doesNotMatch(stream, /處理完成；正在回傳模型結果/);
 });
 
@@ -549,7 +549,7 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   const stream = await response.text();
   assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
   assert.match(stream, /圖片 1\/1/);
-  assert.match(stream, /(?:◌ 主模型等待輸出|[◐◓◑◒] 主模型思考中|◆ 主模型回應中|⚠ 主模型資料暫停)/);
+  assert.match(stream, /(?:◌ 模型等待輸出|[◐◓◑◒] 模型思考中|◆ 模型回應中|⚠ 模型資料暫停)/);
   assert.match(stream, /FINAL/);
   assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
   for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
@@ -646,9 +646,9 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
     }),
   });
   const stream = await response.text();
-  const requestStart = stream.indexOf('正在將內容送往主模型');
-  const headersReceived = stream.indexOf('主模型已接受請求');
-  const firstEvent = stream.indexOf('主模型開始回應');
+  const requestStart = stream.indexOf('正在將內容送往模型');
+  const headersReceived = stream.indexOf('模型已接受請求');
+  const firstEvent = stream.indexOf('模型開始回應');
   assert.ok(requestStart >= 0);
   assert.ok(headersReceived > requestStart);
   assert.ok(firstEvent > headersReceived);
@@ -708,12 +708,12 @@ test('V0.2.27.3 continuation visible progress resets received bytes for the new 
   });
   assert.equal(response.status, 200);
   const stream = await response.text();
-  const continuationIndex = stream.indexOf('主模型尚未形成有效下一步；');
+  const continuationIndex = stream.indexOf('模型尚未形成有效下一步；');
   assert.ok(continuationIndex >= 0, 'missing continuation progress');
   const continuationStream = stream.slice(continuationIndex);
 
-  assert.match(continuationStream, /◌ 主模型等待輸出 · \d+s · 0 B/);
-  assert.doesNotMatch(continuationStream, /◌ 主模型等待輸出 · \d+s · [0-9.]+ KB/);
+  assert.match(continuationStream, /◌ 模型等待輸出 · \d+s · 0 B/);
+  assert.doesNotMatch(continuationStream, /◌ 模型等待輸出 · \d+s · [0-9.]+ KB/);
   assert.match(stream, /RECOVERED/);
 
   const roundFirstByte = logs.filter((entry) => entry.event === 'managed_model_first_byte_received').at(-1);
@@ -813,7 +813,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
     if (baseCalls === 1) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({
-        id: 'tool', type: 'message', role: 'assistant', model: 'main-model',
+        id: 'tool', type: 'message', role: 'assistant', model: 'model',
         content: [{
           type: 'tool_use', id: 'fetch-1', name: 'web_fetch',
           input: { url: 'https://example.com/article', prompt: 'Extract the verified number.' },
@@ -825,7 +825,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
     secondBasePayload = payload;
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({
-      id: 'done', type: 'message', role: 'assistant', model: 'main-model',
+      id: 'done', type: 'message', role: 'assistant', model: 'model',
       content: [{ type: 'text', text: 'FINAL 42' }], stop_reason: 'end_turn', usage: {},
     }));
   });
@@ -851,7 +851,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
   const response = await fetch(`${proxyUrl}/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: 'main-model', stream: false,
+      model: 'model', stream: false,
       tools: [{ type: 'web_fetch_20250910', name: 'web_fetch', max_uses: 5 }],
       messages: [{ role: 'user', content: 'Read the page.' }],
     }),
@@ -861,7 +861,7 @@ test('managed WebFetch processes raw page content before sending readable eviden
   assert.equal(body.content.find((block) => block.type === 'text')?.text, 'FINAL 42');
   assert.equal(body.content[0].type, 'server_tool_use');
   assert.equal(body.content[1].type, 'web_fetch_tool_result');
-  assert.equal(processorPayload.model, 'main-model');
+  assert.equal(processorPayload.model, 'model');
   assert.equal(processorPayload.chat_template_kwargs.enable_thinking, false);
   assert.equal('tools' in processorPayload, false);
   assert.match(processorPayload.messages[1].content, /Extract the verified number/);
@@ -1931,10 +1931,10 @@ test('V0.2.28.17 JSON compatibility fallback does not misreport wire framing as 
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /目前處理進度：/);
+  assert.match(stream, /模型處理中 · \d{2}:\d{2}:\d{2}/);
   assert.doesNotMatch(stream, /目前處理進度（已收到/);
-  assert.match(stream, /◌ 主模型等待輸出 · \d+s · 0 B/);
-  assert.doesNotMatch(stream, /◌ 主模型等待輸出 · \d+s · (?:512 B|1\.22 KB)/);
+  assert.match(stream, /◌ 模型等待輸出 · \d+s · 0 B/);
+  assert.doesNotMatch(stream, /◌ 模型等待輸出 · \d+s · (?:512 B|1\.22 KB)/);
   assert.match(stream, /FINAL/);
   assert.equal(round, 2);
 });
@@ -1973,7 +1973,7 @@ test('V0.2.28.14 reports a post-first-byte upstream stall without retrying the a
   });
   const stream = await response.text();
   assert.equal(response.status, 200);
-  assert.match(stream, /⚠ 主模型資料暫停 · \d+s 無新資料 · 總計 [^\\n]+/);
+  assert.match(stream, /⚠ 模型資料暫停 · \d+s 無新資料 · 總計 [^\\n]+/);
   assert.match(stream, /AB/);
   assert.equal(modelCalls, 1);
   assert.equal(logs.filter((entry) => String(entry.event || '').startsWith('base_upstream_busy_')).length, 0);
@@ -2075,7 +2075,7 @@ test('V0.2.28.17 managed Base rounds expose semantic model bytes before completi
   const wire = await response.text();
   assert.deepEqual(observedStreams, [true]);
   assert.match(wire, /STREAMED/);
-  assert.match(wire, /◆ 主模型回應中 · \d+s · 8 B(?: · [^\n]*\/s)?/);
+  assert.match(wire, /◆ 模型回應中 · \d+s · 8 B(?: · [^\n]*\/s)?/);
 });
 
 test('V0.2.28.17 emits semantic-byte progress immediately on first model delta between heartbeats', async (t) => {
@@ -2111,8 +2111,8 @@ test('V0.2.28.17 emits semantic-byte progress immediately on first model delta b
     }),
   });
   const wire = await response.text();
-  assert.match(wire, /◌ 主模型等待輸出 · 0s · 0 B/);
-  assert.match(wire, /◆ 主模型回應中 · \d+s · 4 B(?: · [^\n]*\/s)?/);
+  assert.match(wire, /◌ 模型等待輸出 · 0s · 0 B/);
+  assert.match(wire, /◆ 模型回應中 · \d+s · 4 B(?: · [^\n]*\/s)?/);
   assert.match(wire, /DONE/);
 
   const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
@@ -2813,12 +2813,12 @@ test('V0.2.28.7 managed model progress exposes compact thinking and response pha
   });
   const stream = await response.text();
 
-  assert.match(stream, /◐ 主模型開始思考 · [^\n"]+/);
-  assert.match(stream, /◆ 主模型開始回應 · [^\n"]+/);
-  assert.match(stream, /(?:[◐◓◑◒] 主模型思考中|◆ 主模型回應中|⚠ 主模型資料暫停) · [^\n"]+/);
-  assert.match(stream, /◆ 主模型回應中 · \d+s · [^\n"]+/);
+  assert.match(stream, /◐ 模型開始思考 · [^\n"]+/);
+  assert.match(stream, /◆ 模型開始回應 · [^\n"]+/);
+  assert.match(stream, /(?:[◐◓◑◒] 模型思考中|◆ 模型回應中|⚠ 模型資料暫停) · [^\n"]+/);
+  assert.match(stream, /◆ 模型回應中 · \d+s · [^\n"]+/);
   assert.match(stream, /完成/);
-  assert.doesNotMatch(stream, /主模型處理中[^\n]*\n[^\n]*秒/);
+  assert.doesNotMatch(stream, /模型處理中[^\n]*\n[^\n]*秒/);
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'response']);
@@ -2864,9 +2864,9 @@ test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phas
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /◐ 主模型開始思考 · [^\n"]+/);
-  assert.match(stream, /◇ 主模型建立工具動作 · [^\n"]+/);
-  assert.match(stream, /主模型已產生下一步 WebSearch/);
+  assert.match(stream, /◐ 模型開始思考 · [^\n"]+/);
+  assert.match(stream, /◇ 模型建立工具動作 · [^\n"]+/);
+  assert.match(stream, /模型已產生下一步 WebSearch/);
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'tool']);
@@ -3175,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.32/);
+  assert.match(first, /VERSION\s+0\.29\.33/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.32');
+  assert.equal(payload.version, '0.29.33');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.32/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.33/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3978,7 +3978,7 @@ test('V0.29.23 keeps Main visible progress while Sub Agent is liveness-only acro
     }),
   });
   const parentWire = await parent.text();
-  assert.match(parentWire, /正在請主模型規劃下一步/);
+  assert.match(parentWire, /正在請模型規劃下一步/);
   assert.doesNotMatch(parentWire, /查證 WebSearch 行為\\n目前處理進度：/);
 
   const childHeaders = { ...sessionHeaders, 'x-claude-code-agent-id': 'child-agent-stable-id' };

@@ -2370,14 +2370,14 @@ export function createProxyServer(config, dependencies = {}) {
               if (event === 'base_upstream_request_start') {
                 progressTiming.mode = 'model';
                 progressTiming.startedAt = Date.now();
-                await onProgress('正在將內容送往主模型…', {
+                await onProgress('正在將內容送往模型…', {
                   phase: 'base_request_start',
                   request_bytes: fields.request_bytes,
                   message_count: fields.message_count,
                   evidence_bytes: fields.evidence_bytes,
                 });
               } else if (event === 'base_upstream_headers_received') {
-                await onProgress('主模型已接受請求，正在準備輸出…', {
+                await onProgress('模型已接受請求，正在準備輸出…', {
                   phase: 'base_headers_received',
                   status: fields.status,
                   header_wait_ms: fields.header_wait_ms,

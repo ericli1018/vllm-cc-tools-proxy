@@ -96,7 +96,7 @@ test('streaming vLLM busy wait reports progress and then continues the same conn
   });
   const text = await response.text();
   assert.equal(response.status, 200);
-  assert.match(text, /主模型目前忙碌/);
+  assert.match(text, /模型目前忙碌/);
   assert.match(text, /正在重試/);
   assert.match(text, /OK/);
   assert.match(text, /event: message_stop/);

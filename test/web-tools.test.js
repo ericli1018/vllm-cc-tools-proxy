@@ -215,12 +215,12 @@ test('WebFetch uses prompt-directed Processor with the current Base request mode
     },
     limits: { maxOutputChars: 10000 },
   }, undefined, {
-    model: 'main-model',
+    model: 'model',
     onEvent: (event, fields) => events.push({ event, fields }),
   });
 
   assert.equal(processorRequest.authorization, 'Bearer processor-key');
-  assert.equal(processorRequest.body.model, 'main-model');
+  assert.equal(processorRequest.body.model, 'model');
   assert.match(processorRequest.body.messages[1].content, /Extract only verified facts/);
   assert.match(processorRequest.body.messages[1].content, /Verified source fact/);
   assert.equal(result.processing.mode, 'prompt_directed');

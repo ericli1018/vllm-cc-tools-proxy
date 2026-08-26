@@ -33,19 +33,19 @@ test('V0.2.23 locale registry localizes core progress/status vocabulary and pres
   assert.equal(typeof language.statusText, 'function');
   assert.equal(language.statusText('zh-TW', 'searchStart', { query: 'libuv TLS' }), '正在搜尋：libuv TLS…');
   assert.equal(language.statusText('zh-CN', 'fetchDone', { host: 'example.com' }), 'example.com 内容已就绪。');
-  assert.equal(language.statusText('en-US', 'queueWait', { position: 3 }), 'Waiting for main-model capacity; queued for 0s with 3 task(s) ahead…');
-  assert.equal(language.statusText('ja-JP', 'handoffSingle', { tool: 'WebFetch' }), 'メインモデルが次の操作として WebFetch を生成しました。Claude Code に制御を戻しています…');
-  assert.equal(language.statusText('ko-KP', 'modelWaiting', { seconds: 30 }), '주 모델이 이 요청을 처리하고 있습니다. 30초 실행…');
+  assert.equal(language.statusText('en-US', 'queueWait', { position: 3 }), 'Waiting for model capacity; queued for 0s with 3 task(s) ahead…');
+  assert.equal(language.statusText('ja-JP', 'handoffSingle', { tool: 'WebFetch' }), 'モデルが次の操作として WebFetch を生成しました。Claude Code に制御を戻しています…');
+  assert.equal(language.statusText('ko-KP', 'modelWaiting', { seconds: 30 }), '모델이 이 요청을 처리하고 있습니다. 30초 실행…');
 });
 
 test('V0.2.23 progress headers are locale-specific with English fallback', () => {
   assert.equal(typeof language.progressBlockHeader, 'function');
-  assert.equal(language.progressBlockHeader('zh-TW'), '目前處理進度：');
-  assert.equal(language.progressBlockHeader('zh-CN'), '当前处理进度：');
-  assert.equal(language.progressBlockHeader('en-US'), 'Current progress:');
-  assert.equal(language.progressBlockHeader('ja-JP'), '現在の処理状況：');
-  assert.equal(language.progressBlockHeader('ko-KP'), '현재 처리 상태:');
-  assert.equal(language.progressBlockHeader('bad-locale'), 'Current progress:');
+  assert.equal(language.progressBlockHeader('zh-TW', { timeText: '09:43:02' }), '模型處理中 · 09:43:02');
+  assert.equal(language.progressBlockHeader('zh-CN', { timeText: '09:43:02' }), '模型处理中 · 09:43:02');
+  assert.equal(language.progressBlockHeader('en-US', { timeText: '09:43:02' }), 'Model processing · 09:43:02');
+  assert.equal(language.progressBlockHeader('ja-JP', { timeText: '09:43:02' }), 'モデル処理中 · 09:43:02');
+  assert.equal(language.progressBlockHeader('ko-KP', { timeText: '09:43:02' }), '모델 처리 중 · 09:43:02');
+  assert.equal(language.progressBlockHeader('bad-locale', { timeText: '09:43:02' }), 'Model processing · 09:43:02');
 });
 
 import { injectResponseLanguagePolicy, injectResponseLanguageTail } from '../src/proxy/response-language-policy.js';
@@ -75,39 +75,39 @@ test('V0.2.24 formats cumulative Base vLLM response bytes with binary units', ()
 
 test('V0.2.28.14 progress headers remain stable labels even when live bytes are available', () => {
   const expectedHeaders = {
-    'zh-TW': '目前處理進度：',
-    'zh-CN': '当前处理进度：',
-    'en-US': 'Current progress:',
-    'ja-JP': '現在の処理状況：',
-    'ko-KP': '현재 처리 상태:',
+    'zh-TW': '模型處理中 · 09:43:02',
+    'zh-CN': '模型处理中 · 09:43:02',
+    'en-US': 'Model processing · 09:43:02',
+    'ja-JP': 'モデル処理中 · 09:43:02',
+    'ko-KP': '모델 처리 중 · 09:43:02',
   };
   const expectedWaiting = {
-    'zh-TW': '主模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…',
-    'zh-CN': '主模型仍在处理本轮请求，已执行 30 秒（已收到 1.22 KB）…',
-    'en-US': 'The main model is still processing this request. Running for 30s (received 1.22 KB)…',
-    'ja-JP': 'メインモデルがこのリクエストを処理中です。実行 30 秒（受信 1.22 KB）…',
-    'ko-KP': '주 모델이 이 요청을 처리하고 있습니다. 30초 실행 (수신 1.22 KB)…',
+    'zh-TW': '模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…',
+    'zh-CN': '模型仍在处理本轮请求，已执行 30 秒（已收到 1.22 KB）…',
+    'en-US': 'The model is still processing this request. Running for 30s (received 1.22 KB)…',
+    'ja-JP': 'モデルがこのリクエストを処理中です。実行 30 秒（受信 1.22 KB）…',
+    'ko-KP': '모델이 이 요청을 처리하고 있습니다. 30초 실행 (수신 1.22 KB)…',
   };
   for (const locale of Object.keys(expectedHeaders)) {
-    assert.equal(language.progressBlockHeader(locale, { receivedBytes: 1250 }), expectedHeaders[locale]);
+    assert.equal(language.progressBlockHeader(locale, { timeText: '09:43:02', receivedBytes: 1250 }), expectedHeaders[locale]);
     assert.equal(language.statusText(locale, 'modelWaiting', { seconds: 30, receivedBytes: 1250 }), expectedWaiting[locale]);
   }
 });
 
 test('V0.2.25 queue and model heartbeat vocabulary distinguish queue time from model run time', () => {
-  assert.equal(language.statusText('zh-TW', 'queueWait', { position: 2, seconds: 60 }), '正在等待主模型執行資源，已排隊 60 秒，目前前方有 2 個任務…');
-  assert.equal(language.statusText('zh-TW', 'modelWaiting', { seconds: 30, receivedBytes: 1250 }), '主模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…');
-  assert.equal(language.statusText('en-US', 'queueWait', { position: 1, seconds: 90 }), 'Waiting for main-model capacity; queued for 90s with 1 task(s) ahead…');
-  assert.equal(language.statusText('en-US', 'modelWaiting', { seconds: 30 }), 'The main model is still processing this request. Running for 30s…');
+  assert.equal(language.statusText('zh-TW', 'queueWait', { position: 2, seconds: 60 }), '正在等待模型執行資源，已排隊 60 秒，目前前方有 2 個任務…');
+  assert.equal(language.statusText('zh-TW', 'modelWaiting', { seconds: 30, receivedBytes: 1250 }), '模型仍在處理本輪請求，已執行 30 秒（已收到 1.22 KB）…');
+  assert.equal(language.statusText('en-US', 'queueWait', { position: 1, seconds: 90 }), 'Waiting for model capacity; queued for 90s with 1 task(s) ahead…');
+  assert.equal(language.statusText('en-US', 'modelWaiting', { seconds: 30 }), 'The model is still processing this request. Running for 30s…');
 });
 
 test('V0.2.25.2 localizes immediate first-byte model progress in every locale', () => {
   const expected = {
-    'zh-TW': '主模型已開始回傳資料，已執行 45 秒（已收到 284 B）…',
-    'zh-CN': '主模型已开始返回数据，已执行 45 秒（已收到 284 B）…',
-    'en-US': 'The main model has started returning data. Running for 45s (received 284 B)…',
-    'ja-JP': 'メインモデルがデータを返し始めました。実行 45 秒（受信 284 B）…',
-    'ko-KP': '주 모델이 데이터를 반환하기 시작했습니다. 45초 실행 (수신 284 B)…',
+    'zh-TW': '模型已開始回傳資料，已執行 45 秒（已收到 284 B）…',
+    'zh-CN': '模型已开始返回数据，已执行 45 秒（已收到 284 B）…',
+    'en-US': 'The model has started returning data. Running for 45s (received 284 B)…',
+    'ja-JP': 'モデルがデータを返し始めました。実行 45 秒（受信 284 B）…',
+    'ko-KP': '모델이 데이터를 반환하기 시작했습니다. 45초 실행 (수신 284 B)…',
   };
   for (const [locale, text] of Object.entries(expected)) {
     assert.equal(language.statusText(locale, 'modelFirstByte', { seconds: 45, receivedBytes: 284 }), text);
@@ -153,14 +153,14 @@ test('V0.2.26.4 tool_result history is not modified by language policy', () => {
 test('V0.2.28.14 keeps external-to-Base language repair fallback distinct with processor telemetry glyph', () => {
   assert.equal(
     language.statusText('zh-TW', 'finalLanguageRepairFallbackBase'),
-    '◇ 外部語言處理未達要求；正在改由主模型完成繁體中文轉換…',
+    '◇ 外部語言處理未達要求；正在改由模型完成繁體中文轉換…',
   );
 });
 
 test('V0.2.28.5 controlled continuation progress reports produced and preserved model-state sizes', () => {
   assert.equal(
     language.statusText('zh-TW', 'continuationRecovery', { candidateChars: 184221 }),
-    '主模型尚未形成有效下一步；本輪產生 184,221 字元工作狀態，正在整理並保留續接重點…',
+    '模型尚未形成有效下一步；本輪產生 184,221 字元工作狀態，正在整理並保留續接重點…',
   );
   assert.equal(
     language.statusText('zh-TW', 'continuationStatePreserved', { candidateChars: 184221, handoffChars: 28411, compressed: true }),
@@ -172,42 +172,42 @@ test('V0.2.28.5 controlled continuation progress reports produced and preserved 
   );
 });
 
-test('V0.2.28.14 renders compact main-model telemetry with localized phase, rate and stall state', () => {
+test('V0.2.28.14 renders compact model telemetry with localized phase, rate and stall state', () => {
   const cases = {
     'zh-TW': {
-      waiting: '◌ 主模型等待輸出 · 29s · 0 B',
-      thinking: '◐ 主模型思考中 · 60s · 29.82 KB · 512 B/s',
-      response: '◆ 主模型回應中 · 90s · 43.59 KB · 1.25 KB/s',
-      tool: '◇ 主模型建立工具動作 · 120s · 57.63 KB · 256 B/s',
-      stalled: '⚠ 主模型資料暫停 · 30s 無新資料 · 總計 57.63 KB',
+      waiting: '◌ 模型等待輸出 · 29s · 0 B',
+      thinking: '◐ 模型思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 模型回應中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 模型建立工具動作 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 模型資料暫停 · 30s 無新資料 · 總計 57.63 KB',
     },
     'zh-CN': {
-      waiting: '◌ 主模型等待输出 · 29s · 0 B',
-      thinking: '◐ 主模型思考中 · 60s · 29.82 KB · 512 B/s',
-      response: '◆ 主模型响应中 · 90s · 43.59 KB · 1.25 KB/s',
-      tool: '◇ 主模型建立工具动作 · 120s · 57.63 KB · 256 B/s',
-      stalled: '⚠ 主模型数据暂停 · 30s 无新数据 · 总计 57.63 KB',
+      waiting: '◌ 模型等待输出 · 29s · 0 B',
+      thinking: '◐ 模型思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 模型响应中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 模型建立工具动作 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 模型数据暂停 · 30s 无新数据 · 总计 57.63 KB',
     },
     'en-US': {
-      waiting: '◌ Main model waiting · 29s · 0 B',
-      thinking: '◐ Main model thinking · 60s · 29.82 KB · 512 B/s',
-      response: '◆ Main model responding · 90s · 43.59 KB · 1.25 KB/s',
-      tool: '◇ Main model building tool action · 120s · 57.63 KB · 256 B/s',
-      stalled: '⚠ Main model stalled · no upstream data for 30s · total 57.63 KB',
+      waiting: '◌ Model waiting · 29s · 0 B',
+      thinking: '◐ Model thinking · 60s · 29.82 KB · 512 B/s',
+      response: '◆ Model responding · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ Model building tool action · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ Model stalled · no upstream data for 30s · total 57.63 KB',
     },
     'ja-JP': {
-      waiting: '◌ メインモデル待機中 · 29s · 0 B',
-      thinking: '◐ メインモデル思考中 · 60s · 29.82 KB · 512 B/s',
-      response: '◆ メインモデル応答中 · 90s · 43.59 KB · 1.25 KB/s',
-      tool: '◇ メインモデルがツール操作を生成中 · 120s · 57.63 KB · 256 B/s',
-      stalled: '⚠ メインモデルのデータ受信が停止 · 30s 新規データなし · 合計 57.63 KB',
+      waiting: '◌ モデル待機中 · 29s · 0 B',
+      thinking: '◐ モデル思考中 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ モデル応答中 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ モデルがツール操作を生成中 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ モデルのデータ受信が停止 · 30s 新規データなし · 合計 57.63 KB',
     },
     'ko-KP': {
-      waiting: '◌ 주 모델 출력 대기 · 29s · 0 B',
-      thinking: '◐ 주 모델 사고 중 · 60s · 29.82 KB · 512 B/s',
-      response: '◆ 주 모델 응답 중 · 90s · 43.59 KB · 1.25 KB/s',
-      tool: '◇ 주 모델 도구 동작 생성 중 · 120s · 57.63 KB · 256 B/s',
-      stalled: '⚠ 주 모델 데이터 정체 · 30s 동안 새 데이터 없음 · 총 57.63 KB',
+      waiting: '◌ 모델 출력 대기 · 29s · 0 B',
+      thinking: '◐ 모델 사고 중 · 60s · 29.82 KB · 512 B/s',
+      response: '◆ 모델 응답 중 · 90s · 43.59 KB · 1.25 KB/s',
+      tool: '◇ 모델 도구 동작 생성 중 · 120s · 57.63 KB · 256 B/s',
+      stalled: '⚠ 모델 데이터 정체 · 30s 동안 새 데이터 없음 · 총 57.63 KB',
     },
   };
   for (const [locale, expected] of Object.entries(cases)) {
@@ -238,10 +238,10 @@ test('V0.2.28.14 thinking pulse rotates only the glyph and phase telemetry stays
 });
 
 test('V0.2.28.14 renders compact localized model phase transition notices', () => {
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'thinking', receivedBytes: 494 }), '◐ 主模型開始思考 · 494 B');
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ 主模型開始回應 · 2 KB');
-  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'tool', receivedBytes: 4096 }), '◇ 主模型建立工具動作 · 4 KB');
-  assert.equal(language.statusText('en-US', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ Main model started responding · 2 KB');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'thinking', receivedBytes: 494 }), '◐ 模型開始思考 · 494 B');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ 模型開始回應 · 2 KB');
+  assert.equal(language.statusText('zh-TW', 'modelPhaseChanged', { modelPhase: 'tool', receivedBytes: 4096 }), '◇ 模型建立工具動作 · 4 KB');
+  assert.equal(language.statusText('en-US', 'modelPhaseChanged', { modelPhase: 'response', receivedBytes: 2048 }), '◆ Model started responding · 2 KB');
 });
 
 test('V0.2.28.14 prefixes busy, language and vision processor states in every locale', () => {

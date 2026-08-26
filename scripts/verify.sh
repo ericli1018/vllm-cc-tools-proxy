@@ -99,7 +99,7 @@ grep -Fq 'progress_sse_sent' src/services/proxy-server.js
 grep -Fq 'base_upstream_request_failed' src/services/proxy-server.js
 grep -Fq 'web_fetch_upstream_rejected' src/proxy/web-tools.js
 
-grep -Fq "export const PROGRESS_BLOCK_HEADER = '目前處理進度：';" src/proxy/progress.js
+grep -Fq "export const PROGRESS_BLOCK_HEADER = '模型處理中';" src/proxy/progress.js
 grep -Fq "export function describeFinalAnthropicProgress" src/proxy/anthropic-sse.js
 grep -Fq "handoff_to_claude_code" src/proxy/anthropic-sse.js
 grep -Fq "returning_visible_response" src/proxy/anthropic-sse.js
@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.32'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.32'
+test "$(node -p "require('./package.json').version")" = '0.29.33'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.33'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.32'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.33'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -569,7 +569,7 @@ grep -Fq 'V0.2.28.14 Multilingual Runtime Progress Telemetry' README.md
 grep -Fq 'formatByteRate' src/i18n/response-language.js
 grep -Fq 'recentBytesPerSecond' src/services/proxy-server.js
 grep -Fq 'stalled' src/services/proxy-server.js
-grep -Fq 'progressBlockHeader(this.locale)' src/proxy/progress.js
+grep -Fq 'progressBlockHeader(this.locale, { timestampMs: this.startedAt })' src/proxy/progress.js
 ! grep -Fq 'progressBlockHeader(this.locale, { receivedBytes:' src/proxy/progress.js
 
 # V0.2.28.13 original-vs-repaired language-shift validation
@@ -1056,3 +1056,16 @@ test -f change_log/V0.29.32-實作與驗證報告.md
 grep -Fq 'V0.29.32 Clean Native Vision Raw Progress' README.md
 grep -Fq 'nativeVisionRawOnly' src/services/proxy-server.js
 node --test test/native-vision-routing.test.js
+
+
+# V0.29.33 Neutral Timestamped Model Progress
+test -f change_log/V0.29.33-更新說明.md
+test -f change_log/V0.29.33-實作與驗證報告.md
+grep -Fq 'V0.29.33 Neutral Timestamped Model Progress' README.md
+grep -Fq "progressHeader: '模型處理中'" src/i18n/response-language.js
+grep -Fq "progressHeader: '模型处理中'" src/i18n/response-language.js
+grep -Fq "progressHeader: 'Model processing'" src/i18n/response-language.js
+grep -Fq "progressHeader: 'モデル処理中'" src/i18n/response-language.js
+grep -Fq "progressHeader: '모델 처리 중'" src/i18n/response-language.js
+! grep -Eq '主模型|Main model|main model|main-model|メインモデル|주 모델' src/i18n/response-language.js
+node --test test/v02933-progress-localization.test.js
