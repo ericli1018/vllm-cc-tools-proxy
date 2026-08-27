@@ -1,8 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.33 makes visible model progress role-neutral and timestamped: the progress block starts with a localized `Model processing · HH:mm:ss` header and no longer claims that the request belongs to a Main Agent when Main/Sub attribution is not reliable. V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.34 adds bounded PDF zoom-context continuity: deterministic DIAGRAM/DENSE_PAGE and SCHEMATIC tiles now receive the whole-page overview, bounded native PDF text, and only already-completed overlapping tile observations as re-verification hints. Full prior Vision transcripts are not carried forward. V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
 
+
+
+## V0.29.34 PDF Zoom Context Continuity
+
+V0.29.34 strengthens deterministic PDF zoom analysis without turning sequential tiles into one unbounded Vision conversation. DIAGRAM/DENSE_PAGE fallback tiles and SCHEMATIC tiles remain isolated one-image Vision requests, but each tile prompt now includes a bounded `VCC_PDF_ZOOM_CONTEXT` capsule.
+
+The capsule contains:
+
+- the whole-page Vision overview, bounded to a small carry-forward budget;
+- bounded native PDF text for the same page when available;
+- observations from at most two already-completed tiles whose normalized bounding boxes actually overlap the current tile;
+- uncertainty lines from those neighboring observations;
+- an explicit instruction to re-verify carried observations against the current tile before asserting continuity.
+
+The capsule is capped at 4,200 characters and does **not** copy the prior Vision transcript, assistant/tool messages, crop-tool conversation, or non-adjacent tile evidence. This limits context growth and reduces error propagation while preserving enough page-level continuity for cross-tile nets, arrows, labels, buses, and schematic relationships.
+
+Model-requested `request_image_crop` behavior is unchanged: precise crops still continue inside the existing Visual Model conversation. PDF overlap remains 15% for generic DIAGRAM/DENSE_PAGE zoom tiles and 20% for SCHEMATIC tiles. No new ENV variables or cache-generation changes are introduced.
 
 
 ## V0.29.33 Neutral Timestamped Model Progress

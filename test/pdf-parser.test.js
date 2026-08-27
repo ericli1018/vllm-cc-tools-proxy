@@ -511,3 +511,66 @@ test('V0.29.3 DIAGRAM NEEDS_ZOOM falls back to sequential overlapping PDF tiles 
   assert.match(result.markdown, /preserves local arrows and labels/);
   assert.equal(progress.some((item) => item.details?.phase === 'pdf_zoom_tile_analyze'), true);
 });
+
+test('V0.29.34 DIAGRAM zoom tiles carry bounded overview/native/adjacent context forward', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const calls = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('NATIVE_ANCHOR ETH_CLK RESET_N '.repeat(20)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    classifyPage: async () => ({ route: 'DIAGRAM', confidence: 0.9, reason: 'dense diagram' }),
+    analyzeVisualAssets: async (assets, options) => {
+      calls.push({ assets, options });
+      if (!assets[0]?.regionKind) return { markdown: 'OVERVIEW_ANCHOR blocks A and B', warnings: [], cropCount: 0, needsZoom: true, visualStatus: 'needs_zoom' };
+      return { markdown: `LOCAL_ANCHOR_TILE_${assets[0].sourceMetadata.tileIndex} observed ETH_CLK`, warnings: [], cropCount: 0 };
+    },
+  });
+  const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'zoom_tile');
+  assert.ok(tileCalls.length >= 2);
+  assert.match(tileCalls[0].options.prompt, /VCC_PDF_ZOOM_CONTEXT/);
+  assert.match(tileCalls[0].options.prompt, /OVERVIEW_ANCHOR/);
+  assert.match(tileCalls[0].options.prompt, /NATIVE_ANCHOR/);
+  assert.doesNotMatch(tileCalls[0].options.prompt, /LOCAL_ANCHOR_TILE_1/);
+  assert.match(tileCalls[1].options.prompt, /LOCAL_ANCHOR_TILE_1/);
+  assert.ok(tileCalls[1].options.prompt.length < 7000, 'context capsule must remain bounded');
+});
+
+test('V0.29.34 SCHEMATIC tiles carry bounded page context without sharing a full Vision transcript', async () => {
+  const buffer = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const calls = [];
+  const runner = async (command, args) => {
+    if (command === 'pdfinfo') return { stdout: Buffer.from('Pages: 1\nEncrypted: no\nPage size: 595 x 842 pts (A4)\n'), stderr: Buffer.alloc(0) };
+    if (command === 'pdftotext') return { stdout: Buffer.from('U15 R109 ETH_CLK RESET_N GPIOZ3 '.repeat(15)), stderr: Buffer.alloc(0) };
+    if (command === 'pdfimages') return { stdout: Buffer.from(''), stderr: Buffer.alloc(0) };
+    if (command === 'pdftoppm') { await fs.writeFile(`${args.at(-1)}.png`, png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    if (command === 'identify') return { stdout: Buffer.from('2480 3508'), stderr: Buffer.alloc(0) };
+    if (command === 'convert') { await fs.writeFile(args.at(-1), png); return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) }; }
+    throw new Error(`unexpected command ${command}`);
+  };
+  await parsePdf(buffer, {
+    limits, runner, vllmVisionUrl: 'http://vision', vllmVisionModel: 'vision',
+    classifyPage: async () => ({ route: 'SCHEMATIC', confidence: 0.99, reason: 'electronic schematic' }),
+    analyzeVisualAssets: async (assets, options) => {
+      calls.push({ assets, options });
+      if (assets[0]?.regionKind !== 'schematic_tile') return { markdown: 'SCHEMATIC_OVERVIEW U15 Ethernet PHY', warnings: [], cropCount: 0 };
+      return { markdown: `SCHEMATIC_LOCAL_${assets[0].sourceMetadata.tileIndex} R109 to ETH_CLK`, warnings: [], cropCount: 0 };
+    },
+  });
+  const tileCalls = calls.filter((entry) => entry.assets[0]?.regionKind === 'schematic_tile');
+  assert.ok(tileCalls.length >= 2);
+  assert.equal(tileCalls.every((entry) => entry.assets.length === 1), true, 'tile image isolation remains intact');
+  assert.match(tileCalls[0].options.prompt, /SCHEMATIC_OVERVIEW/);
+  assert.match(tileCalls[0].options.prompt, /U15 R109 ETH_CLK RESET_N GPIOZ3/);
+  assert.match(tileCalls[1].options.prompt, /SCHEMATIC_LOCAL_1/);
+  assert.doesNotMatch(tileCalls[1].options.prompt, /assistant:|tool_result|request_image_crop/i, 'full prior Vision transcript must not be copied into capsule');
+});

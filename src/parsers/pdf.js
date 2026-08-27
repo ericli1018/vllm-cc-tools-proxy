@@ -11,6 +11,7 @@ import { batchVisualPages } from '../visual/pdf-batcher.js';
 import { classifyPdfPage as defaultClassifyPdfPage } from '../visual/pdf-page-classifier.js';
 import { buildPdfTiles } from '../visual/pdf-tiler.js';
 import { mergePageEvidence } from '../visual/pdf-evidence-merger.js';
+import { buildPdfZoomContext } from '../visual/pdf-zoom-context.js';
 
 function parsePageSize(value) {
   const match = String(value || '').match(/([0-9.]+)\s*x\s*([0-9.]+)\s*pts/i);
@@ -463,18 +464,20 @@ export async function parsePdf(buffer, options) {
             ...commonOptions,
             recoveryContext: 'zoom_tile',
             timeoutMs: Math.min(vllmVisionTimeoutMs, 30000),
-            prompt: `Analyze zoom tile ${tile.index}/${tiles.length} for PDF page ${entry.page} (${route}). Extract only observable text, labels, arrows, table cells, nodes and relationships. This tile overlaps neighboring regions by 15 percent; use repeated labels and structures as continuity anchors. Preserve source_id and uncertainty. If an essential smaller region remains unreadable, use request_image_crop. Do not answer the final user task.`,
+            prompt: `Analyze zoom tile ${tile.index}/${tiles.length} for PDF page ${entry.page} (${route}). Extract only observable text, labels, arrows, table cells, nodes and relationships. This tile overlaps neighboring regions by 15 percent; use repeated labels and structures as continuity anchors. Preserve source_id and uncertainty. If an essential smaller region remains unreadable, use request_image_crop. Do not answer the final user task.
+
+${buildPdfZoomContext({ page: entry.page, route, overview: overviewMarkdown, nativeText: entry.nativeText, currentTile: tile, priorRegions: regionEvidence })}`,
           });
           visualBatchCount += 1;
           warnings.push(...(result.warnings || []));
-          regionEvidence.push({ sourceId: asset.sourceId, markdown: result.markdown });
+          regionEvidence.push({ sourceId: asset.sourceId, tileIndex: tile.index, bbox: tile.bbox, markdown: result.markdown });
         } catch (error) {
           const expectedVisionFailure = error instanceof HttpError && Boolean(error.retryable) && Number(error.status) >= 500;
           if (!expectedVisionFailure) throw error;
           visualBatchCount += 1;
           const code = String(error.code || 'vision_service_error').slice(0, 80);
           warnings.push(`pdf_zoom_tile_${code}`);
-          regionEvidence.push({ sourceId: asset.sourceId, markdown: `Uncertain: zoom tile ${tile.index}/${tiles.length} evidence unavailable due to ${code}.` });
+          regionEvidence.push({ sourceId: asset.sourceId, tileIndex: tile.index, bbox: tile.bbox, markdown: `Uncertain: zoom tile ${tile.index}/${tiles.length} evidence unavailable due to ${code}.` });
           await onProgress(`第 ${entry.page} 頁 zoom tile ${tile.index}/${tiles.length} 分析失敗；保留缺口並繼續。`, {
             phase: 'pdf_zoom_tile_failed', page: entry.page, route, tile: tile.index, code, retryable: Boolean(error.retryable),
           });
@@ -579,11 +582,13 @@ export async function parsePdf(buffer, options) {
             ...commonOptions,
             recoveryContext: 'zoom_tile',
             timeoutMs: Math.min(vllmVisionTimeoutMs, 30000),
-            prompt: `Analyze schematic tile ${entry.tile.index}/${tileEntries.length} for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve source_id. The tile overlaps neighboring regions; do not invent off-tile continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.`,
+            prompt: `Analyze schematic tile ${entry.tile.index}/${tileEntries.length} for PDF page ${page.page}. Extract only observable components, reference designators, pins, net/signal labels, power rails, clocks, resets, bus connections and wire relationships. Preserve source_id. The tile overlaps neighboring regions; do not invent off-tile continuity when labels are unreadable. Request a precise crop only for an essential small region. Do not answer the final user task.
+
+${buildPdfZoomContext({ page: page.page, route: 'SCHEMATIC', overview: overviewResult.markdown, nativeText: page.nativeText, currentTile: entry.tile, priorRegions: regionEvidence })}`,
           });
           visualBatchCount += 1;
           warnings.push(...(result.warnings || []));
-          regionEvidence.push({ sourceId: entry.asset.sourceId, markdown: result.markdown });
+          regionEvidence.push({ sourceId: entry.asset.sourceId, tileIndex: entry.tile.index, bbox: entry.tile.bbox, markdown: result.markdown });
         } catch (error) {
           const expectedVisionFailure = error instanceof HttpError && Boolean(error.retryable) && Number(error.status) >= 500;
           if (!expectedVisionFailure) throw error;
@@ -592,6 +597,8 @@ export async function parsePdf(buffer, options) {
           warnings.push(`schematic_tile_${code}`);
           regionEvidence.push({
             sourceId: entry.asset.sourceId,
+            tileIndex: entry.tile.index,
+            bbox: entry.tile.bbox,
             markdown: `Uncertain: schematic tile ${entry.tile.index}/${tileEntries.length} evidence unavailable due to ${code}. Neighboring tile evidence may be incomplete.`,
           });
           await onProgress(`第 ${page.page} 頁 schematic tile ${entry.tile.index}/${tileEntries.length} 分析失敗；將保留缺口並繼續下一個 tile。`, {

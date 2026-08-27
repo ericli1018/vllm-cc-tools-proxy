@@ -666,3 +666,18 @@ test('V0.29.33 localizes neutral timestamped model progress and preserves legacy
   assert.ok(changeLogEntries.includes('V0.29.33-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.33-實作與驗證報告.md'));
 });
+
+
+test('V0.29.34 carries bounded PDF zoom context across deterministic tiles', async () => {
+  const parserSource = await fs.readFile(new URL('../src/parsers/pdf.js', import.meta.url), 'utf8');
+  const contextSource = await fs.readFile(new URL('../src/visual/pdf-zoom-context.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(parserSource, /buildPdfZoomContext/);
+  assert.match(contextSource, /VCC_PDF_ZOOM_CONTEXT/);
+  assert.match(contextSource, /Prior adjacent tile observations/);
+  assert.match(contextSource, /Re-verify every carried observation/);
+  assert.match(readme, /V0\.29\.34 PDF Zoom Context Continuity/);
+  assert.ok(changeLogEntries.includes('V0.29.34-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.34-實作與驗證報告.md'));
+});
