@@ -2456,6 +2456,20 @@ export function createProxyServer(config, dependencies = {}) {
           partial_json_prefix: details.partial_json_prefix,
           partial_json_suffix: details.partial_json_suffix,
         });
+        if (details.pre_stop_probe_event_count) {
+          log(config, 'warn', 'base_tool_json_pre_stop_probe', {
+            requestId,
+            code: error.code || 'vllm_invalid_stream',
+            tool_block_index: details.index,
+            tool_id: details.tool_id,
+            tool_name: details.tool_name,
+            event_count: details.pre_stop_probe_event_count,
+            event_sequence: details.pre_stop_probe_event_sequence,
+            event_metadata: details.pre_stop_probe_event_metadata,
+            max_events: details.pre_stop_probe_max_events,
+            truncated: details.pre_stop_probe_truncated,
+          });
+        }
         if (details.post_stop_probe_stop_reason) {
           log(config, 'warn', 'base_tool_json_post_stop_probe', {
             requestId,

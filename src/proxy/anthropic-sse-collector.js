@@ -63,6 +63,7 @@ function applyDelta(block, delta, toolJson) {
 }
 
 const TOOL_JSON_PREVIEW_CHARS = 512;
+const TOOL_JSON_PRE_STOP_MAX_EVENTS = 64;
 const TOOL_JSON_POST_STOP_MAX_EVENTS = 64;
 const TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 16384;
 
@@ -129,7 +130,7 @@ function jsonParses(value) {
   try { JSON.parse(String(value || '')); return true; } catch { return false; }
 }
 
-function postStopEventMetadata(parsed, payload) {
+function toolLifecycleEventMetadata(parsed, payload) {
   const metadata = { event: String(parsed?.name || 'message') };
   if (Number.isInteger(payload?.index)) metadata.index = payload.index;
   if (parsed?.name === 'content_block_start') {
@@ -151,6 +152,29 @@ function postStopEventMetadata(parsed, payload) {
     metadata.stop_reason = String(payload.delta.stop_reason);
   }
   return metadata;
+}
+
+function appendBoundedToolLifecycle(lifecycle, parsed, payload) {
+  if (!lifecycle || lifecycle.eventCount >= TOOL_JSON_PRE_STOP_MAX_EVENTS) {
+    if (lifecycle) lifecycle.truncated = true;
+    return;
+  }
+  lifecycle.eventCount += 1;
+  lifecycle.eventSequence.push(String(parsed?.name || 'message'));
+  lifecycle.eventMetadata.push(toolLifecycleEventMetadata(parsed, payload));
+}
+
+function attachPreStopProbeDetails(error, lifecycle) {
+  if (!error || !lifecycle) return error;
+  error.details = {
+    ...(error.details || {}),
+    pre_stop_probe_event_count: lifecycle.eventCount,
+    pre_stop_probe_event_sequence: [...lifecycle.eventSequence],
+    pre_stop_probe_event_metadata: lifecycle.eventMetadata.map((entry) => ({ ...entry })),
+    pre_stop_probe_max_events: TOOL_JSON_PRE_STOP_MAX_EVENTS,
+    pre_stop_probe_truncated: Boolean(lifecycle.truncated),
+  };
+  return error;
 }
 
 function attachPostStopProbeDetails(probe, stopReason) {
@@ -187,6 +211,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
   const blocks = new Map();
   const toolJson = new Map();
   const toolJsonDeltaCounts = new Map();
+  const toolJsonLifecycles = new Map();
   let sawMessageStop = false;
   let firstModelEventObserved = false;
   let currentStreamPhase = 'waiting';
@@ -214,7 +239,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
       try { payload = JSON.parse(parsed.data); } catch {}
     }
     if (toolJsonFailureProbe.eventMetadata.length < TOOL_JSON_POST_STOP_MAX_EVENTS) {
-      toolJsonFailureProbe.eventMetadata.push(postStopEventMetadata(parsed, payload));
+      toolJsonFailureProbe.eventMetadata.push(toolLifecycleEventMetadata(parsed, payload));
     }
     if (parsed.name === 'content_block_delta'
       && payload?.index === toolJsonFailureProbe.index
@@ -324,6 +349,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
       if (block.type === 'tool_use' || block.type === 'server_tool_use') {
         toolJson.set(index, '');
         toolJsonDeltaCounts.set(index, 0);
+        const lifecycle = { eventCount: 0, eventSequence: [], eventMetadata: [], truncated: false };
+        appendBoundedToolLifecycle(lifecycle, parsed, payload);
+        toolJsonLifecycles.set(index, lifecycle);
       }
       await notifyCheckpoint();
       return;
@@ -332,6 +360,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (parsed.name === 'content_block_delta') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
+      if (toolJsonLifecycles.has(index)) appendBoundedToolLifecycle(toolJsonLifecycles.get(index), parsed, payload);
       const delta = payload?.delta || {};
       let semanticValue = '';
       let semanticType = '';
@@ -375,12 +404,14 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (parsed.name === 'content_block_stop') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
+      if (toolJsonLifecycles.has(index)) appendBoundedToolLifecycle(toolJsonLifecycles.get(index), parsed, payload);
       if (toolJson.has(index)) {
         const partialJson = toolJson.get(index);
         try {
           finalizeToolInput(block, partialJson, index, toolJsonDeltaCounts.get(index) || 0);
         } catch (error) {
           if (!isToolInputJsonInvalid(error)) throw error;
+          attachPreStopProbeDetails(error, toolJsonLifecycles.get(index));
           toolJsonFailureProbe = {
             error,
             index,
@@ -396,6 +427,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
         }
         toolJson.delete(index);
         toolJsonDeltaCounts.delete(index);
+        toolJsonLifecycles.delete(index);
       }
       completedIndexes.add(index);
       if (openIndex === index) openIndex = null;

@@ -429,3 +429,38 @@ test('V0.29.37 post-stop probe drains across later blocks to message_stop and ca
     return true;
   });
 });
+
+test('V0.29.38 collector captures bounded offending tool pre-stop lifecycle metadata', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'pre-stop-probe', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-pre-stop', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '"file_path":"/tmp/report.md"' } }),
+    // Deliberately wrong delta type inside the open tool block: diagnostic must expose this structurally.
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: '}' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details?.pre_stop_probe_event_count, 5);
+    assert.deepEqual(error.details?.pre_stop_probe_event_sequence, [
+      'content_block_start', 'content_block_delta', 'content_block_delta', 'content_block_delta', 'content_block_stop',
+    ]);
+    assert.equal(error.details?.pre_stop_probe_max_events, 64);
+    assert.equal(error.details?.pre_stop_probe_truncated, false);
+    assert.deepEqual(error.details?.pre_stop_probe_event_metadata, [
+      { event: 'content_block_start', index: 2, block_type: 'tool_use', tool_name: 'Read', tool_id: 'tool-pre-stop' },
+      { event: 'content_block_delta', index: 2, delta_type: 'input_json_delta', partial_json_chars: 1 },
+      { event: 'content_block_delta', index: 2, delta_type: 'input_json_delta', partial_json_chars: 28 },
+      { event: 'content_block_delta', index: 2, delta_type: 'text_delta' },
+      { event: 'content_block_stop', index: 2 },
+    ]);
+    assert.equal(error.details?.partial_json_delta_count, 2);
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'message_stop');
+    assert.equal(error.details?.late_same_index_input_json_delta_count, 0);
+    return true;
+  });
+});

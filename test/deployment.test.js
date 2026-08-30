@@ -712,3 +712,18 @@ test('V0.29.37 ships full bounded post-stop tool lifecycle probe without repair 
   assert.ok(changeLogEntries.includes('V0.29.37-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.37-實作與驗證報告.md'));
 });
+
+test('V0.29.38 ships bounded offending tool pre-stop lifecycle diagnostics without repair or retry behavior', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /TOOL_JSON_PRE_STOP_MAX_EVENTS = 64/);
+  assert.match(collectorSource, /pre_stop_probe_event_metadata/);
+  assert.match(collectorSource, /pre_stop_probe_truncated/);
+  assert.match(proxySource, /base_tool_json_pre_stop_probe/);
+  assert.match(proxySource, /event_metadata: details\.pre_stop_probe_event_metadata/);
+  assert.match(readme, /V0\.29\.38 Offending Tool Pre-Stop Lifecycle Diagnostic/);
+  assert.ok(changeLogEntries.includes('V0.29.38-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.38-實作與驗證報告.md'));
+});

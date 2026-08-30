@@ -1,7 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.37 extends the malformed-tool post-stop probe through later content blocks up to `message_stop` (bounded by 64 events / 16 KiB) and records structural lifecycle metadata so SGLang late tool deltas can be located without repairing, retrying, or executing the malformed tool call. V0.29.35 malformed-tool diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.38 adds a bounded offending-tool pre-stop lifecycle diagnostic so malformed SGLang Anthropic tool streams can be distinguished between missing `input_json_delta` closure and wrong delta-type routing before `content_block_stop`. V0.29.37 full post-stop lifecycle probing, V0.29.35 malformed-tool shape diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
+
+## V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic
+
+V0.29.38 remains diagnostic-only. For each open `tool_use` / `server_tool_use` block, the collector records a bounded structural lifecycle from `content_block_start` through every delta up to `content_block_stop`. If accumulated `input_json_delta.partial_json` is malformed at stop time, that lifecycle is attached to the existing error and emitted as WARN event `base_tool_json_pre_stop_probe`.
+
+The lifecycle is capped at **64 events** and records only protocol metadata: event name, content-block index, block type, tool name/id, delta type, and `partial_json_chars` for `input_json_delta`. It does **not** copy `text_delta` content or tool payload bodies. This lets operators distinguish a truly missing closing fragment from a fragment misrouted as `text_delta` / another delta type without widening sensitive log exposure.
+
+V0.29.37 post-stop draining remains unchanged at `message_stop` / 64 events / 16384 raw bytes. V0.29.38 still does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute the malformed tool call; the final error remains `vllm_invalid_stream`.
 
 ## V0.29.37 Full Post-Stop Tool Lifecycle Probe
 

@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.37'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.37'
+test "$(node -p "require('./package.json').version")" = '0.29.38'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.38'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.37'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.38'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1106,3 +1106,14 @@ grep -Fq 'trailing_event_metadata' src/services/proxy-server.js
 grep -Fq "'base_tool_json_post_stop_probe'" src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.37' test/anthropic-sse-collector.test.js
 node --test --test-name-pattern='V0.29.37' test/proxy-server.test.js
+# V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic
+test -f change_log/V0.29.38-更新說明.md
+test -f change_log/V0.29.38-實作與驗證報告.md
+grep -Fq 'V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic' README.md
+grep -Fq 'TOOL_JSON_PRE_STOP_MAX_EVENTS = 64' src/proxy/anthropic-sse-collector.js
+grep -Fq 'pre_stop_probe_event_metadata' src/proxy/anthropic-sse-collector.js
+grep -Fq 'base_tool_json_pre_stop_probe' src/services/proxy-server.js
+node --test --test-name-pattern='V0.29.38' test/anthropic-sse-collector.test.js
+node --test --test-name-pattern='V0.29.38' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.38' test/deployment.test.js test/version.test.js
+
