@@ -2491,6 +2491,8 @@ export function createProxyServer(config, dependencies = {}) {
             late_same_index_partial_json_prefix: details.late_same_index_partial_json_prefix,
             late_same_index_partial_json_suffix: details.late_same_index_partial_json_suffix,
             late_same_index_combined_json_valid: details.late_same_index_combined_json_valid,
+            shadow_tool_count: details.post_stop_shadow_tool_count,
+            shadow_tools: details.post_stop_shadow_tools,
           });
         }
       }

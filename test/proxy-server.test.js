@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.38', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.39', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3175,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.38/);
+  assert.match(first, /VERSION\s+0\.29\.39/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.38');
+  assert.equal(payload.version, '0.29.39');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.38/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.39/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4246,4 +4246,70 @@ test('V0.29.38 logs offending tool pre-stop lifecycle without repair, retry, or 
   assert.equal(probe.max_events, 64);
   assert.equal(probe.truncated, false);
   assert.equal(JSON.stringify(probe).includes('SECRET_CLOSING_BRACE_'), false);
+});
+
+test('V0.29.39 logs trailing tool shadow validation without repair, retry, or payload leakage', async (t) => {
+  const logs = [];
+  let upstreamRequests = 0;
+  const upstream = http.createServer(async (req, res) => {
+    upstreamRequests += 1;
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"shadow-log","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"root-read","name":"Read","input":{}}}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/root.md"' } })}\n\n`);
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":2}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":4,"content_block":{"type":"tool_use","id":"later-read","name":"Read","input":{}}}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 4, delta: { type: 'input_json_delta', partial_json: '{' } })}\n\n`);
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 4, delta: { type: 'input_json_delta', partial_json: '"file_path":"SECRET_LATER_READ"' } })}\n\n`);
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":4}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":6,"content_block":{"type":"tool_use","id":"later-bash","name":"Bash","input":{}}}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: '{' } })}\n\n`);
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: '"command":"SECRET_BASH"' } })}\n\n`);
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: '}' } })}\n\n`);
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":6}\n\n');
+    res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}\n\n');
+    res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    usagePreflightEnabled: false,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [
+        { name: 'Read', description: 'read', input_schema: { type: 'object' } },
+        { name: 'Bash', description: 'bash', input_schema: { type: 'object' } },
+      ],
+      messages: [{ role: 'user', content: 'inspect tools' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /vllm_invalid_stream/);
+  assert.equal(upstreamRequests, 1);
+
+  const probe = logs.find((entry) => entry.event === 'base_tool_json_post_stop_probe');
+  assert.ok(probe);
+  assert.equal(probe.shadow_tool_count, 2);
+  assert.deepEqual(probe.shadow_tools.map((entry) => ({
+    index: entry.index, tool_name: entry.tool_name, json_valid: entry.json_valid,
+    partial_json_ends_with_object: entry.partial_json_ends_with_object,
+    input_json_delta_count: entry.input_json_delta_count, block_stopped: entry.block_stopped,
+  })), [
+    { index: 4, tool_name: 'Read', json_valid: false, partial_json_ends_with_object: false, input_json_delta_count: 2, block_stopped: true },
+    { index: 6, tool_name: 'Bash', json_valid: true, partial_json_ends_with_object: true, input_json_delta_count: 3, block_stopped: true },
+  ]);
+  const serialized = JSON.stringify(probe.shadow_tools);
+  assert.equal(serialized.includes('SECRET_LATER_READ'), false);
+  assert.equal(serialized.includes('SECRET_BASH'), false);
 });

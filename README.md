@@ -1,6 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.38 adds a bounded offending-tool pre-stop lifecycle diagnostic so malformed SGLang Anthropic tool streams can be distinguished between missing `input_json_delta` closure and wrong delta-type routing before `content_block_stop`. V0.29.37 full post-stop lifecycle probing, V0.29.35 malformed-tool shape diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.39 adds payload-free trailing-tool shadow validation inside the existing post-stop quarantine so later tool blocks can be compared structurally (for example, malformed `Read` versus valid `Bash`) without executing or repairing them. V0.29.38 offending-tool pre-stop lifecycle diagnostics remain intact. V0.29.37 full post-stop lifecycle probing, V0.29.35 malformed-tool shape diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+
+
+## V0.29.39 Trailing Tool Shadow Validation
+
+V0.29.39 remains diagnostic-only. After an offending tool block fails JSON parsing and enters the existing V0.29.37 post-stop quarantine, every later `tool_use` / `server_tool_use` block observed before the bounded probe ends is shadow-assembled from its `input_json_delta` fragments. The shadow is never executed or forwarded as a recovered tool call.
+
+The existing `base_tool_json_post_stop_probe` WARN now includes `shadow_tool_count` and `shadow_tools`. Each shadow summary contains only structural metadata: block index, tool name/id, input-JSON delta count, character/byte counts, whether the JSON starts/ends like an object, top-level object candidate count, JSON validity/error position, and whether `content_block_stop` was observed. The actual `file_path`, shell command, or other tool payload is not copied into the shadow summary.
+
+This makes the SGLang failure pattern directly observable: later `Read` blocks can be shown as `json_valid=false / partial_json_ends_with_object=false` while a later `Bash` in the same response can independently validate as complete JSON. V0.29.39 still does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute quarantined tools; the final failure remains `vllm_invalid_stream`.
 
 
 ## V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic

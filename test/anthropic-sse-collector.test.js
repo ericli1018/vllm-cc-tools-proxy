@@ -464,3 +464,66 @@ test('V0.29.38 collector captures bounded offending tool pre-stop lifecycle meta
     return true;
   });
 });
+
+test('V0.29.39 shadow-validates later quarantined tool blocks without exposing their payloads', async () => {
+  const malformedRoot = '{"file_path":"/tmp/root.md"';
+  const malformedReadTail = '"file_path":"/tmp/later.md"';
+  const validBashMiddle = '"command":"pwd"';
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'shadow-tools', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-root', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: malformedRoot } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+    event('content_block_start', { type: 'content_block_start', index: 4, content_block: { type: 'tool_use', id: 'tool-shadow-read', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 4, delta: { type: 'input_json_delta', partial_json: '{' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 4, delta: { type: 'input_json_delta', partial_json: malformedReadTail } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 4 }),
+    event('content_block_start', { type: 'content_block_start', index: 6, content_block: { type: 'tool_use', id: 'tool-shadow-bash', name: 'Bash', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: '{' } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: validBashMiddle } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 6, delta: { type: 'input_json_delta', partial_json: '}' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 6 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'message_stop');
+    assert.equal(error.details?.post_stop_shadow_tool_count, 2);
+    assert.deepEqual(error.details?.post_stop_shadow_tools?.map((entry) => ({
+      index: entry.index,
+      tool_name: entry.tool_name,
+      tool_id: entry.tool_id,
+      input_json_delta_count: entry.input_json_delta_count,
+      partial_json_chars: entry.partial_json_chars,
+      partial_json_bytes: entry.partial_json_bytes,
+      partial_json_starts_with_object: entry.partial_json_starts_with_object,
+      partial_json_ends_with_object: entry.partial_json_ends_with_object,
+      candidate_top_level_objects: entry.candidate_top_level_objects,
+      json_valid: entry.json_valid,
+      json_error_position: entry.json_error_position,
+      block_stopped: entry.block_stopped,
+    })), [
+      {
+        index: 4, tool_name: 'Read', tool_id: 'tool-shadow-read', input_json_delta_count: 2,
+        partial_json_chars: 1 + malformedReadTail.length,
+        partial_json_bytes: Buffer.byteLength(`{${malformedReadTail}`, 'utf8'),
+        partial_json_starts_with_object: true, partial_json_ends_with_object: false,
+        candidate_top_level_objects: 1, json_valid: false,
+        json_error_position: 1 + malformedReadTail.length, block_stopped: true,
+      },
+      {
+        index: 6, tool_name: 'Bash', tool_id: 'tool-shadow-bash', input_json_delta_count: 3,
+        partial_json_chars: 2 + validBashMiddle.length,
+        partial_json_bytes: Buffer.byteLength(`{${validBashMiddle}}`, 'utf8'),
+        partial_json_starts_with_object: true, partial_json_ends_with_object: true,
+        candidate_top_level_objects: 1, json_valid: true,
+        json_error_position: null, block_stopped: true,
+      },
+    ]);
+    assert.equal(JSON.stringify(error.details?.post_stop_shadow_tools).includes('/tmp/later.md'), false);
+    assert.equal(JSON.stringify(error.details?.post_stop_shadow_tools).includes('pwd'), false);
+    return true;
+  });
+});

@@ -177,8 +177,70 @@ function attachPreStopProbeDetails(error, lifecycle) {
   return error;
 }
 
+function summarizePostStopShadowTool(shadow, { blockStopped = false } = {}) {
+  const partialJson = String(shadow?.partialJson || '');
+  const trimmed = partialJson.trim();
+  let jsonValid = false;
+  let parseErrorPosition = null;
+  try {
+    JSON.parse(partialJson);
+    jsonValid = true;
+  } catch (error) {
+    parseErrorPosition = jsonErrorPosition(error);
+  }
+  return {
+    index: shadow?.index,
+    tool_id: String(shadow?.toolId || ''),
+    tool_name: String(shadow?.toolName || ''),
+    input_json_delta_count: Number(shadow?.deltaCount || 0),
+    partial_json_chars: partialJson.length,
+    partial_json_bytes: Buffer.byteLength(partialJson, 'utf8'),
+    partial_json_starts_with_object: trimmed.startsWith('{'),
+    partial_json_ends_with_object: trimmed.endsWith('}'),
+    candidate_top_level_objects: countTopLevelObjectCandidates(partialJson),
+    json_valid: jsonValid,
+    json_error_position: jsonValid ? null : parseErrorPosition,
+    block_stopped: Boolean(blockStopped),
+  };
+}
+
+function observePostStopShadowTool(probe, parsed, payload) {
+  const index = payload?.index;
+  if (!Number.isInteger(index) || index === probe.index) return;
+
+  if (parsed?.name === 'content_block_start') {
+    const block = payload?.content_block;
+    if (block?.type === 'tool_use' || block?.type === 'server_tool_use') {
+      probe.shadowTools.set(index, {
+        index,
+        toolId: String(block.id || ''),
+        toolName: String(block.name || ''),
+        partialJson: '',
+        deltaCount: 0,
+      });
+    }
+    return;
+  }
+
+  const shadow = probe.shadowTools.get(index);
+  if (!shadow) return;
+  if (parsed?.name === 'content_block_delta' && payload?.delta?.type === 'input_json_delta') {
+    shadow.partialJson += typeof payload.delta.partial_json === 'string' ? payload.delta.partial_json : '';
+    shadow.deltaCount += 1;
+    return;
+  }
+  if (parsed?.name === 'content_block_stop') {
+    probe.shadowToolSummaries.push(summarizePostStopShadowTool(shadow, { blockStopped: true }));
+    probe.shadowTools.delete(index);
+  }
+}
+
 function attachPostStopProbeDetails(probe, stopReason) {
   const lateJson = probe.lateJson;
+  const shadowTools = [
+    ...probe.shadowToolSummaries,
+    ...[...probe.shadowTools.values()].map((shadow) => summarizePostStopShadowTool(shadow, { blockStopped: false })),
+  ].sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
   probe.error.details = {
     ...(probe.error.details || {}),
     post_stop_probe_stop_reason: stopReason,
@@ -196,6 +258,8 @@ function attachPostStopProbeDetails(probe, stopReason) {
     late_same_index_partial_json_suffix: lateJson.slice(-TOOL_JSON_PREVIEW_CHARS),
     late_same_index_combined_json_valid: lateJson.length > 0
       ? jsonParses(`${probe.originalPartialJson}${lateJson}`) : false,
+    post_stop_shadow_tool_count: shadowTools.length,
+    post_stop_shadow_tools: shadowTools,
   };
   return probe.error;
 }
@@ -241,6 +305,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (toolJsonFailureProbe.eventMetadata.length < TOOL_JSON_POST_STOP_MAX_EVENTS) {
       toolJsonFailureProbe.eventMetadata.push(toolLifecycleEventMetadata(parsed, payload));
     }
+    observePostStopShadowTool(toolJsonFailureProbe, parsed, payload);
     if (parsed.name === 'content_block_delta'
       && payload?.index === toolJsonFailureProbe.index
       && payload?.delta?.type === 'input_json_delta') {
@@ -422,6 +487,8 @@ export async function collectAnthropicMessageFromSse(upstream, {
             eventMetadata: [],
             lateDeltaCount: 0,
             lateJson: '',
+            shadowTools: new Map(),
+            shadowToolSummaries: [],
           };
           return;
         }
