@@ -1,9 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.34 adds bounded PDF zoom-context continuity: deterministic DIAGRAM/DENSE_PAGE and SCHEMATIC tiles now receive the whole-page overview, bounded native PDF text, and only already-completed overlapping tile observations as re-verification hints. Full prior Vision transcripts are not carried forward. V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.35 adds bounded malformed Anthropic-SSE tool JSON diagnostics so SGLang/vLLM serialization failures can be identified without repairing, retrying, or executing the malformed tool call. V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
 
+## V0.29.35 Malformed Tool JSON Diagnostic Capture
 
+V0.29.35 is diagnostic-only. When Base `/v1/messages` Anthropic SSE enters a `tool_use` / `server_tool_use` block but the concatenated `input_json_delta.partial_json` cannot be parsed at block finalization, the Proxy still fails with the existing `vllm_invalid_stream` contract. It does **not** repair the JSON, retry the model request, switch to non-stream mode, or execute the tool.
+
+A bounded WARN event `base_tool_json_invalid` is emitted with the tool block index/name/id, total JSON character and UTF-8 byte counts, number of `input_json_delta` fragments, JSON parser error position/message, whether the trimmed payload starts/ends like an object, and a structural count of top-level object candidates. To distinguish truncation, concatenated `{...}{...}` objects, escaping damage, and leaked tags, the event includes only the first and last **512 characters** of the malformed payload; the full tool input is never copied into this diagnostic event.
+
+This release intentionally does not add recovery behavior. It exists to capture the real malformed shape produced by SGLang/vLLM so a later compatibility fix can be based on evidence rather than guessed JSON repair.
 
 ## V0.29.34 PDF Zoom Context Continuity
 

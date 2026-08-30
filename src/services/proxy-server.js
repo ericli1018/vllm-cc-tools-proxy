@@ -2436,6 +2436,27 @@ export function createProxyServer(config, dependencies = {}) {
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
+      if (error?.details?.kind === 'tool_input_json_invalid') {
+        const details = error.details;
+        log(config, 'warn', 'base_tool_json_invalid', {
+          requestId,
+          code: error.code || 'vllm_invalid_stream',
+          tool_block_index: details.index,
+          tool_id: details.tool_id,
+          tool_name: details.tool_name,
+          partial_json_chars: details.partial_json_chars,
+          partial_json_bytes: details.partial_json_bytes,
+          partial_json_delta_count: details.partial_json_delta_count,
+          partial_json_starts_with_object: details.partial_json_starts_with_object,
+          partial_json_ends_with_object: details.partial_json_ends_with_object,
+          candidate_top_level_objects: details.candidate_top_level_objects,
+          json_error_position: details.json_error_position,
+          json_error_message: details.json_error_message,
+          partial_json_preview_chars: details.partial_json_preview_chars,
+          partial_json_prefix: details.partial_json_prefix,
+          partial_json_suffix: details.partial_json_suffix,
+        });
+      }
       if (typeof error.code === 'string' && error.code.startsWith('vllm_')) {
         log(config, failureLevel, 'base_upstream_request_failed', {
           requestId,

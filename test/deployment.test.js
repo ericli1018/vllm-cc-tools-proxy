@@ -681,3 +681,17 @@ test('V0.29.34 carries bounded PDF zoom context across deterministic tiles', asy
   assert.ok(changeLogEntries.includes('V0.29.34-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.34-實作與驗證報告.md'));
 });
+
+
+test('V0.29.35 ships bounded malformed tool JSON diagnostic capture without repair behavior', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /tool_input_json_invalid/);
+  assert.match(collectorSource, /TOOL_JSON_PREVIEW_CHARS = 512/);
+  assert.match(proxySource, /base_tool_json_invalid/);
+  assert.match(readme, /V0\.29\.35 Malformed Tool JSON Diagnostic Capture/);
+  assert.ok(changeLogEntries.includes('V0.29.35-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.35-實作與驗證報告.md'));
+});

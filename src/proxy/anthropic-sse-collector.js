@@ -62,14 +62,59 @@ function applyDelta(block, delta, toolJson) {
   }
 }
 
-function finalizeToolInput(block, partialJson, index) {
+const TOOL_JSON_PREVIEW_CHARS = 512;
+
+function jsonErrorPosition(error) {
+  const match = String(error?.message || '').match(/position\s+(\d+)/i);
+  return match ? Number.parseInt(match[1], 10) : null;
+}
+
+function countTopLevelObjectCandidates(value) {
+  const text = String(value || '');
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let count = 0;
+  for (const char of text) {
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') { inString = true; continue; }
+    if (char === '{') {
+      if (depth === 0) count += 1;
+      depth += 1;
+      continue;
+    }
+    if (char === '}' && depth > 0) depth -= 1;
+  }
+  return count;
+}
+
+function finalizeToolInput(block, partialJson, index, deltaCount = 0) {
   if (!partialJson) return;
   try {
     block.input = JSON.parse(partialJson);
-  } catch {
+  } catch (error) {
+    const trimmed = String(partialJson).trim();
     throw invalidStream('vLLM returned malformed tool input JSON in Anthropic SSE.', {
+      kind: 'tool_input_json_invalid',
       index,
-      partial_json_prefix: partialJson.slice(0, 200),
+      tool_id: String(block?.id || ''),
+      tool_name: String(block?.name || ''),
+      partial_json_chars: String(partialJson).length,
+      partial_json_bytes: Buffer.byteLength(String(partialJson), 'utf8'),
+      partial_json_delta_count: Number(deltaCount || 0),
+      partial_json_starts_with_object: trimmed.startsWith('{'),
+      partial_json_ends_with_object: trimmed.endsWith('}'),
+      candidate_top_level_objects: countTopLevelObjectCandidates(partialJson),
+      json_error_position: jsonErrorPosition(error),
+      json_error_message: String(error?.message || '').slice(0, 256),
+      partial_json_preview_chars: TOOL_JSON_PREVIEW_CHARS,
+      partial_json_prefix: String(partialJson).slice(0, TOOL_JSON_PREVIEW_CHARS),
+      partial_json_suffix: String(partialJson).slice(-TOOL_JSON_PREVIEW_CHARS),
     });
   }
 }
@@ -84,6 +129,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
   let message = null;
   const blocks = new Map();
   const toolJson = new Map();
+  const toolJsonDeltaCounts = new Map();
   let sawMessageStop = false;
   let firstModelEventObserved = false;
   let currentStreamPhase = 'waiting';
@@ -175,7 +221,10 @@ export async function collectAnthropicMessageFromSse(upstream, {
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
       await notifyStreamPhase({ event: parsed.name, blockType: block.type || '' });
-      if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
+      if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+        toolJson.set(index, '');
+        toolJsonDeltaCounts.set(index, 0);
+      }
       await notifyCheckpoint();
       return;
     }
@@ -214,7 +263,12 @@ export async function collectAnthropicMessageFromSse(upstream, {
       });
       const holder = { value: toolJson.get(index) || '' };
       applyDelta(block, payload?.delta, holder);
-      if (toolJson.has(index)) toolJson.set(index, holder.value);
+      if (toolJson.has(index)) {
+        toolJson.set(index, holder.value);
+        if (payload?.delta?.type === 'input_json_delta') {
+          toolJsonDeltaCounts.set(index, (toolJsonDeltaCounts.get(index) || 0) + 1);
+        }
+      }
       return;
     }
 
@@ -222,8 +276,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
       if (toolJson.has(index)) {
-        finalizeToolInput(block, toolJson.get(index), index);
+        finalizeToolInput(block, toolJson.get(index), index, toolJsonDeltaCounts.get(index) || 0);
         toolJson.delete(index);
+        toolJsonDeltaCounts.delete(index);
       }
       completedIndexes.add(index);
       if (openIndex === index) openIndex = null;
@@ -260,7 +315,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
   if (buffer.trim()) await processBlock(buffer);
 
   if (!message) throw invalidStream('vLLM Anthropic SSE ended without message_start.');
-  for (const [index, partial] of toolJson.entries()) finalizeToolInput(ensureBlock(blocks, index), partial, index);
+  for (const [index, partial] of toolJson.entries()) {
+    finalizeToolInput(ensureBlock(blocks, index), partial, index, toolJsonDeltaCounts.get(index) || 0);
+  }
   message.content = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
   message.usage = message.usage || {};
   if (!sawMessageStop) throw invalidStream('vLLM Anthropic SSE ended without message_stop.');

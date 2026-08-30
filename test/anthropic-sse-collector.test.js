@@ -73,6 +73,55 @@ test('V0.2.25.1 collector rejects malformed tool input JSON', async () => {
   });
 });
 
+test('V0.29.35 collector captures bounded malformed tool JSON shape diagnostics without repairing it', async () => {
+  const pieces = ['{\"command\":\"echo one\"}', '{\"command\":', '\"echo two\"}'];
+  const partialJson = pieces.join('');
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'diag-m', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-diag', name: 'Bash', input: {} } }),
+    ...pieces.map((partial_json) => event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json } })),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details?.kind, 'tool_input_json_invalid');
+    assert.equal(error.details?.index, 0);
+    assert.equal(error.details?.tool_id, 'tool-diag');
+    assert.equal(error.details?.tool_name, 'Bash');
+    assert.equal(error.details?.partial_json_chars, partialJson.length);
+    assert.equal(error.details?.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
+    assert.equal(error.details?.partial_json_delta_count, 3);
+    assert.equal(error.details?.partial_json_starts_with_object, true);
+    assert.equal(error.details?.partial_json_ends_with_object, true);
+    assert.equal(error.details?.candidate_top_level_objects, 2);
+    assert.equal(Number.isInteger(error.details?.json_error_position), true);
+    assert.equal(error.details?.partial_json_prefix, partialJson);
+    assert.equal(error.details?.partial_json_suffix, partialJson);
+    assert.equal(error.details?.partial_json_preview_chars <= 512, true);
+    return true;
+  });
+});
+
+test('V0.29.35 malformed tool JSON previews stay bounded for large tool arguments', async () => {
+  const partialJson = `{\"command\":\"${'x'.repeat(4000)}\"}{\"command\":\"tail\"}`;
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'diag-large', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-large', name: 'Bash', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: partialJson } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.details?.partial_json_prefix.length <= 512, true);
+    assert.equal(error.details?.partial_json_suffix.length <= 512, true);
+    assert.equal(error.details?.partial_json_chars, partialJson.length);
+    assert.equal(error.details?.candidate_top_level_objects, 2);
+    return true;
+  });
+});
+
 test('V0.2.25.1 collector surfaces Anthropic SSE error events as retryable upstream errors', async () => {
   const wire = event('error', { type: 'error', error: { type: 'overloaded_error', message: 'busy' } });
   await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
