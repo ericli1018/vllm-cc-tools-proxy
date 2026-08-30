@@ -290,3 +290,93 @@ test('V0.29.31 collector emits a bounded semantic-safe SSE fingerprint for empty
   assert.deepEqual(completed[0].event_counts, { message_start: 1, message_delta: 1, message_stop: 1 });
   assert.equal(completed[0].content_block_count, 0);
 });
+
+test('V0.29.36 collector quarantines malformed tool JSON after content_block_stop and captures a late same-index closing delta', async () => {
+  const partialJson = '{"file_path":"/tmp/report.md"';
+  const lateJson = '}';
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'post-stop-late', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-late', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: partialJson } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: lateJson } }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details?.kind, 'tool_input_json_invalid');
+    assert.equal(error.details?.index, 2);
+    assert.equal(error.details?.tool_name, 'Read');
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'message_stop');
+    assert.equal(error.details?.post_stop_probe_event_count, 3);
+    assert.deepEqual(error.details?.post_stop_probe_event_sequence, ['content_block_delta', 'message_delta', 'message_stop']);
+    assert.equal(error.details?.late_same_index_input_json_delta_count, 1);
+    assert.equal(error.details?.late_same_index_partial_json_chars, 1);
+    assert.equal(error.details?.late_same_index_partial_json_prefix, '}');
+    assert.equal(error.details?.late_same_index_partial_json_suffix, '}');
+    assert.equal(error.details?.late_same_index_combined_json_valid, true);
+    return true;
+  });
+});
+
+test('V0.29.36 collector distinguishes message_stop with no late tool JSON delta', async () => {
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'post-stop-none', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-none', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/report.md"' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'message_stop');
+    assert.equal(error.details?.post_stop_probe_event_count, 2);
+    assert.deepEqual(error.details?.post_stop_probe_event_sequence, ['message_delta', 'message_stop']);
+    assert.equal(error.details?.late_same_index_input_json_delta_count, 0);
+    assert.equal(error.details?.late_same_index_partial_json_chars, 0);
+    assert.equal(error.details?.late_same_index_combined_json_valid, false);
+    return true;
+  });
+});
+
+test('V0.29.36 post-stop probe is bounded by eight trailing SSE events when message_stop never arrives', async () => {
+  const trailing = Array.from({ length: 12 }, (_, i) => event('ping', { type: 'ping', n: i }));
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'post-stop-bound', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-bound', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/report.md"' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    ...trailing,
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'event_limit');
+    assert.equal(error.details?.post_stop_probe_event_count, 8);
+    assert.equal(error.details?.late_same_index_input_json_delta_count, 0);
+    return true;
+  });
+});
+
+test('V0.29.36 post-stop probe is bounded by 4096 trailing raw bytes', async () => {
+  const oversized = event('content_block_delta', {
+    type: 'content_block_delta', index: 7,
+    delta: { type: 'text_delta', text: 'x'.repeat(5000) },
+  });
+  const wire = [
+    event('message_start', { type: 'message_start', message: { id: 'post-stop-byte-bound', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-byte-bound', name: 'Read', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/report.md"' } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    oversized,
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'byte_limit');
+    assert.equal(error.details?.post_stop_probe_event_count, 1);
+    assert.equal(error.details?.post_stop_probe_raw_bytes >= 4096, true);
+    return true;
+  });
+});

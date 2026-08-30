@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.35', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.36', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3175,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.35/);
+  assert.match(first, /VERSION\s+0\.29\.36/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.35');
+  assert.equal(payload.version, '0.29.36');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.35/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.36/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4126,4 +4126,58 @@ test('V0.29.35 logs bounded malformed tool JSON shape from Base Anthropic SSE wi
   assert.equal(Number.isInteger(diagnostic.json_error_position), true);
   assert.equal(diagnostic.partial_json_prefix.length <= 512, true);
   assert.equal(diagnostic.partial_json_suffix.length <= 512, true);
+});
+
+test('V0.29.36 logs bounded post-stop tool delta probe without repairing or retrying the malformed tool call', async (t) => {
+  const logs = [];
+  let upstreamRequests = 0;
+  const upstream = http.createServer(async (req, res) => {
+    upstreamRequests += 1;
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.flushHeaders();
+    res.write('event: message_start\ndata: {"type":"message_start","message":{"id":"post-stop-probe","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":10,"output_tokens":0}}}\n\n');
+    res.write('event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-post-stop","name":"Read","input":{}}}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"file_path":"/tmp/report.md"' } })}\n\n`);
+    res.write('event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n');
+    res.write(`event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '}' } })}\n\n`);
+    res.write('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":1}}\n\n');
+    res.end('event: message_stop\ndata: {"type":"message_stop"}\n\n');
+  });
+  const upstreamUrl = await listen(upstream);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    usagePreflightEnabled: false,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'Read', description: 'read', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: 'read report' }],
+    }),
+  });
+  const stream = await response.text();
+  assert.match(stream, /vllm_invalid_stream/);
+  assert.equal(upstreamRequests, 1);
+
+  const invalid = logs.find((entry) => entry.event === 'base_tool_json_invalid');
+  assert.ok(invalid);
+  const probe = logs.find((entry) => entry.event === 'base_tool_json_post_stop_probe');
+  assert.ok(probe);
+  assert.equal(probe.tool_block_index, 0);
+  assert.equal(probe.tool_id, 'tool-post-stop');
+  assert.equal(probe.tool_name, 'Read');
+  assert.equal(probe.stop_reason, 'message_stop');
+  assert.equal(probe.trailing_event_count, 3);
+  assert.deepEqual(probe.trailing_event_sequence, ['content_block_delta', 'message_delta', 'message_stop']);
+  assert.equal(probe.late_same_index_input_json_delta_count, 1);
+  assert.equal(probe.late_same_index_partial_json_prefix, '}');
+  assert.equal(probe.late_same_index_combined_json_valid, true);
 });

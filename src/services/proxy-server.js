@@ -2456,6 +2456,28 @@ export function createProxyServer(config, dependencies = {}) {
           partial_json_prefix: details.partial_json_prefix,
           partial_json_suffix: details.partial_json_suffix,
         });
+        if (details.post_stop_probe_stop_reason) {
+          log(config, 'warn', 'base_tool_json_post_stop_probe', {
+            requestId,
+            code: error.code || 'vllm_invalid_stream',
+            tool_block_index: details.index,
+            tool_id: details.tool_id,
+            tool_name: details.tool_name,
+            stop_reason: details.post_stop_probe_stop_reason,
+            trailing_event_count: details.post_stop_probe_event_count,
+            trailing_raw_bytes: details.post_stop_probe_raw_bytes,
+            trailing_event_sequence: details.post_stop_probe_event_sequence,
+            max_events: details.post_stop_probe_max_events,
+            max_raw_bytes: details.post_stop_probe_max_raw_bytes,
+            late_same_index_input_json_delta_count: details.late_same_index_input_json_delta_count,
+            late_same_index_partial_json_chars: details.late_same_index_partial_json_chars,
+            late_same_index_partial_json_bytes: details.late_same_index_partial_json_bytes,
+            late_same_index_partial_json_preview_chars: details.late_same_index_partial_json_preview_chars,
+            late_same_index_partial_json_prefix: details.late_same_index_partial_json_prefix,
+            late_same_index_partial_json_suffix: details.late_same_index_partial_json_suffix,
+            late_same_index_combined_json_valid: details.late_same_index_combined_json_valid,
+          });
+        }
       }
       if (typeof error.code === 'string' && error.code.startsWith('vllm_')) {
         log(config, failureLevel, 'base_upstream_request_failed', {

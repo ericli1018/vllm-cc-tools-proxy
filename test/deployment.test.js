@@ -695,3 +695,18 @@ test('V0.29.35 ships bounded malformed tool JSON diagnostic capture without repa
   assert.ok(changeLogEntries.includes('V0.29.35-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.35-實作與驗證報告.md'));
 });
+
+
+test('V0.29.36 ships bounded post-stop tool delta probe without repair or retry behavior', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /TOOL_JSON_POST_STOP_MAX_EVENTS = 8/);
+  assert.match(collectorSource, /TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 4096/);
+  assert.match(collectorSource, /late_same_index_combined_json_valid/);
+  assert.match(proxySource, /base_tool_json_post_stop_probe/);
+  assert.match(readme, /V0\.29\.36 Post-Stop Tool Delta Probe/);
+  assert.ok(changeLogEntries.includes('V0.29.36-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.36-實作與驗證報告.md'));
+});
