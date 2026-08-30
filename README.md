@@ -1,18 +1,15 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.36 adds a bounded post-stop Anthropic-SSE tool-delta probe so SGLang ordering failures can be observed after malformed `tool_use` finalization without repairing, retrying, or executing the malformed tool call. V0.29.35 malformed-tool diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.37 extends the malformed-tool post-stop probe through later content blocks up to `message_stop` (bounded by 64 events / 16 KiB) and records structural lifecycle metadata so SGLang late tool deltas can be located without repairing, retrying, or executing the malformed tool call. V0.29.35 malformed-tool diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
 
 
-## V0.29.36 Post-Stop Tool Delta Probe
+## V0.29.37 Full Post-Stop Tool Lifecycle Probe
 
-V0.29.36 is diagnostic-only. If a `tool_use` / `server_tool_use` block reaches `content_block_stop` but its accumulated `input_json_delta.partial_json` is malformed, the collector no longer throws before observing any SSE events already queued after that stop. Instead it enters a bounded quarantine for that failed tool block and inspects trailing SSE only for evidence. The malformed tool is never repaired or executed, and the request still terminates with the existing `vllm_invalid_stream` contract.
+V0.29.37 remains diagnostic-only. When a `tool_use` / `server_tool_use` reaches `content_block_stop` with malformed accumulated `input_json_delta.partial_json`, the collector quarantines that failed block and continues observing trailing Anthropic SSE until the first of: `message_stop`, **64 trailing SSE events**, **16384 trailing raw bytes**, or stream end. This allows a same-index closing fragment that arrives after several later content blocks to be observed instead of being hidden by the former 8-event bound.
 
-The post-stop probe ends at the first of: `message_stop`, **8 trailing SSE events**, **4096 trailing raw bytes**, or upstream stream end. It records the bounded trailing event sequence and any late same-index `input_json_delta` fragments. For diagnostics only, the Proxy also reports whether appending those late fragments to the original malformed payload would form valid JSON; that parsed value is never used as tool input.
+The WARN event `base_tool_json_post_stop_probe` now includes `trailing_event_metadata`, a bounded structural lifecycle list. Entries contain only event identity and protocol metadata such as content-block index, block type, tool name/id, delta type, partial-JSON character count, and message stop reason. Text content and other tool payload bodies are not copied into this lifecycle list. Same-index late `input_json_delta` preview remains separately bounded to 512 characters.
 
-A WARN event `base_tool_json_post_stop_probe` reports the tool block index/name/id, probe stop reason, trailing event count/raw bytes/event sequence, late same-index delta count, bounded first/last **512 characters** of late JSON, and `late_same_index_combined_json_valid`. This specifically distinguishes “the closing `}` was never sent before `content_block_stop`” from “SGLang sent the closing `}` in a later delta after `content_block_stop`.”
-
-No retry, non-stream fallback, JSON sanitizer, tool repair, tool execution, routing, Vision, ToolSearch, Web, Compact, recovery, ENV, or cache-generation behavior changes are introduced.
-
+This release does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute the malformed tool call. It preserves the existing `vllm_invalid_stream` failure contract.
 
 ## V0.29.35 Malformed Tool JSON Diagnostic Capture
 

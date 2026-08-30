@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.36', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.37', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3175,7 +3175,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.36/);
+  assert.match(first, /VERSION\s+0\.29\.37/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3205,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.36');
+  assert.equal(payload.version, '0.29.37');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.36/);
+  assert.match(payload.display, /CC TOOL PROXY 0\.29\.37/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4128,7 +4128,7 @@ test('V0.29.35 logs bounded malformed tool JSON shape from Base Anthropic SSE wi
   assert.equal(diagnostic.partial_json_suffix.length <= 512, true);
 });
 
-test('V0.29.36 logs bounded post-stop tool delta probe without repairing or retrying the malformed tool call', async (t) => {
+test('V0.29.37 logs full bounded post-stop tool lifecycle probe without repairing or retrying the malformed tool call', async (t) => {
   const logs = [];
   let upstreamRequests = 0;
   const upstream = http.createServer(async (req, res) => {
@@ -4177,6 +4177,13 @@ test('V0.29.36 logs bounded post-stop tool delta probe without repairing or retr
   assert.equal(probe.stop_reason, 'message_stop');
   assert.equal(probe.trailing_event_count, 3);
   assert.deepEqual(probe.trailing_event_sequence, ['content_block_delta', 'message_delta', 'message_stop']);
+  assert.equal(probe.max_events, 64);
+  assert.equal(probe.max_raw_bytes, 16384);
+  assert.deepEqual(probe.trailing_event_metadata, [
+    { event: 'content_block_delta', index: 0, delta_type: 'input_json_delta', partial_json_chars: 1 },
+    { event: 'message_delta', stop_reason: 'tool_use' },
+    { event: 'message_stop' },
+  ]);
   assert.equal(probe.late_same_index_input_json_delta_count, 1);
   assert.equal(probe.late_same_index_partial_json_prefix, '}');
   assert.equal(probe.late_same_index_combined_json_valid, true);

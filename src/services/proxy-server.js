@@ -2467,6 +2467,7 @@ export function createProxyServer(config, dependencies = {}) {
             trailing_event_count: details.post_stop_probe_event_count,
             trailing_raw_bytes: details.post_stop_probe_raw_bytes,
             trailing_event_sequence: details.post_stop_probe_event_sequence,
+            trailing_event_metadata: details.post_stop_probe_event_metadata,
             max_events: details.post_stop_probe_max_events,
             max_raw_bytes: details.post_stop_probe_max_raw_bytes,
             late_same_index_input_json_delta_count: details.late_same_index_input_json_delta_count,

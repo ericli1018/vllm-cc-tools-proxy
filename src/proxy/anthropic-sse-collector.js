@@ -63,8 +63,8 @@ function applyDelta(block, delta, toolJson) {
 }
 
 const TOOL_JSON_PREVIEW_CHARS = 512;
-const TOOL_JSON_POST_STOP_MAX_EVENTS = 8;
-const TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 4096;
+const TOOL_JSON_POST_STOP_MAX_EVENTS = 64;
+const TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 16384;
 
 function jsonErrorPosition(error) {
   const match = String(error?.message || '').match(/position\s+(\d+)/i);
@@ -129,6 +129,30 @@ function jsonParses(value) {
   try { JSON.parse(String(value || '')); return true; } catch { return false; }
 }
 
+function postStopEventMetadata(parsed, payload) {
+  const metadata = { event: String(parsed?.name || 'message') };
+  if (Number.isInteger(payload?.index)) metadata.index = payload.index;
+  if (parsed?.name === 'content_block_start') {
+    const block = payload?.content_block;
+    if (block && typeof block === 'object') {
+      if (block.type) metadata.block_type = String(block.type);
+      if (block.name) metadata.tool_name = String(block.name);
+      if (block.id) metadata.tool_id = String(block.id);
+    }
+  } else if (parsed?.name === 'content_block_delta') {
+    const delta = payload?.delta;
+    if (delta && typeof delta === 'object') {
+      if (delta.type) metadata.delta_type = String(delta.type);
+      if (delta.type === 'input_json_delta') {
+        metadata.partial_json_chars = typeof delta.partial_json === 'string' ? delta.partial_json.length : 0;
+      }
+    }
+  } else if (parsed?.name === 'message_delta' && payload?.delta?.stop_reason) {
+    metadata.stop_reason = String(payload.delta.stop_reason);
+  }
+  return metadata;
+}
+
 function attachPostStopProbeDetails(probe, stopReason) {
   const lateJson = probe.lateJson;
   probe.error.details = {
@@ -137,6 +161,7 @@ function attachPostStopProbeDetails(probe, stopReason) {
     post_stop_probe_event_count: probe.eventCount,
     post_stop_probe_raw_bytes: probe.rawBytes,
     post_stop_probe_event_sequence: [...probe.eventSequence],
+    post_stop_probe_event_metadata: probe.eventMetadata.map((entry) => ({ ...entry })),
     post_stop_probe_max_events: TOOL_JSON_POST_STOP_MAX_EVENTS,
     post_stop_probe_max_raw_bytes: TOOL_JSON_POST_STOP_MAX_RAW_BYTES,
     late_same_index_input_json_delta_count: probe.lateDeltaCount,
@@ -187,6 +212,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
     let payload = null;
     if (parsed.data) {
       try { payload = JSON.parse(parsed.data); } catch {}
+    }
+    if (toolJsonFailureProbe.eventMetadata.length < TOOL_JSON_POST_STOP_MAX_EVENTS) {
+      toolJsonFailureProbe.eventMetadata.push(postStopEventMetadata(parsed, payload));
     }
     if (parsed.name === 'content_block_delta'
       && payload?.index === toolJsonFailureProbe.index
@@ -360,6 +388,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
             eventCount: 0,
             rawBytes: 0,
             eventSequence: [],
+            eventMetadata: [],
             lateDeltaCount: 0,
             lateJson: '',
           };

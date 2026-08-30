@@ -1,8 +1,8 @@
 a96899e951f5529311d1a92b6ee6ce1171fbab484ecaef3ed411a84e33a9e147  ./.env.example
 c25243596674d1d745ee7ef3c93b7cf72ee01b3d59702c81594c60e9ed2ce4ae  ./.gitignore
 0ad6856338f82966a546301aba13f36bd009b52959aff64cedf969571982343b  ./LICENSE
-987f7e81e8ab729f96418a68866f1292344250d866b3155f3c4adedddc923129  ./README.md
-96525926b10cc7b552ca2cab75483cfaeb08b35f3314ea5fc08145380fde190d  ./change_log/CHANGELOG.md
+78207169aed9ec801c472af52dbcc059acda111655f428c1f78420cd634369bd  ./README.md
+ad92ac6544183b07f641e73bb698bad208bba7eb89e0a6d89d8971afe1d69d05  ./change_log/CHANGELOG.md
 4ae45485d557282e1f69af6761ba2fe696caac83bcda64cec0b657e0bb1c360c  ./change_log/V0.2.10-更新說明.md
 e425f8e961ddb175d9035c190bf7255c6761a030e5ab0aa22e0599a182a2b292  ./change_log/V0.2.11-更新說明.md
 9b3771cda8082429ff32f797a8c4999c460159c2e143cf9f36abcc228aa93c01  ./change_log/V0.2.12-更新說明.md
@@ -114,6 +114,8 @@ ef045b0348df312b42b36f471f45a7f4630a66c4094263f166de7fa523a3301f  ./change_log/V
 221301a15171017e1a2b954e8c31abae0fcc0215149c5cf923384bf8ae1808cf  ./change_log/V0.29.35-更新說明.md
 bcb594300453b3a18979fc6161d4ec47042c220e4946e5d97fcd6d7b78a8f9a8  ./change_log/V0.29.36-實作與驗證報告.md
 f0932af41be4455d1f375daced9db9b588caf5f5f3c2f9313f3ea150251c9f0b  ./change_log/V0.29.36-更新說明.md
+3241e061e5fd1b31c7c05547c7c5681faa6b1de7d01f8fa11b6c59b851897626  ./change_log/V0.29.37-實作與驗證報告.md
+8b0958fcb2652b20a2c3fc75fb4aa0327747870445c5bbdbde727de86c0d352a  ./change_log/V0.29.37-更新說明.md
 b513a15d0318741939f5f6d8807961569e7de649a55cfb61afa2d8691aede5ac  ./change_log/V0.29.4-更新說明.md
 c533253b0da3ddbc548e2e0cf654e372f8280dc39fb2a2f174b2520ef38f5231  ./change_log/V0.29.5-更新說明.md
 a2d8d5cdde52ec0bd2bcf0d7c31de4df090d8fb657fa13e85961da1773786763  ./change_log/V0.29.6-更新說明.md
@@ -124,12 +126,12 @@ a2d8d5cdde52ec0bd2bcf0d7c31de4df090d8fb657fa13e85961da1773786763  ./change_log/V
 9e84b8e03e098da600fa397596999747e43a55bcaec1772b999fcfdc8fc4295b  ./change_log/V0.29.9-實作與驗證報告.md
 9881b8740fd56667ff7fdd4b76aa6e9e5cebdce9b580be8b32e4f4139206dbd5  ./change_log/V0.29.9-更新說明.md
 19f528b6ed51f713b305c4247b92c1da78635d448952f96fae46509154ad0145  ./compose.yaml
-f4ea0e231a99fd84a0be60b7a187ed83e405805a65950e0cc721965201dc57d4  ./package-lock.json
-4e2c529c2fcd946c18aaa682d1d230fd9aef32e88a3c2b6e16fa35f7f079b865  ./package.json
+f00898a50590fa871ea93e56e81339592a0bc067288a99565767e3adbe25b9c5  ./package-lock.json
+9dbcd5dd3359fb998f7b989349094ab620a2c6e968a50e1d9f7d7d75c7a9b0e7  ./package.json
 65d46256f831d339c8e7586f12f9d338193578fdf7b2ca8b3411418b0f4591cf  ./scripts/cc-tool-proxy-statusline.js
 887be3109524a8ad3253e4b01d5623aa801b5f907a3b9230c892b0d33c02ff60  ./scripts/check-syntax.js
 a5aa471572ee1f35d069f26ed0c3bb5fb0b96a69c33e9c00274c6307702c3652  ./scripts/package.sh
-408dfecbf75976de409e26e7968b4cc82c4850dce229a91e49f2d9ae87858b9c  ./scripts/verify.sh
+1bfc221a08642bcc70cca13673d3c4774b4de8d7ddc49d1babd08f372673baac  ./scripts/verify.sh
 b7dd0aed384eaf2ada8625652632faeafb2735ae468a3920cb492d2084df86de  ./src/app.js
 4c0b29903f7913663fc4a7342a039b0b4e48507a361dce5b2a3fbc03af111da3  ./src/cache/cache-key.js
 34d3935ba4f66016473752d3eb48b6b43a5a885afdeba030bc3d2217ad7a17f5  ./src/cache/document-source-cache.js
@@ -147,7 +149,7 @@ ed978437305b8d1cc3569765ad37f692a764e144cec79fc11c2d9d4ba64c83b8  ./src/concurre
 4d60d5b40a18e3630187601039e8293ef9ef49a6db6d79c3de56dafb395ce3c0  ./src/media/analysis-registry.js
 41faba2147af731474d5141498e6c096d56943f11754700f7ce134ad8f67eca7  ./src/parsers/image.js
 cf1950bcad02ad4d15b49d74c65606d87034fe1c1f5190adafb0f19ec9cf71d5  ./src/parsers/pdf.js
-e614bd79b0537b4423c3cc41205a9d5b8baed68a4cba5d401e0af4b8c1dbbf08  ./src/proxy/anthropic-sse-collector.js
+b49e93d611241cec96c03347a627f3fe60996a72490eb5563bd0f2705d8e9165  ./src/proxy/anthropic-sse-collector.js
 3d45b710e4251dd7e161f0b3932d560035bb812be4a588794c641deb52bcdf89  ./src/proxy/anthropic-sse.js
 70585b66f415670a77ba6902f0d6f97f814671a04013d3576bafbe8a69ac38ea  ./src/proxy/anthropic-usage.js
 7c7e7bfa87b80cfcbdc14b67f36e720e383d8f21a2c2747a997fe8ffe3000c5c  ./src/proxy/base-model.js
@@ -186,9 +188,9 @@ ebc0b660afb31b262a2b0b3617823c63aa6a9f96fb4c0fbc3d5f008e56139016  ./src/proxy/we
 31a81232ae81fb91095b8697175b966f9f40b421875071b3490c319cd6909fbd  ./src/services/context-compact-client.js
 0a5250b4f059be67fc58849df3c9ff2623e582904f4ad664967cd6810e3db6ab  ./src/services/continuation-state-compressor.js
 d81b95bebf8ec99f5bcadf3af4440f114d3981b389340f940cdab19b260f4214  ./src/services/final-language-repair.js
-e40073e2c350f74fdfd346c1916ed83ce24a110784e8972e84d4fb30b1f7d388  ./src/services/proxy-server.js
+db9df4e37b1cecda9fb5d8e4d1aea6e99fe2180879b5cb61ab00abc0a9346c03  ./src/services/proxy-server.js
 0ebeec63c60e3e799d99afc5b5e04fa0f92cc6e106817e769709c65808eb795b  ./src/services/web-fetch-processor.js
-599ba5eb59ca9f7586243ba498081e6e8b48e72a48c1bffc27319ee68473cc8c  ./src/version.js
+5cbde9bf421a39d5e30878354481154bcfc8ca3a4baa554d265bf502f8ce2072  ./src/version.js
 92ce1bb70585bb8f516b7ff48b5d0e2924140df5e264cd4c96cd2f1ca0d5f916  ./src/visual/asset-registry.js
 d31b04f4fe723a844293e02987abad97df0c24128fd1d4ba65ee2c7f586ff184  ./src/visual/crop-errors.js
 324889f49608e8cc212030da8a176271929f8e8fc32ffb01f238ee66e382aa4d  ./src/visual/generic-zoom.js
@@ -199,7 +201,7 @@ a2f75565f05ebf70f0b6ee1240a62181e840978b7dd3f3b67578150921f8ee04  ./src/visual/p
 94425de2de3fab39c52da642fa578b78e65e567011fb53ea65b57c91b9d6eac3  ./src/visual/pdf-zoom-context.js
 6d12ec157275103cf55d3362deb7b1d4ab7eaea634ed21a15200dec5cbdd9f8a  ./src/visual/vision-client.js
 a73eccfb6439b4b1db411bf806eb69ddae6c2a1f5304c5830ab0b4dd7e1ade6c  ./test/analysis-registry.test.js
-178b42b72a6d899f3d9486f1af938f2aa91ce3a13705e4e0b3d266cd0c0a9dda  ./test/anthropic-sse-collector.test.js
+f5b77923d5d3ec013ab693697b043d6d11a98e20f607c0187df490fb93e46551  ./test/anthropic-sse-collector.test.js
 a20a7884815f07a56ea029e68ae059964ca8bf924d84fcb0ee7c86f7c2d0f44c  ./test/anthropic-sse.test.js
 bc04596e79f7c2b8eb949731f83876f29d9f8aa8b11edbc3fd326b6d8eb27575  ./test/anthropic-usage.test.js
 f84e60d9995cb4bb765115c4fc5c88ae214e6eb37616d06138dece81939a173b  ./test/app.test.js
@@ -217,7 +219,7 @@ b5914349d57316bfed6656d7f03a4999c1880d9cfed41303cee8275dc7231768  ./test/context
 9ea9073642d3140f55338938cb02bf1006311af9766654b991d4c469d7748b9d  ./test/context-compact-detector.test.js
 9afa326493bba1e94c3f694212fe8046b711cbd762b0d4eca4e18a2cba3cfdec  ./test/continuation-state-compressor.test.js
 86bfbb42aced283856bf8247937144685bfd2cc8748e7e0a54fd9a06654506b4  ./test/continuation-state.test.js
-dde18da33ec00066f864317633bc3a2a58dcca006da9d5006de9466c4cb002ff  ./test/deployment.test.js
+7286cfa228258890e2ec3308636d2979d8b168c6189fb6016e078c0eaa36eef8  ./test/deployment.test.js
 60fea5f8a143eb74235a5c38afdf0b743191d6833b7faa4dd0ad865274d953b3  ./test/document-source-cache.test.js
 82780f45d6e50e9859b7a84cfa984f659c912205595fd03aadaba13da5d1d17a  ./test/evidence-contract.test.js
 877be4dc910b08fdbb67a11b2be8f321469941f5c646e539f16ca512438531b1  ./test/final-language-gate.test.js
@@ -252,7 +254,7 @@ f6cd834b0babbe0dbdafa4965c851bc195e8e6314e59858cbfd4f4e4fd76727a  ./test/pdf-zoo
 51ca7db075849bada5431e0eb60f2cafccf2e94968d2f918137681aac3608fd1  ./test/progress.test.js
 6596e106a0da57382fbffb2378ef7ff23d8ae6984319cabd62264385a0d5739a  ./test/protocol-diagnostic-store.test.js
 3225f521d670f5d466c570a97934b4f34181c56469f1933ffaac64d684ecb4e5  ./test/protocol-diagnostics.test.js
-8ffe1a746797bf767431b06935dadda061489be433f11cc8023fe81ec5d6c593  ./test/proxy-server.test.js
+cc5a902b5af6d2d8c480dd7a1c1179da7018b9b8f132b7238fd602f355bbbfbe  ./test/proxy-server.test.js
 4c84a39ea2927f35c4e0741a3b600bc5af58c5a7a859a2b822f66599a724809a  ./test/response-language.test.js
 1eb8af52f80bbcbc270a937155bd26dc8939a478866a77b521eab2324e7734e9  ./test/runtime-telemetry.test.js
 00d60cb9025e540ef4f6fd75606310cd792d3ef41b1c8f88e7b807e53b2355ba  ./test/server-capability-discovery.test.js
@@ -260,7 +262,7 @@ f299574f3bcd2bfbbf465fe8c9d78cbb0b8a3d522f1f29e7747bd5325c307b7c  ./test/statusl
 1529ce73f9d6824c128beb1d71cecb8f9f8f5c5df48fbe2eaafa59e367e49a4d  ./test/tool-search-core.test.js
 c8ec710ef8f04aa9c59eb6f164d4202cd8b5b7a235c1fcda0a826ebb96c10163  ./test/tool-search.test.js
 bcd83186d75c7ad49c4b0d04c13fe491ae1c079d6cf7bf63d6d308582b73d6c0  ./test/v02933-progress-localization.test.js
-9e0ed748919c6b6f7243441d0668c32d38cf0c2f0806173c6d78f843dd692bb7  ./test/version.test.js
+49bcb63f2551f7f43f0f7beb54ab074828eae120f35c0af11eea7f6f1c63e3db  ./test/version.test.js
 46dea204afa131b94b1fe06bfbca5ad1fddd995ba4ef53945e6f814f36e9afa7  ./test/vision-client.test.js
 9c0e6cf947c32dde09ff46e5a6dce9dbd258b22f0ef6cc92bf600a98e2ad5e87  ./test/vllm-busy-retry.test.js
 7e6caa6c43d0af8ebda2b95c4a9dfac84812e6aab9f0c6f23b1961520b350b6b  ./test/web-fetch-processor.test.js

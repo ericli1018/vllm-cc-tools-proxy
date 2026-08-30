@@ -342,8 +342,8 @@ test('V0.29.36 collector distinguishes message_stop with no late tool JSON delta
   });
 });
 
-test('V0.29.36 post-stop probe is bounded by eight trailing SSE events when message_stop never arrives', async () => {
-  const trailing = Array.from({ length: 12 }, (_, i) => event('ping', { type: 'ping', n: i }));
+test('V0.29.37 post-stop probe is bounded by 64 trailing SSE events when message_stop never arrives', async () => {
+  const trailing = Array.from({ length: 80 }, (_, i) => event('ping', { type: 'ping', n: i }));
   const wire = [
     event('message_start', { type: 'message_start', message: { id: 'post-stop-bound', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
     event('content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tool-bound', name: 'Read', input: {} } }),
@@ -354,16 +354,16 @@ test('V0.29.36 post-stop probe is bounded by eight trailing SSE events when mess
 
   await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
     assert.equal(error.details?.post_stop_probe_stop_reason, 'event_limit');
-    assert.equal(error.details?.post_stop_probe_event_count, 8);
+    assert.equal(error.details?.post_stop_probe_event_count, 64);
     assert.equal(error.details?.late_same_index_input_json_delta_count, 0);
     return true;
   });
 });
 
-test('V0.29.36 post-stop probe is bounded by 4096 trailing raw bytes', async () => {
+test('V0.29.37 post-stop probe is bounded by 16384 trailing raw bytes', async () => {
   const oversized = event('content_block_delta', {
     type: 'content_block_delta', index: 7,
-    delta: { type: 'text_delta', text: 'x'.repeat(5000) },
+    delta: { type: 'text_delta', text: 'x'.repeat(17000) },
   });
   const wire = [
     event('message_start', { type: 'message_start', message: { id: 'post-stop-byte-bound', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
@@ -376,7 +376,56 @@ test('V0.29.36 post-stop probe is bounded by 4096 trailing raw bytes', async () 
   await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
     assert.equal(error.details?.post_stop_probe_stop_reason, 'byte_limit');
     assert.equal(error.details?.post_stop_probe_event_count, 1);
-    assert.equal(error.details?.post_stop_probe_raw_bytes >= 4096, true);
+    assert.equal(error.details?.post_stop_probe_raw_bytes >= 16384, true);
+    return true;
+  });
+});
+
+
+test('V0.29.37 post-stop probe drains across later blocks to message_stop and captures bounded lifecycle metadata', async () => {
+  const malformed = '{"query":"top world news"';
+  const events = [
+    event('message_start', { type: 'message_start', message: { id: 'post-stop-lifecycle', type: 'message', role: 'assistant', model: 'm', content: [], usage: {} } }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: { type: 'tool_use', id: 'tool-search-2', name: 'WebSearch', input: {} } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: malformed } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 2 }),
+  ];
+  // Eight events are intentionally placed before the late same-index closing brace.
+  for (let index = 3; index <= 4; index += 1) {
+    events.push(event('content_block_start', { type: 'content_block_start', index, content_block: { type: 'tool_use', id: `tool-${index}`, name: 'Read', input: {} } }));
+    events.push(event('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: `{"file_path":"/tmp/${index}.md"}` } }));
+    events.push(event('content_block_stop', { type: 'content_block_stop', index }));
+  }
+  events.push(event('content_block_start', { type: 'content_block_start', index: 5, content_block: { type: 'text', text: '' } }));
+  events.push(event('content_block_delta', { type: 'content_block_delta', index: 5, delta: { type: 'text_delta', text: 'continuing' } }));
+  events.push(event('content_block_delta', { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '}' } }));
+  events.push(event('content_block_stop', { type: 'content_block_stop', index: 5 }));
+  events.push(event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } }));
+  events.push(event('message_stop', { type: 'message_stop' }));
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([events.join('')])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details?.post_stop_probe_stop_reason, 'message_stop');
+    assert.equal(error.details?.late_same_index_input_json_delta_count, 1);
+    assert.equal(error.details?.late_same_index_partial_json_prefix, '}');
+    assert.equal(error.details?.late_same_index_combined_json_valid, true);
+    assert.equal(error.details?.post_stop_probe_event_count > 8, true);
+    assert.equal(error.details?.post_stop_probe_max_events, 64);
+    assert.equal(error.details?.post_stop_probe_max_raw_bytes, 16384);
+    const lifecycle = error.details?.post_stop_probe_event_metadata;
+    assert.ok(Array.isArray(lifecycle));
+    assert.equal(lifecycle.length, error.details?.post_stop_probe_event_count);
+    assert.deepEqual(lifecycle[0], {
+      event: 'content_block_start', index: 3, block_type: 'tool_use', tool_name: 'Read', tool_id: 'tool-3',
+    });
+    assert.deepEqual(lifecycle[1], {
+      event: 'content_block_delta', index: 3, delta_type: 'input_json_delta', partial_json_chars: 25,
+    });
+    const late = lifecycle.find((entry) => entry.event === 'content_block_delta' && entry.index === 2);
+    assert.deepEqual(late, {
+      event: 'content_block_delta', index: 2, delta_type: 'input_json_delta', partial_json_chars: 1,
+    });
+    assert.equal(lifecycle.at(-1)?.event, 'message_stop');
     return true;
   });
 });
