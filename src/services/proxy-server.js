@@ -842,16 +842,17 @@ export function createProxyServer(config, dependencies = {}) {
         round_received_bytes: receivedThisRound,
       });
     };
-    const onModelSemanticDelta = async ({ bytes = 0, type = '' } = {}) => {
-      const value = Number(bytes);
-      if (!Number.isFinite(value) || value <= 0) return;
-      modelOutputBytes += value;
+    const onModelSemanticDelta = async ({ bytes = 0, type = '', value: semanticValue = '' } = {}) => {
+      const byteCount = Number(bytes);
+      if (!Number.isFinite(byteCount) || byteCount <= 0) return;
+      modelOutputBytes += byteCount;
       lastModelOutputDeltaAt = Date.now();
-      runtimeTelemetry.observeModelDelta(requestId, value, lastModelOutputDeltaAt);
+      runtimeTelemetry.observeModelDelta(requestId, byteCount, lastModelOutputDeltaAt);
+      runtimeTelemetry.observePreviewDelta(requestId, type, semanticValue, lastModelOutputDeltaAt);
       log(config, 'debug', 'model_semantic_delta_observed', {
         requestId,
         delta_type: type,
-        delta_bytes: value,
+        delta_bytes: byteCount,
         model_output_bytes: modelOutputBytes,
       });
       if (modelRoundProgress.active && !modelRoundProgress.firstSemanticDeltaNotified && progress) {
@@ -863,7 +864,7 @@ export function createProxyServer(config, dependencies = {}) {
             model_phase: modelRoundProgress.phase || 'waiting',
             round: modelRoundProgress.round || 1,
             delta_type: type,
-            delta_bytes: value,
+            delta_bytes: byteCount,
             round_model_output_bytes: getCurrentRoundResponseBytes(),
           },
         });
@@ -1139,6 +1140,11 @@ export function createProxyServer(config, dependencies = {}) {
           tool_name: snapshot.toolName || '',
           detail: snapshot.detail || '',
           pulse_index: snapshot.pulseIndex || 0,
+          preview: snapshot.previewPhase && (snapshot.previewPreviousLine || snapshot.previewCurrentLine) ? {
+            phase: snapshot.previewPhase,
+            previous_line: snapshot.previewPreviousLine || '',
+            current_line: snapshot.previewCurrentLine || '',
+          } : null,
           proxy: {
             sessions: proxySnapshot.sessions || 0,
             active: proxySnapshot.active || 0,
@@ -2436,66 +2442,6 @@ export function createProxyServer(config, dependencies = {}) {
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
-      if (error?.details?.kind === 'tool_input_json_invalid') {
-        const details = error.details;
-        log(config, 'warn', 'base_tool_json_invalid', {
-          requestId,
-          code: error.code || 'vllm_invalid_stream',
-          tool_block_index: details.index,
-          tool_id: details.tool_id,
-          tool_name: details.tool_name,
-          partial_json_chars: details.partial_json_chars,
-          partial_json_bytes: details.partial_json_bytes,
-          partial_json_delta_count: details.partial_json_delta_count,
-          partial_json_starts_with_object: details.partial_json_starts_with_object,
-          partial_json_ends_with_object: details.partial_json_ends_with_object,
-          candidate_top_level_objects: details.candidate_top_level_objects,
-          json_error_position: details.json_error_position,
-          json_error_message: details.json_error_message,
-          partial_json_preview_chars: details.partial_json_preview_chars,
-          partial_json_prefix: details.partial_json_prefix,
-          partial_json_suffix: details.partial_json_suffix,
-        });
-        if (details.pre_stop_probe_event_count) {
-          log(config, 'warn', 'base_tool_json_pre_stop_probe', {
-            requestId,
-            code: error.code || 'vllm_invalid_stream',
-            tool_block_index: details.index,
-            tool_id: details.tool_id,
-            tool_name: details.tool_name,
-            event_count: details.pre_stop_probe_event_count,
-            event_sequence: details.pre_stop_probe_event_sequence,
-            event_metadata: details.pre_stop_probe_event_metadata,
-            max_events: details.pre_stop_probe_max_events,
-            truncated: details.pre_stop_probe_truncated,
-          });
-        }
-        if (details.post_stop_probe_stop_reason) {
-          log(config, 'warn', 'base_tool_json_post_stop_probe', {
-            requestId,
-            code: error.code || 'vllm_invalid_stream',
-            tool_block_index: details.index,
-            tool_id: details.tool_id,
-            tool_name: details.tool_name,
-            stop_reason: details.post_stop_probe_stop_reason,
-            trailing_event_count: details.post_stop_probe_event_count,
-            trailing_raw_bytes: details.post_stop_probe_raw_bytes,
-            trailing_event_sequence: details.post_stop_probe_event_sequence,
-            trailing_event_metadata: details.post_stop_probe_event_metadata,
-            max_events: details.post_stop_probe_max_events,
-            max_raw_bytes: details.post_stop_probe_max_raw_bytes,
-            late_same_index_input_json_delta_count: details.late_same_index_input_json_delta_count,
-            late_same_index_partial_json_chars: details.late_same_index_partial_json_chars,
-            late_same_index_partial_json_bytes: details.late_same_index_partial_json_bytes,
-            late_same_index_partial_json_preview_chars: details.late_same_index_partial_json_preview_chars,
-            late_same_index_partial_json_prefix: details.late_same_index_partial_json_prefix,
-            late_same_index_partial_json_suffix: details.late_same_index_partial_json_suffix,
-            late_same_index_combined_json_valid: details.late_same_index_combined_json_valid,
-            shadow_tool_count: details.post_stop_shadow_tool_count,
-            shadow_tools: details.post_stop_shadow_tools,
-          });
-        }
-      }
       if (typeof error.code === 'string' && error.code.startsWith('vllm_')) {
         log(config, failureLevel, 'base_upstream_request_failed', {
           requestId,

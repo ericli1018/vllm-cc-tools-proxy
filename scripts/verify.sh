@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.39'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.39'
+test "$(node -p "require('./package.json').version")" = '0.29.35'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.35'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.39'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.35'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1083,48 +1083,17 @@ node --test test/pdf-zoom-context.test.js
 node --test test/pdf-parser.test.js --test-name-pattern='V0.29.34'
 
 
-# V0.29.35 Malformed Tool JSON Diagnostic Capture
+# V0.29.35 Two-Line Streaming Status Preview
 test -f change_log/V0.29.35-更新說明.md
 test -f change_log/V0.29.35-實作與驗證報告.md
-grep -Fq 'V0.29.35 Malformed Tool JSON Diagnostic Capture' README.md
-grep -Fq 'TOOL_JSON_PREVIEW_CHARS = 512' src/proxy/anthropic-sse-collector.js
-grep -Fq "kind: 'tool_input_json_invalid'" src/proxy/anthropic-sse-collector.js
-grep -Fq "'base_tool_json_invalid'" src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.35' test/anthropic-sse-collector.test.js
-node --test --test-name-pattern='V0.29.35' test/proxy-server.test.js
-
-
-# V0.29.37 Full Post-Stop Tool Lifecycle Probe
-test -f change_log/V0.29.37-更新說明.md
-test -f change_log/V0.29.37-實作與驗證報告.md
-grep -Fq 'V0.29.37 Full Post-Stop Tool Lifecycle Probe' README.md
-grep -Fq 'TOOL_JSON_POST_STOP_MAX_EVENTS = 64' src/proxy/anthropic-sse-collector.js
-grep -Fq 'TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 16384' src/proxy/anthropic-sse-collector.js
-grep -Fq 'post_stop_probe_event_metadata' src/proxy/anthropic-sse-collector.js
-grep -Fq 'late_same_index_combined_json_valid' src/proxy/anthropic-sse-collector.js
-grep -Fq 'trailing_event_metadata' src/services/proxy-server.js
-grep -Fq "'base_tool_json_post_stop_probe'" src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.37' test/anthropic-sse-collector.test.js
-node --test --test-name-pattern='V0.29.37' test/proxy-server.test.js
-# V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic
-test -f change_log/V0.29.38-更新說明.md
-test -f change_log/V0.29.38-實作與驗證報告.md
-grep -Fq 'V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic' README.md
-grep -Fq 'TOOL_JSON_PRE_STOP_MAX_EVENTS = 64' src/proxy/anthropic-sse-collector.js
-grep -Fq 'pre_stop_probe_event_metadata' src/proxy/anthropic-sse-collector.js
-grep -Fq 'base_tool_json_pre_stop_probe' src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.38' test/anthropic-sse-collector.test.js
-node --test --test-name-pattern='V0.29.38' test/proxy-server.test.js
-node --test --test-name-pattern='V0.29.38' test/deployment.test.js test/version.test.js
-
-
-# V0.29.39 Trailing Tool Shadow Validation
-test -f change_log/V0.29.39-更新說明.md
-test -f change_log/V0.29.39-實作與驗證報告.md
-grep -Fq 'V0.29.39 Trailing Tool Shadow Validation' README.md
-grep -Fq 'summarizePostStopShadowTool' src/proxy/anthropic-sse-collector.js
-grep -Fq 'post_stop_shadow_tools' src/proxy/anthropic-sse-collector.js
-grep -Fq 'shadow_tools: details.post_stop_shadow_tools' src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.39' test/anthropic-sse-collector.test.js
-node --test --test-name-pattern='V0.29.39' test/proxy-server.test.js
-node --test --test-name-pattern='V0.29.39' test/deployment.test.js test/version.test.js
+grep -Fq 'V0.29.35 Two-Line Streaming Status Preview' README.md
+grep -Fq 'value: semanticValue' src/proxy/anthropic-sse-collector.js
+grep -Fq 'observePreviewDelta' src/proxy/runtime-telemetry.js
+grep -Fq 'PREVIEW_LINE_MAX_CHARS = 2048' src/proxy/runtime-telemetry.js
+grep -Fq 'previewPreviousLine' src/services/proxy-server.js
+grep -Fq "const cursor = '▌'" scripts/cc-tool-proxy-statusline.js
+grep -Fq 'dropLeftColumns' scripts/cc-tool-proxy-statusline.js
+grep -Fq 'process.env.COLUMNS' scripts/cc-tool-proxy-statusline.js
+node --test test/statusline-client.test.js test/runtime-telemetry.test.js test/anthropic-sse-collector.test.js
+node --test test/proxy-server.test.js --test-name-pattern='V0.29.35 session status exposes'
+node --test test/deployment.test.js --test-name-pattern='V0.29.35 adds a bounded two-line semantic status preview'

@@ -1,40 +1,35 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local Base model servers. V0.29.39 adds payload-free trailing-tool shadow validation inside the existing post-stop quarantine so later tool blocks can be compared structurally (for example, malformed `Read` versus valid `Bash`) without executing or repairing them. V0.29.38 offending-tool pre-stop lifecycle diagnostics remain intact. V0.29.37 full post-stop lifecycle probing, V0.29.35 malformed-tool shape diagnostics, V0.29.34 PDF zoom-context continuity, V0.29.33 neutral timestamped progress, V0.29.32 clean Native Vision raw-bypass progress, V0.29.31 empty-end-turn recovery, raw image passthrough, PDF/technical Proxy Vision, local ToolSearch, WebSearch/WebFetch, Context Compact liveness, and the existing stall-recovery contract remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.35 adds a client-rendered second-row statusLine semantic preview: thinking and response streams are tracked independently, logical-line changes use a `▌` PRE→CURRENT wipe overlay without carriage-return/ANSI cursor control, CJK width is terminal-cell aware, and tool JSON is excluded. V0.29.34 bounded PDF zoom-context continuity, V0.29.33 neutral timestamped progress, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
 
-## V0.29.39 Trailing Tool Shadow Validation
-
-V0.29.39 remains diagnostic-only. After an offending tool block fails JSON parsing and enters the existing V0.29.37 post-stop quarantine, every later `tool_use` / `server_tool_use` block observed before the bounded probe ends is shadow-assembled from its `input_json_delta` fragments. The shadow is never executed or forwarded as a recovered tool call.
-
-The existing `base_tool_json_post_stop_probe` WARN now includes `shadow_tool_count` and `shadow_tools`. Each shadow summary contains only structural metadata: block index, tool name/id, input-JSON delta count, character/byte counts, whether the JSON starts/ends like an object, top-level object candidate count, JSON validity/error position, and whether `content_block_stop` was observed. The actual `file_path`, shell command, or other tool payload is not copied into the shadow summary.
-
-This makes the SGLang failure pattern directly observable: later `Read` blocks can be shown as `json_valid=false / partial_json_ends_with_object=false` while a later `Bash` in the same response can independently validate as complete JSON. V0.29.39 still does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute quarantined tools; the final failure remains `vllm_invalid_stream`.
 
 
-## V0.29.38 Offending Tool Pre-Stop Lifecycle Diagnostic
+## V0.29.35 Two-Line Streaming Status Preview
 
-V0.29.38 remains diagnostic-only. For each open `tool_use` / `server_tool_use` block, the collector records a bounded structural lifecycle from `content_block_start` through every delta up to `content_block_stop`. If accumulated `input_json_delta.partial_json` is malformed at stop time, that lifecycle is attached to the existing error and emitted as WARN event `base_tool_json_pre_stop_probe`.
+V0.29.35 keeps the existing first-row `◆ CC TOOL PROXY ...` runtime telemetry and adds an optional second statusLine row with the latest bounded model semantic preview:
 
-The lifecycle is capped at **64 events** and records only protocol metadata: event name, content-block index, block type, tool name/id, delta type, and `partial_json_chars` for `input_json_delta`. It does **not** copy `text_delta` content or tool payload bodies. This lets operators distinguish a truly missing closing fragment from a fragment misrouted as `text_delta` / another delta type without widening sensitive log exposure.
+```text
+◆ CC TOOL PROXY 0.29.35 │ ▦ 1   ▶ 1   ⋯ 0 │ ◓ 思考中 │ 45s │ 11.26 KB │ 278 B/s
+↳ 這把管理方向性講清楚了。我重新整理管理方向的圖，注▌
+```
 
-V0.29.37 post-stop draining remains unchanged at `message_stop` / 64 events / 16384 raw bytes. V0.29.38 still does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute the malformed tool call; the final error remains `vllm_invalid_stream`.
+When a new logical line begins, the client renders a complete replacement frame instead of emitting terminal cursor controls. `CURRENT` overlays `PRE` from the left and `▌` marks the wipe boundary:
 
-## V0.29.37 Full Post-Stop Tool Lifecycle Probe
+```text
+↳ 我重新整▌方向性講清楚了。我重新整理管理方向的圖，注意這與前面
+↳ 我重新整理管理方▌楚了。我重新整理管理方向的圖，注意這與前面
+```
 
-V0.29.37 remains diagnostic-only. When a `tool_use` / `server_tool_use` reaches `content_block_stop` with malformed accumulated `input_json_delta.partial_json`, the collector quarantines that failed block and continues observing trailing Anthropic SSE until the first of: `message_stop`, **64 trailing SSE events**, **16384 trailing raw bytes**, or stream end. This allows a same-index closing fragment that arrives after several later content blocks to be observed instead of being hidden by the former 8-event bound.
+The renderer never uses `\r`, cursor-up or erase-line ANSI sequences. Thinking and response channels are isolated; a response line never overlays a prior thinking line. `input_json_delta` / tool arguments are never previewed. New model rounds clear preview state. Proxy telemetry retains at most 2048 code points for PRE and CURRENT independently.
 
-The WARN event `base_tool_json_post_stop_probe` now includes `trailing_event_metadata`, a bounded structural lifecycle list. Entries contain only event identity and protocol metadata such as content-block index, block type, tool name/id, delta type, partial-JSON character count, and message stop reason. Text content and other tool payload bodies are not copied into this lifecycle list. Same-index late `input_json_delta` preview remains separately bounded to 512 characters.
+The statusLine client uses local `COLUMNS` to keep the second row bounded (120-column fallback) and computes CJK/wide Unicode width in terminal cells instead of JavaScript string length. If CURRENT itself becomes wider than one row, preview switches to tail-follow mode:
 
-This release does **not** repair malformed JSON, retry the model, switch to non-stream mode, or execute the malformed tool call. It preserves the existing `vllm_invalid_stream` failure contract.
+```text
+↳ …重新整理管理方向的圖，注意這與前面的設計其實是不同層次▌
+```
 
-## V0.29.35 Malformed Tool JSON Diagnostic Capture
-
-V0.29.35 is diagnostic-only. When Base `/v1/messages` Anthropic SSE enters a `tool_use` / `server_tool_use` block but the concatenated `input_json_delta.partial_json` cannot be parsed at block finalization, the Proxy still fails with the existing `vllm_invalid_stream` contract. It does **not** repair the JSON, retry the model request, switch to non-stream mode, or execute the tool.
-
-A bounded WARN event `base_tool_json_invalid` is emitted with the tool block index/name/id, total JSON character and UTF-8 byte counts, number of `input_json_delta` fragments, JSON parser error position/message, whether the trimmed payload starts/ends like an object, and a structural count of top-level object candidates. To distinguish truncation, concatenated `{...}{...}` objects, escaping damage, and leaked tags, the event includes only the first and last **512 characters** of the malformed payload; the full tool input is never copied into this diagnostic event.
-
-This release intentionally does not add recovery behavior. It exists to capture the real malformed shape produced by SGLang/vLLM so a later compatibility fix can be based on evidence rather than guessed JSON repair.
+`GET /cc-tool-proxy/status/<session-id>` now includes a bounded `preview` object with `phase`, `previous_line`, and `current_line`. This is intentionally content-bearing semantic preview telemetry from V0.29.35 onward; prompts, tool JSON, API keys and Processor source content remain excluded, and polling still never invokes Base vLLM or an auxiliary model. First-row status telemetry remains usable if a Claude Code/TUI build suppresses multi-line statusLine output. No new ENV variables are introduced; cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.34 PDF Zoom Context Continuity
 
@@ -670,7 +665,7 @@ No new ENV variables are added. Localization remains unchanged for `zh-TW`, `zh-
 
 V0.2.28.16 uses two independent progress channels. The existing `PROGRESS_HEARTBEAT_MS` semantic heartbeat remains enabled (default 30000 ms) and continues to append visible progress lines inside the Claude response stream. This preserves the existing long-request liveness behavior even if the native status line is disabled, unavailable, or blocked by Claude Code trust settings.
 
-The optional native status line reads per-session, content-free telemetry from `GET /cc-tool-proxy/status/<session-id>`. The endpoint exposes only phase, elapsed time, byte/rate counters, busy attempt, short processor/tool labels, locale, and Proxy version. It never exposes prompts, model response text, tool arguments, API keys, or Processor source content, and polling the endpoint never calls Base vLLM or any auxiliary model.
+The optional native status line reads per-session telemetry from `GET /cc-tool-proxy/status/<session-id>`. V0.2.28.16 originally exposed content-free phase/elapsed/byte telemetry only; V0.29.35 intentionally adds a bounded thinking/response preview (`previous_line` + `current_line`) for the optional second statusLine row. Prompts, tool arguments/JSON, API keys, and Processor source content remain excluded, and polling the endpoint never calls Base vLLM or any auxiliary model.
 
 Install the bundled client on the Claude Code host:
 

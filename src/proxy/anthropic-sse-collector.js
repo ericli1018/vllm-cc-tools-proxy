@@ -62,206 +62,16 @@ function applyDelta(block, delta, toolJson) {
   }
 }
 
-const TOOL_JSON_PREVIEW_CHARS = 512;
-const TOOL_JSON_PRE_STOP_MAX_EVENTS = 64;
-const TOOL_JSON_POST_STOP_MAX_EVENTS = 64;
-const TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 16384;
-
-function jsonErrorPosition(error) {
-  const match = String(error?.message || '').match(/position\s+(\d+)/i);
-  return match ? Number.parseInt(match[1], 10) : null;
-}
-
-function countTopLevelObjectCandidates(value) {
-  const text = String(value || '');
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  let count = 0;
-  for (const char of text) {
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (char === '\\') escaped = true;
-      else if (char === '"') inString = false;
-      continue;
-    }
-    if (char === '"') { inString = true; continue; }
-    if (char === '{') {
-      if (depth === 0) count += 1;
-      depth += 1;
-      continue;
-    }
-    if (char === '}' && depth > 0) depth -= 1;
-  }
-  return count;
-}
-
-function finalizeToolInput(block, partialJson, index, deltaCount = 0) {
+function finalizeToolInput(block, partialJson, index) {
   if (!partialJson) return;
   try {
     block.input = JSON.parse(partialJson);
-  } catch (error) {
-    const trimmed = String(partialJson).trim();
+  } catch {
     throw invalidStream('vLLM returned malformed tool input JSON in Anthropic SSE.', {
-      kind: 'tool_input_json_invalid',
       index,
-      tool_id: String(block?.id || ''),
-      tool_name: String(block?.name || ''),
-      partial_json_chars: String(partialJson).length,
-      partial_json_bytes: Buffer.byteLength(String(partialJson), 'utf8'),
-      partial_json_delta_count: Number(deltaCount || 0),
-      partial_json_starts_with_object: trimmed.startsWith('{'),
-      partial_json_ends_with_object: trimmed.endsWith('}'),
-      candidate_top_level_objects: countTopLevelObjectCandidates(partialJson),
-      json_error_position: jsonErrorPosition(error),
-      json_error_message: String(error?.message || '').slice(0, 256),
-      partial_json_preview_chars: TOOL_JSON_PREVIEW_CHARS,
-      partial_json_prefix: String(partialJson).slice(0, TOOL_JSON_PREVIEW_CHARS),
-      partial_json_suffix: String(partialJson).slice(-TOOL_JSON_PREVIEW_CHARS),
+      partial_json_prefix: partialJson.slice(0, 200),
     });
   }
-}
-
-function isToolInputJsonInvalid(error) {
-  return error?.code === 'vllm_invalid_stream' && error?.details?.kind === 'tool_input_json_invalid';
-}
-
-function jsonParses(value) {
-  try { JSON.parse(String(value || '')); return true; } catch { return false; }
-}
-
-function toolLifecycleEventMetadata(parsed, payload) {
-  const metadata = { event: String(parsed?.name || 'message') };
-  if (Number.isInteger(payload?.index)) metadata.index = payload.index;
-  if (parsed?.name === 'content_block_start') {
-    const block = payload?.content_block;
-    if (block && typeof block === 'object') {
-      if (block.type) metadata.block_type = String(block.type);
-      if (block.name) metadata.tool_name = String(block.name);
-      if (block.id) metadata.tool_id = String(block.id);
-    }
-  } else if (parsed?.name === 'content_block_delta') {
-    const delta = payload?.delta;
-    if (delta && typeof delta === 'object') {
-      if (delta.type) metadata.delta_type = String(delta.type);
-      if (delta.type === 'input_json_delta') {
-        metadata.partial_json_chars = typeof delta.partial_json === 'string' ? delta.partial_json.length : 0;
-      }
-    }
-  } else if (parsed?.name === 'message_delta' && payload?.delta?.stop_reason) {
-    metadata.stop_reason = String(payload.delta.stop_reason);
-  }
-  return metadata;
-}
-
-function appendBoundedToolLifecycle(lifecycle, parsed, payload) {
-  if (!lifecycle || lifecycle.eventCount >= TOOL_JSON_PRE_STOP_MAX_EVENTS) {
-    if (lifecycle) lifecycle.truncated = true;
-    return;
-  }
-  lifecycle.eventCount += 1;
-  lifecycle.eventSequence.push(String(parsed?.name || 'message'));
-  lifecycle.eventMetadata.push(toolLifecycleEventMetadata(parsed, payload));
-}
-
-function attachPreStopProbeDetails(error, lifecycle) {
-  if (!error || !lifecycle) return error;
-  error.details = {
-    ...(error.details || {}),
-    pre_stop_probe_event_count: lifecycle.eventCount,
-    pre_stop_probe_event_sequence: [...lifecycle.eventSequence],
-    pre_stop_probe_event_metadata: lifecycle.eventMetadata.map((entry) => ({ ...entry })),
-    pre_stop_probe_max_events: TOOL_JSON_PRE_STOP_MAX_EVENTS,
-    pre_stop_probe_truncated: Boolean(lifecycle.truncated),
-  };
-  return error;
-}
-
-function summarizePostStopShadowTool(shadow, { blockStopped = false } = {}) {
-  const partialJson = String(shadow?.partialJson || '');
-  const trimmed = partialJson.trim();
-  let jsonValid = false;
-  let parseErrorPosition = null;
-  try {
-    JSON.parse(partialJson);
-    jsonValid = true;
-  } catch (error) {
-    parseErrorPosition = jsonErrorPosition(error);
-  }
-  return {
-    index: shadow?.index,
-    tool_id: String(shadow?.toolId || ''),
-    tool_name: String(shadow?.toolName || ''),
-    input_json_delta_count: Number(shadow?.deltaCount || 0),
-    partial_json_chars: partialJson.length,
-    partial_json_bytes: Buffer.byteLength(partialJson, 'utf8'),
-    partial_json_starts_with_object: trimmed.startsWith('{'),
-    partial_json_ends_with_object: trimmed.endsWith('}'),
-    candidate_top_level_objects: countTopLevelObjectCandidates(partialJson),
-    json_valid: jsonValid,
-    json_error_position: jsonValid ? null : parseErrorPosition,
-    block_stopped: Boolean(blockStopped),
-  };
-}
-
-function observePostStopShadowTool(probe, parsed, payload) {
-  const index = payload?.index;
-  if (!Number.isInteger(index) || index === probe.index) return;
-
-  if (parsed?.name === 'content_block_start') {
-    const block = payload?.content_block;
-    if (block?.type === 'tool_use' || block?.type === 'server_tool_use') {
-      probe.shadowTools.set(index, {
-        index,
-        toolId: String(block.id || ''),
-        toolName: String(block.name || ''),
-        partialJson: '',
-        deltaCount: 0,
-      });
-    }
-    return;
-  }
-
-  const shadow = probe.shadowTools.get(index);
-  if (!shadow) return;
-  if (parsed?.name === 'content_block_delta' && payload?.delta?.type === 'input_json_delta') {
-    shadow.partialJson += typeof payload.delta.partial_json === 'string' ? payload.delta.partial_json : '';
-    shadow.deltaCount += 1;
-    return;
-  }
-  if (parsed?.name === 'content_block_stop') {
-    probe.shadowToolSummaries.push(summarizePostStopShadowTool(shadow, { blockStopped: true }));
-    probe.shadowTools.delete(index);
-  }
-}
-
-function attachPostStopProbeDetails(probe, stopReason) {
-  const lateJson = probe.lateJson;
-  const shadowTools = [
-    ...probe.shadowToolSummaries,
-    ...[...probe.shadowTools.values()].map((shadow) => summarizePostStopShadowTool(shadow, { blockStopped: false })),
-  ].sort((a, b) => Number(a.index || 0) - Number(b.index || 0));
-  probe.error.details = {
-    ...(probe.error.details || {}),
-    post_stop_probe_stop_reason: stopReason,
-    post_stop_probe_event_count: probe.eventCount,
-    post_stop_probe_raw_bytes: probe.rawBytes,
-    post_stop_probe_event_sequence: [...probe.eventSequence],
-    post_stop_probe_event_metadata: probe.eventMetadata.map((entry) => ({ ...entry })),
-    post_stop_probe_max_events: TOOL_JSON_POST_STOP_MAX_EVENTS,
-    post_stop_probe_max_raw_bytes: TOOL_JSON_POST_STOP_MAX_RAW_BYTES,
-    late_same_index_input_json_delta_count: probe.lateDeltaCount,
-    late_same_index_partial_json_chars: lateJson.length,
-    late_same_index_partial_json_bytes: Buffer.byteLength(lateJson, 'utf8'),
-    late_same_index_partial_json_preview_chars: TOOL_JSON_PREVIEW_CHARS,
-    late_same_index_partial_json_prefix: lateJson.slice(0, TOOL_JSON_PREVIEW_CHARS),
-    late_same_index_partial_json_suffix: lateJson.slice(-TOOL_JSON_PREVIEW_CHARS),
-    late_same_index_combined_json_valid: lateJson.length > 0
-      ? jsonParses(`${probe.originalPartialJson}${lateJson}`) : false,
-    post_stop_shadow_tool_count: shadowTools.length,
-    post_stop_shadow_tools: shadowTools,
-  };
-  return probe.error;
 }
 
 export async function collectAnthropicMessageFromSse(upstream, {
@@ -274,8 +84,6 @@ export async function collectAnthropicMessageFromSse(upstream, {
   let message = null;
   const blocks = new Map();
   const toolJson = new Map();
-  const toolJsonDeltaCounts = new Map();
-  const toolJsonLifecycles = new Map();
   let sawMessageStop = false;
   let firstModelEventObserved = false;
   let currentStreamPhase = 'waiting';
@@ -284,46 +92,6 @@ export async function collectAnthropicMessageFromSse(upstream, {
   const eventCounts = Object.create(null);
   const eventSequence = [];
   const MAX_EVENT_FINGERPRINT_ITEMS = 32;
-  let toolJsonFailureProbe = null;
-
-  const finishToolJsonPostStopProbe = (stopReason) => {
-    throw attachPostStopProbeDetails(toolJsonFailureProbe, stopReason);
-  };
-
-  const observeToolJsonPostStopProbe = (rawBlock) => {
-    const parsed = parseSseBlock(rawBlock);
-    toolJsonFailureProbe.eventCount += 1;
-    toolJsonFailureProbe.rawBytes += Buffer.byteLength(String(rawBlock || ''), 'utf8');
-    if (toolJsonFailureProbe.eventSequence.length < TOOL_JSON_POST_STOP_MAX_EVENTS) {
-      toolJsonFailureProbe.eventSequence.push(parsed.name);
-    }
-
-    let payload = null;
-    if (parsed.data) {
-      try { payload = JSON.parse(parsed.data); } catch {}
-    }
-    if (toolJsonFailureProbe.eventMetadata.length < TOOL_JSON_POST_STOP_MAX_EVENTS) {
-      toolJsonFailureProbe.eventMetadata.push(toolLifecycleEventMetadata(parsed, payload));
-    }
-    observePostStopShadowTool(toolJsonFailureProbe, parsed, payload);
-    if (parsed.name === 'content_block_delta'
-      && payload?.index === toolJsonFailureProbe.index
-      && payload?.delta?.type === 'input_json_delta') {
-      const late = typeof payload.delta.partial_json === 'string' ? payload.delta.partial_json : '';
-      toolJsonFailureProbe.lateJson += late;
-      toolJsonFailureProbe.lateDeltaCount += 1;
-    }
-
-    if (parsed.name === 'message_stop' || payload?.type === 'message_stop') {
-      finishToolJsonPostStopProbe('message_stop');
-    }
-    if (toolJsonFailureProbe.eventCount >= TOOL_JSON_POST_STOP_MAX_EVENTS) {
-      finishToolJsonPostStopProbe('event_limit');
-    }
-    if (toolJsonFailureProbe.rawBytes >= TOOL_JSON_POST_STOP_MAX_RAW_BYTES) {
-      finishToolJsonPostStopProbe('byte_limit');
-    }
-  };
 
   const checkpointSnapshot = () => {
     const completedBlocks = [...completedIndexes]
@@ -367,10 +135,6 @@ export async function collectAnthropicMessageFromSse(upstream, {
 
   const processBlock = async (rawBlock) => {
     if (!String(rawBlock || '').trim()) return;
-    if (toolJsonFailureProbe) {
-      observeToolJsonPostStopProbe(rawBlock);
-      return;
-    }
     const parsed = parseSseBlock(rawBlock);
     const payload = parsePayload(parsed);
 
@@ -411,13 +175,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
       await notifyStreamPhase({ event: parsed.name, blockType: block.type || '' });
-      if (block.type === 'tool_use' || block.type === 'server_tool_use') {
-        toolJson.set(index, '');
-        toolJsonDeltaCounts.set(index, 0);
-        const lifecycle = { eventCount: 0, eventSequence: [], eventMetadata: [], truncated: false };
-        appendBoundedToolLifecycle(lifecycle, parsed, payload);
-        toolJsonLifecycles.set(index, lifecycle);
-      }
+      if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
       await notifyCheckpoint();
       return;
     }
@@ -425,7 +183,6 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (parsed.name === 'content_block_delta') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
-      if (toolJsonLifecycles.has(index)) appendBoundedToolLifecycle(toolJsonLifecycles.get(index), parsed, payload);
       const delta = payload?.delta || {};
       let semanticValue = '';
       let semanticType = '';
@@ -443,6 +200,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
         try {
           await onSemanticDelta({
             type: semanticType,
+            value: semanticValue,
             bytes: Buffer.byteLength(semanticValue, 'utf8'),
             index,
           });
@@ -457,44 +215,16 @@ export async function collectAnthropicMessageFromSse(upstream, {
       });
       const holder = { value: toolJson.get(index) || '' };
       applyDelta(block, payload?.delta, holder);
-      if (toolJson.has(index)) {
-        toolJson.set(index, holder.value);
-        if (payload?.delta?.type === 'input_json_delta') {
-          toolJsonDeltaCounts.set(index, (toolJsonDeltaCounts.get(index) || 0) + 1);
-        }
-      }
+      if (toolJson.has(index)) toolJson.set(index, holder.value);
       return;
     }
 
     if (parsed.name === 'content_block_stop') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
-      if (toolJsonLifecycles.has(index)) appendBoundedToolLifecycle(toolJsonLifecycles.get(index), parsed, payload);
       if (toolJson.has(index)) {
-        const partialJson = toolJson.get(index);
-        try {
-          finalizeToolInput(block, partialJson, index, toolJsonDeltaCounts.get(index) || 0);
-        } catch (error) {
-          if (!isToolInputJsonInvalid(error)) throw error;
-          attachPreStopProbeDetails(error, toolJsonLifecycles.get(index));
-          toolJsonFailureProbe = {
-            error,
-            index,
-            originalPartialJson: String(partialJson || ''),
-            eventCount: 0,
-            rawBytes: 0,
-            eventSequence: [],
-            eventMetadata: [],
-            lateDeltaCount: 0,
-            lateJson: '',
-            shadowTools: new Map(),
-            shadowToolSummaries: [],
-          };
-          return;
-        }
+        finalizeToolInput(block, toolJson.get(index), index);
         toolJson.delete(index);
-        toolJsonDeltaCounts.delete(index);
-        toolJsonLifecycles.delete(index);
       }
       completedIndexes.add(index);
       if (openIndex === index) openIndex = null;
@@ -530,11 +260,8 @@ export async function collectAnthropicMessageFromSse(upstream, {
   buffer += decoder.decode();
   if (buffer.trim()) await processBlock(buffer);
 
-  if (toolJsonFailureProbe) finishToolJsonPostStopProbe('stream_end');
   if (!message) throw invalidStream('vLLM Anthropic SSE ended without message_start.');
-  for (const [index, partial] of toolJson.entries()) {
-    finalizeToolInput(ensureBlock(blocks, index), partial, index, toolJsonDeltaCounts.get(index) || 0);
-  }
+  for (const [index, partial] of toolJson.entries()) finalizeToolInput(ensureBlock(blocks, index), partial, index);
   message.content = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
   message.usage = message.usage || {};
   if (!sawMessageStop) throw invalidStream('vLLM Anthropic SSE ended without message_stop.');

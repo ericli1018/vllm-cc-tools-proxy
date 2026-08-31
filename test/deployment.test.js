@@ -683,60 +683,21 @@ test('V0.29.34 carries bounded PDF zoom context across deterministic tiles', asy
 });
 
 
-test('V0.29.35 ships bounded malformed tool JSON diagnostic capture without repair behavior', async () => {
-  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
-  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+test('V0.29.35 adds a bounded two-line semantic status preview with client-side CJK wipe rendering', async () => {
+  const telemetrySource = await fs.readFile(new URL('../src/proxy/runtime-telemetry.js', import.meta.url), 'utf8');
+  const statuslineSource = await fs.readFile(new URL('../scripts/cc-tool-proxy-statusline.js', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(collectorSource, /tool_input_json_invalid/);
-  assert.match(collectorSource, /TOOL_JSON_PREVIEW_CHARS = 512/);
-  assert.match(proxySource, /base_tool_json_invalid/);
-  assert.match(readme, /V0\.29\.35 Malformed Tool JSON Diagnostic Capture/);
+  assert.match(sseCollectorSource, /value: semanticValue/);
+  assert.match(telemetrySource, /observePreviewDelta/);
+  assert.match(telemetrySource, /PREVIEW_LINE_MAX_CHARS = 2048/);
+  assert.match(proxyServerSource, /previewPreviousLine/);
+  assert.match(proxyServerSource, /previous_line/);
+  assert.match(statuslineSource, /const cursor = '▌'/);
+  assert.match(statuslineSource, /dropLeftColumns/);
+  assert.match(statuslineSource, /process\.env\.COLUMNS/);
+  assert.match(readme, /V0\.29\.35 Two-Line Streaming Status Preview/);
+  assert.match(readme, /input_json_delta.*tool arguments.*never previewed/is);
   assert.ok(changeLogEntries.includes('V0.29.35-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.35-實作與驗證報告.md'));
-});
-
-
-test('V0.29.37 ships full bounded post-stop tool lifecycle probe without repair or retry behavior', async () => {
-  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
-  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
-  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(collectorSource, /TOOL_JSON_POST_STOP_MAX_EVENTS = 64/);
-  assert.match(collectorSource, /TOOL_JSON_POST_STOP_MAX_RAW_BYTES = 16384/);
-  assert.match(collectorSource, /post_stop_probe_event_metadata/);
-  assert.match(collectorSource, /late_same_index_combined_json_valid/);
-  assert.match(proxySource, /trailing_event_metadata/);
-  assert.match(proxySource, /base_tool_json_post_stop_probe/);
-  assert.match(readme, /V0\.29\.37 Full Post-Stop Tool Lifecycle Probe/);
-  assert.ok(changeLogEntries.includes('V0.29.37-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.29.37-實作與驗證報告.md'));
-});
-
-test('V0.29.38 ships bounded offending tool pre-stop lifecycle diagnostics without repair or retry behavior', async () => {
-  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
-  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
-  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(collectorSource, /TOOL_JSON_PRE_STOP_MAX_EVENTS = 64/);
-  assert.match(collectorSource, /pre_stop_probe_event_metadata/);
-  assert.match(collectorSource, /pre_stop_probe_truncated/);
-  assert.match(proxySource, /base_tool_json_pre_stop_probe/);
-  assert.match(proxySource, /event_metadata: details\.pre_stop_probe_event_metadata/);
-  assert.match(readme, /V0\.29\.38 Offending Tool Pre-Stop Lifecycle Diagnostic/);
-  assert.ok(changeLogEntries.includes('V0.29.38-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.29.38-實作與驗證報告.md'));
-});
-
-test('V0.29.39 ships payload-free trailing tool shadow validation without repair or retry behavior', async () => {
-  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
-  const proxySource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
-  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(collectorSource, /summarizePostStopShadowTool/);
-  assert.match(collectorSource, /post_stop_shadow_tools/);
-  assert.match(proxySource, /shadow_tools: details\.post_stop_shadow_tools/);
-  assert.match(readme, /V0\.29\.39 Trailing Tool Shadow Validation/);
-  assert.ok(changeLogEntries.includes('V0.29.39-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.29.39-實作與驗證報告.md'));
 });

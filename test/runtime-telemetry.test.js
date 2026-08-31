@@ -173,3 +173,51 @@ test('V0.29.20 Sub Agent state never overwrites remembered Main session state', 
   const afterSub = telemetry.snapshotSession('shared-s2');
   assert.equal(afterSub.lastPhase, 'tool');
 });
+
+
+test('V0.29.35 RuntimeTelemetry keeps bounded thinking and response preview lines independent within one model round', () => {
+  const time = clock(100_000);
+  const telemetry = new RuntimeTelemetry({ clock: time.now });
+  const release = telemetry.beginRequest({ requestId: 'preview-r', sessionId: 'preview-s' });
+  telemetry.beginModelRound('preview-r', { round: 1, startedAt: time.now() });
+
+  telemetry.updateRequest('preview-r', { phase: 'thinking' });
+  telemetry.observePreviewDelta('preview-r', 'thinking', '這把管理方向性講清楚了。\n我重新整');
+  let snapshot = telemetry.snapshotSession('preview-s');
+  assert.equal(snapshot.previewPhase, 'thinking');
+  assert.equal(snapshot.previewPreviousLine, '這把管理方向性講清楚了。');
+  assert.equal(snapshot.previewCurrentLine, '我重新整');
+
+  telemetry.updateRequest('preview-r', { phase: 'response' });
+  telemetry.observePreviewDelta('preview-r', 'text', '最終回應開始');
+  snapshot = telemetry.snapshotSession('preview-s');
+  assert.equal(snapshot.previewPhase, 'response');
+  assert.equal(snapshot.previewPreviousLine, '');
+  assert.equal(snapshot.previewCurrentLine, '最終回應開始');
+
+  telemetry.observePreviewDelta('preview-r', 'tool_json', '{"secret":"must-not-preview"}');
+  snapshot = telemetry.snapshotSession('preview-s');
+  assert.equal(snapshot.previewPhase, 'response');
+  assert.equal(snapshot.previewCurrentLine, '最終回應開始');
+  assert.doesNotMatch(JSON.stringify(snapshot), /must-not-preview/);
+  release();
+});
+
+test('V0.29.35 RuntimeTelemetry resets semantic preview at each model round and bounds retained line storage', () => {
+  const time = clock(120_000);
+  const telemetry = new RuntimeTelemetry({ clock: time.now });
+  const release = telemetry.beginRequest({ requestId: 'preview-round-r', sessionId: 'preview-round-s' });
+  telemetry.beginModelRound('preview-round-r', { round: 1, startedAt: time.now() });
+  telemetry.observePreviewDelta('preview-round-r', 'thinking', `${'甲'.repeat(3000)}\n${'乙'.repeat(3000)}`);
+  let snapshot = telemetry.snapshotSession('preview-round-s');
+  assert.ok(snapshot.previewPreviousLine.length <= 2048);
+  assert.ok(snapshot.previewCurrentLine.length <= 2048);
+
+  telemetry.endModelRound('preview-round-r', { endedAt: time.now() });
+  telemetry.beginModelRound('preview-round-r', { round: 2, startedAt: time.now() });
+  snapshot = telemetry.snapshotSession('preview-round-s');
+  assert.equal(snapshot.previewPhase, '');
+  assert.equal(snapshot.previewPreviousLine, '');
+  assert.equal(snapshot.previewCurrentLine, '');
+  release();
+});

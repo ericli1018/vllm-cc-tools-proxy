@@ -27,6 +27,25 @@ function safeAgentContext(value) {
   return String(value || '').trim().toLowerCase() === 'subagent' ? 'subagent' : 'main';
 }
 
+
+const PREVIEW_LINE_MAX_CHARS = 2048;
+
+function boundedPreviewLine(value) {
+  const chars = [...String(value || '')];
+  return chars.length <= PREVIEW_LINE_MAX_CHARS ? chars.join('') : chars.slice(-PREVIEW_LINE_MAX_CHARS).join('');
+}
+
+function sanitizePreviewDelta(value) {
+  return String(value || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '')
+    .replace(/\t/g, ' ');
+}
+
+function freshPreviewChannel() {
+  return { previousLine: '', currentLine: '' };
+}
+
 export class RuntimeTelemetry {
   constructor({ startedAt, maxRememberedSessions = 4096, throughputWindowMs = 5000, clock = () => Date.now() } = {}) {
     this.clock = typeof clock === 'function' ? clock : (() => Date.now());
@@ -81,6 +100,9 @@ export class RuntimeTelemetry {
         busyAttempt: 0,
         toolName: '',
         detail: '',
+        previewPhase: '',
+        previewThinking: freshPreviewChannel(),
+        previewResponse: freshPreviewChannel(),
       });
     }
     if (session) {
@@ -131,6 +153,9 @@ export class RuntimeTelemetry {
     state.busyAttempt = 0;
     state.toolName = '';
     state.detail = '';
+    state.previewPhase = '';
+    state.previewThinking = freshPreviewChannel();
+    state.previewResponse = freshPreviewChannel();
     state.updatedAt = now;
     if (state.sessionId && state.agentContext === 'main') this.#rememberSession(state.sessionId, { phase: state.phase, updatedAt: now });
     return true;
@@ -191,6 +216,27 @@ export class RuntimeTelemetry {
       state.roundSamples.push({ at: now, bytes: delta });
       while (state.roundSamples.length && state.roundSamples[0].at < cutoff) state.roundSamples.shift();
     }
+    return true;
+  }
+
+  observePreviewDelta(requestId, type, value, now = this.clock()) {
+    const id = String(requestId || '');
+    const state = this.requestStates.get(id);
+    const previewPhase = type === 'thinking' ? 'thinking' : type === 'text' ? 'response' : '';
+    if (!state || !previewPhase) return false;
+    const text = sanitizePreviewDelta(value);
+    if (!text) return false;
+    const channel = previewPhase === 'thinking' ? state.previewThinking : state.previewResponse;
+    const parts = text.split('\n');
+    for (let index = 0; index < parts.length; index += 1) {
+      if (parts[index]) channel.currentLine = boundedPreviewLine(`${channel.currentLine}${parts[index]}`);
+      if (index < parts.length - 1) {
+        if (channel.currentLine.trim()) channel.previousLine = boundedPreviewLine(channel.currentLine);
+        channel.currentLine = '';
+      }
+    }
+    state.previewPhase = previewPhase;
+    state.updatedAt = now;
     return true;
   }
 
@@ -278,6 +324,13 @@ export class RuntimeTelemetry {
       busyAttempt: state.busyAttempt,
       toolName: state.toolName,
       detail: state.detail,
+      previewPhase: state.previewPhase || '',
+      previewPreviousLine: state.previewPhase === 'thinking'
+        ? (state.previewThinking?.previousLine || '')
+        : state.previewPhase === 'response' ? (state.previewResponse?.previousLine || '') : '',
+      previewCurrentLine: state.previewPhase === 'thinking'
+        ? (state.previewThinking?.currentLine || '')
+        : state.previewPhase === 'response' ? (state.previewResponse?.currentLine || '') : '',
       pulseIndex: Math.floor(Math.max(0, now - state.phaseStartedAt) / 1000) % 4,
       updatedAt: state.updatedAt,
     };
@@ -306,6 +359,9 @@ export class RuntimeTelemetry {
       busyAttempt: 0,
       toolName: '',
       detail: '',
+      previewPhase: '',
+      previewPreviousLine: '',
+      previewCurrentLine: '',
       pulseIndex: 0,
       updatedAt: remembered?.updatedAt || 0,
     };
