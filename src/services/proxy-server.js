@@ -813,11 +813,14 @@ export function createProxyServer(config, dependencies = {}) {
           force: Boolean(progress.visible),
           details: {
             phase: 'model_stream_phase',
+            model_timeline: true,
             model_phase: phase,
             previous_model_phase: previousPhase,
             lane: modelRoundProgress.lane,
             round: modelRoundProgress.round || 1,
             round_received_bytes: receivedThisRound,
+            model_elapsed_ms: elapsedMs,
+            model_started_at: modelRoundProgress.startedAt,
           },
         });
       }
@@ -861,6 +864,7 @@ export function createProxyServer(config, dependencies = {}) {
           force: Boolean(progress.visible),
           details: {
             phase: 'model_semantic_first_delta',
+            model_timeline: true,
             model_phase: modelRoundProgress.phase || 'waiting',
             round: modelRoundProgress.round || 1,
             delta_type: type,
@@ -951,7 +955,13 @@ export function createProxyServer(config, dependencies = {}) {
           attempt,
         }), {
           force: true,
-          details: { phase: 'upstream_busy_wait', attempt, waited_ms: waitedMs },
+          details: {
+            phase: 'upstream_busy_wait',
+            model_timeline: true,
+            model_started_at: modelRoundProgress.startedAt || progressTiming.startedAt,
+            attempt,
+            waited_ms: waitedMs,
+          },
         });
       } else if (event === 'retry') {
         await progress.update(statusText(config.responseLanguage, 'upstreamBusyRetry', {
@@ -1600,7 +1610,7 @@ export function createProxyServer(config, dependencies = {}) {
           runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: directStartedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
           await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
-            details: { phase: 'managed_model_round_start', round: 1 },
+            details: { phase: 'managed_model_round_start', model_timeline: true, round: 1, model_started_at: directStartedAt },
           });
           progress.startSemanticHeartbeat(() => statusText(
             config.responseLanguage,
@@ -2239,6 +2249,11 @@ export function createProxyServer(config, dependencies = {}) {
               modelRoundProgress.phase = 'waiting';
               runtimeTelemetry.beginModelRound(requestId, { round, startedAt });
               runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
+              if (progress) {
+                await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
+                  details: { phase: 'managed_model_round_start', model_timeline: true, round, model_started_at: startedAt },
+                });
+              }
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
             } else {
               const completedModelOutputBytes = getCurrentRoundResponseBytes();
@@ -2353,7 +2368,9 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.phase = 'waiting';
           runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: progressTiming.startedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
-          await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), { phase: 'base_request_start' });
+          await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), {
+            phase: 'base_request_start', model_started_at: progressTiming.startedAt,
+          });
           const collectBase = () => collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
             onSemanticDelta: onModelSemanticDelta,
@@ -2378,6 +2395,8 @@ export function createProxyServer(config, dependencies = {}) {
                 progressTiming.startedAt = Date.now();
                 await onProgress('正在將內容送往模型…', {
                   phase: 'base_request_start',
+                  model_timeline: true,
+                  model_started_at: progressTiming.startedAt,
                   request_bytes: fields.request_bytes,
                   message_count: fields.message_count,
                   evidence_bytes: fields.evidence_bytes,

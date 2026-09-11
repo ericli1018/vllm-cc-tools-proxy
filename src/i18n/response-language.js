@@ -90,7 +90,7 @@ export function formatRuntimeStatusLine(locale, {
   const labels = RUNTIME_STATUS_LINE_LABELS[resolved] || RUNTIME_STATUS_LINE_LABELS[DEFAULT_RESPONSE_LANGUAGE];
   const normalizedPhase = Object.hasOwn(labels, phase) ? phase : 'idle';
   const pieces = [
-    `◆ CC TOOL PROXY${version ? ` ${version}` : ''}`,
+    `◆ CCTP${version ? ` ${version}` : ''}`,
     `▦ ${Math.max(0, Math.trunc(Number(proxySessions) || 0))}   ▶ ${Math.max(0, Math.trunc(Number(proxyActive) || 0))}   ⋯ ${Math.max(0, Math.trunc(Number(proxyWaiting) || 0))}`,
     `${runtimeStatusGlyph(normalizedPhase, pulseIndex)} ${labels[normalizedPhase]}`,
   ];
@@ -144,6 +144,7 @@ const PROFILES = Object.freeze({
   'zh-TW': Object.freeze({
     processorInstruction: 'Write the result in Traditional Chinese (zh-TW).',
     progressHeader: '模型處理中',
+    timelineHeader: '處理中',
     status: Object.freeze({
       genericProcessing: () => '正在處理…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `模型仍在處理本輪請求，已執行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
@@ -179,7 +180,9 @@ const PROFILES = Object.freeze({
       baseRequestStart: () => '正在將內容送往模型…',
       baseHeadersReceived: () => '模型已接受請求，正在準備輸出…',
       handoffSingle: ({ tool = '' }) => `模型已產生下一步 ${tool}；正在交還 Claude Code 執行…`,
+      timelineHandoffSingle: ({ tool = '' }) => `已產生下一步 ${tool}；交還執行…`,
       handoffMultiple: () => '模型已產生下一步工具；正在交還 Claude Code 執行…',
+      timelineHandoffMultiple: () => '已產生下一步工具；交還執行…',
       finalVisible: () => '模型已完成本輪回答；正在回傳結果…',
       finalOutput: () => '模型已完成本輪輸出；正在回傳結果…',
       streamingTool: () => '模型已開始回傳下一步工具…',
@@ -229,6 +232,7 @@ const PROFILES = Object.freeze({
   'zh-CN': Object.freeze({
     processorInstruction: 'Write the result in Simplified Chinese (zh-CN).',
     progressHeader: '模型处理中',
+    timelineHeader: '处理中',
     status: Object.freeze({
       genericProcessing: () => '正在处理…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `模型仍在处理本轮请求，已执行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（已收到 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
@@ -264,7 +268,9 @@ const PROFILES = Object.freeze({
       baseRequestStart: () => '正在将内容发送给模型…',
       baseHeadersReceived: () => '模型已接受请求，正在准备输出…',
       handoffSingle: ({ tool = '' }) => `模型已生成下一步 ${tool}；正在交还 Claude Code 执行…`,
+      timelineHandoffSingle: ({ tool = '' }) => `已生成下一步 ${tool}；交还执行…`,
       handoffMultiple: () => '模型已生成下一步工具；正在交还 Claude Code 执行…',
+      timelineHandoffMultiple: () => '已生成下一步工具；交还执行…',
       finalVisible: () => '模型已完成本轮回答；正在返回结果…',
       finalOutput: () => '模型已完成本轮输出；正在返回结果…',
       streamingTool: () => '模型已开始返回下一步工具…',
@@ -314,6 +320,7 @@ const PROFILES = Object.freeze({
   'en-US': Object.freeze({
     processorInstruction: 'Write the result in English (en-US).',
     progressHeader: 'Model processing',
+    timelineHeader: 'Processing',
     status: Object.freeze({
       genericProcessing: () => 'Processing…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `The model is still processing this request. Running for ${seconds}s${hasReceivedBytes(receivedBytes) ? ` (received ${formatReceivedBytes(receivedBytes)})` : ''}…`,
@@ -349,7 +356,9 @@ const PROFILES = Object.freeze({
       baseRequestStart: () => 'Sending content to the model…',
       baseHeadersReceived: () => 'The model accepted the request and is preparing output…',
       handoffSingle: ({ tool = '' }) => `The model produced the next ${tool} action; handing control back to Claude Code…`,
+      timelineHandoffSingle: ({ tool = '' }) => `Next ${tool} action ready; handing off…`,
       handoffMultiple: () => 'The model produced the next tool actions; handing control back to Claude Code…',
+      timelineHandoffMultiple: () => 'Next tool actions ready; handing off…',
       finalVisible: () => 'The model completed this response; returning the result…',
       finalOutput: () => 'The model completed this output; returning the result…',
       streamingTool: () => 'The model started returning the next tool action…',
@@ -399,6 +408,7 @@ const PROFILES = Object.freeze({
   'ja-JP': Object.freeze({
     processorInstruction: 'Write the result in Japanese (ja-JP).',
     progressHeader: 'モデル処理中',
+    timelineHeader: '処理中',
     status: Object.freeze({
       genericProcessing: () => '処理中…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `モデルがこのリクエストを処理中です。実行 ${seconds} 秒${hasReceivedBytes(receivedBytes) ? `（受信 ${formatReceivedBytes(receivedBytes)}）` : ''}…`,
@@ -434,7 +444,9 @@ const PROFILES = Object.freeze({
       baseRequestStart: () => '内容をモデルに送信しています…',
       baseHeadersReceived: () => 'モデルがリクエストを受け付け、出力を準備しています…',
       handoffSingle: ({ tool = '' }) => `モデルが次の操作として ${tool} を生成しました。Claude Code に制御を戻しています…`,
+      timelineHandoffSingle: ({ tool = '' }) => `次の ${tool} 操作を生成済み。実行へ引き渡します…`,
       handoffMultiple: () => 'モデルが次のツール操作を生成しました。Claude Code に制御を戻しています…',
+      timelineHandoffMultiple: () => '次のツール操作を生成済み。実行へ引き渡します…',
       finalVisible: () => 'モデルの応答が完了しました。結果を返しています…',
       finalOutput: () => 'モデルの出力が完了しました。結果を返しています…',
       streamingTool: () => 'モデルが次のツール操作の返却を開始しました…',
@@ -483,6 +495,7 @@ const PROFILES = Object.freeze({
   'ko-KP': Object.freeze({
     processorInstruction: 'Write the result in Korean (ko-KP).',
     progressHeader: '모델 처리 중',
+    timelineHeader: '처리 중',
     status: Object.freeze({
       genericProcessing: () => '처리 중…',
       modelWaiting: ({ seconds = 0, receivedBytes } = {}) => `모델이 이 요청을 처리하고 있습니다. ${seconds}초 실행${hasReceivedBytes(receivedBytes) ? ` (수신 ${formatReceivedBytes(receivedBytes)})` : ''}…`,
@@ -518,7 +531,9 @@ const PROFILES = Object.freeze({
       baseRequestStart: () => '내용을 모델에 보내고 있습니다…',
       baseHeadersReceived: () => '모델이 요청을 받았으며 출력을 준비하고 있습니다…',
       handoffSingle: ({ tool = '' }) => `모델이 다음 단계로 ${tool}을 선택했습니다. Claude Code에 실행을 넘깁니다…`,
+      timelineHandoffSingle: ({ tool = '' }) => `다음 ${tool} 동작 생성 완료. 실행으로 넘깁니다…`,
       handoffMultiple: () => '모델이 다음 도구 단계를 생성했습니다. Claude Code에 실행을 넘깁니다…',
+      timelineHandoffMultiple: () => '다음 도구 동작 생성 완료. 실행으로 넘깁니다…',
       finalVisible: () => '모델의 응답이 완료되었습니다. 결과를 반환합니다…',
       finalOutput: () => '모델의 출력이 완료되었습니다. 결과를 반환합니다…',
       streamingTool: () => '모델이 다음 도구 단계의 반환을 시작했습니다…',
@@ -604,8 +619,14 @@ export function progressBlockHeader(locale, { timeText = '', timestampMs } = {})
   return `${label} · ${clock}`;
 }
 
+export function modelTimelineHeader(locale, { timeText = '', timestampMs } = {}) {
+  const label = languageProfile(resolveResponseLanguage(locale)).timelineHeader;
+  const clock = String(timeText || formatProgressClock(timestampMs)).trim();
+  return `${label} · ${clock}`;
+}
+
 export function allProgressBlockHeaders() {
-  return SUPPORTED_RESPONSE_LANGUAGES.map((locale) => PROFILES[locale].progressHeader);
+  return SUPPORTED_RESPONSE_LANGUAGES.flatMap((locale) => [PROFILES[locale].progressHeader, PROFILES[locale].timelineHeader]);
 }
 
 export function localizeProgressMessage(locale, fallbackMessage, details = {}) {

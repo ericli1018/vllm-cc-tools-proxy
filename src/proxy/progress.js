@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
-import { allProgressBlockHeaders, progressBlockHeader } from '../i18n/response-language.js';
+import { allProgressBlockHeaders, modelTimelineHeader, progressBlockHeader, statusText } from '../i18n/response-language.js';
 
 export const PROGRESS_BLOCK_HEADER = '模型處理中';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
@@ -128,6 +128,16 @@ export class ProgressStream {
     this.visibleProgressEnabled = visibleProgressEnabled !== false;
     this.startedAt = Date.now();
     this.progressHeader = progressBlockHeader(this.locale, { timestampMs: this.startedAt });
+    this.timelineHeader = '';
+    this.modelTimeline = {
+      active: false,
+      startedAt: 0,
+      phase: 'waiting',
+      round: 0,
+      text: '',
+      rendered: false,
+      heartbeatRun: 0,
+    };
     this.visible = false;
     this.closed = false;
     this.progressClosed = false;
@@ -261,6 +271,81 @@ export class ProgressStream {
     this.pendingTimer.unref?.();
   }
 
+  #modelTimelineGlyph(phase) {
+    if (phase === 'thinking') return '◐';
+    if (phase === 'response') return '◆';
+    if (phase === 'tool') return '◇';
+    return '○';
+  }
+
+  #modelTimelineElapsedSeconds(details = {}, changedAt = Date.now()) {
+    const explicit = Number(details.timeline_elapsed_ms);
+    const elapsedMs = Number.isFinite(explicit)
+      ? Math.max(0, explicit)
+      : Math.max(0, changedAt - (this.modelTimeline.startedAt || changedAt));
+    return Math.floor(elapsedMs / 1000);
+  }
+
+  #prepareModelTimeline(kind, details = {}, changedAt = Date.now(), message = '') {
+    const phase = String(details.phase || '');
+    const round = Math.max(0, Math.trunc(Number(details.round) || 0));
+    const timelineEnabled = details.model_timeline === true;
+    const isStart = timelineEnabled && ['managed_model_round_start', 'base_request_start'].includes(phase);
+    const isPhase = timelineEnabled && phase === 'model_stream_phase' && ['thinking', 'response', 'tool'].includes(String(details.model_phase || ''));
+    const isFirstSemantic = timelineEnabled && phase === 'model_semantic_first_delta';
+    const isBusyWait = timelineEnabled && phase === 'upstream_busy_wait';
+    const isTerminal = ['handoff_to_claude_code', 'returning_visible_response', 'returning_model_output'].includes(phase);
+    const isHeartbeat = kind === 'semantic_heartbeat';
+
+    if (!this.modelTimeline.active && !(isStart || isPhase || isFirstSemantic || isBusyWait)) return null;
+
+    let fragment = '';
+    if (!this.modelTimeline.active) {
+      const startedAt = Number(details.model_started_at);
+      this.modelTimeline.active = true;
+      this.modelTimeline.startedAt = Number.isFinite(startedAt) && startedAt > 0 ? startedAt : changedAt;
+      this.timelineHeader = modelTimelineHeader(this.locale, { timestampMs: this.modelTimeline.startedAt });
+      this.modelTimeline.phase = 'waiting';
+      this.modelTimeline.round = round;
+      this.modelTimeline.heartbeatRun = 0;
+      this.modelTimeline.text = `${this.timelineHeader} ○`;
+    } else if (isStart) {
+      const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
+      fragment = ` ${elapsed}s ○`;
+      this.modelTimeline.phase = 'waiting';
+      this.modelTimeline.heartbeatRun = 0;
+      if (round > 0) this.modelTimeline.round = round;
+    }
+
+    if (isBusyWait) {
+      fragment += ' ↻';
+      this.modelTimeline.heartbeatRun = 0;
+    } else if (isPhase) {
+      const nextPhase = String(details.model_phase);
+      if (this.modelTimeline.phase !== nextPhase) {
+        const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
+        fragment += ` ${elapsed}s ${this.#modelTimelineGlyph(nextPhase)}`;
+        this.modelTimeline.phase = nextPhase;
+        this.modelTimeline.heartbeatRun = 0;
+      }
+    } else if (isHeartbeat && this.modelTimeline.active) {
+      const warning = String(message || '').trim().startsWith('⚠');
+      fragment += this.modelTimeline.heartbeatRun > 0 ? (warning ? '| ⚠' : '|') : (warning ? ' | ⚠' : ' |');
+      this.modelTimeline.heartbeatRun += 1;
+    } else if (isTerminal && this.modelTimeline.active) {
+      const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
+      fragment += ` ${elapsed}s`;
+    }
+
+    if (fragment) this.modelTimeline.text += fragment;
+    return {
+      active: true,
+      fragment,
+      fullText: this.modelTimeline.text,
+      terminal: isTerminal,
+    };
+  }
+
   #emitUpdate(entry) {
     return this.#enqueue(async () => {
       if (this.closed || this.progressClosed) return;
@@ -272,6 +357,7 @@ export class ProgressStream {
         renderMode: 'append',
       };
       const message = String(entry.message);
+      const timeline = entry.timeline || null;
       const thinkingCarrier = this.carrier === 'thinking';
       if (!this.visible) {
         this.visible = true;
@@ -282,23 +368,31 @@ export class ProgressStream {
             ? { type: 'thinking', thinking: '', signature: '' }
             : { type: 'text', text: '' },
         }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier });
+        const initialText = timeline?.active ? timeline.fullText : `${this.progressHeader}\n${message}`;
+        if (timeline?.active) this.modelTimeline.rendered = true;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
           delta: thinkingCarrier
-            ? { type: 'thinking_delta', thinking: `${this.progressHeader}\n${message}` }
-            : { type: 'text_delta', text: `${this.progressHeader}\n${message}` },
-        }), { ...metadata, carrier: this.carrier });
+            ? { type: 'thinking_delta', thinking: initialText }
+            : { type: 'text_delta', text: initialText },
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_append' : metadata.renderMode, carrier: this.carrier });
       } else {
-        const deltaText = `
+        let deltaText = timeline?.active ? timeline.fragment : `
 ${message}`;
+        if (timeline?.active && !this.modelTimeline.rendered) {
+          deltaText = `
+${timeline.fullText}`;
+          this.modelTimeline.rendered = true;
+        }
+        if (!deltaText) return;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: 0,
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: deltaText }
             : { type: 'text_delta', text: deltaText },
-        }), { ...metadata, carrier: this.carrier });
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_append' : metadata.renderMode, carrier: this.carrier });
       }
     });
   }
@@ -351,7 +445,20 @@ ${message}`;
       try { await this.onStateChange({ revision, phase: details.phase, changedAt, message }); } catch {}
     }
 
-    const entry = { message, kind, details, revision, changedAt, renderMode };
+    const timeline = this.#prepareModelTimeline(kind, details, changedAt, message);
+    if (timeline?.terminal && message) {
+      let terminalMessage = message;
+      if (String(details.phase || '') === 'handoff_to_claude_code') {
+        const toolNames = Array.isArray(details.tool_names) ? details.tool_names.filter(Boolean) : [];
+        terminalMessage = toolNames.length === 1
+          ? statusText(this.locale, 'timelineHandoffSingle', { tool: toolNames[0] })
+          : statusText(this.locale, 'timelineHandoffMultiple');
+      }
+      timeline.fragment += ` ${terminalMessage}`;
+      timeline.fullText += ` ${terminalMessage}`;
+      this.modelTimeline.text = timeline.fullText;
+    }
+    const entry = { message, kind, details, revision, changedAt, renderMode, timeline };
     const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
     if (!force && belowThreshold) {
       this.pendingUpdate = entry;

@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.35', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.36', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -549,7 +549,8 @@ test('streamed media progress shows filename and semantic heartbeats across dela
   const stream = await response.text();
   assert.match(stream, /檔案：GW305_N101_20260519-board\.pdf/);
   assert.match(stream, /圖片 1\/1/);
-  assert.match(stream, /(?:◌ 模型等待輸出|[◐◓◑◒] 模型思考中|◆ 模型回應中|⚠ 模型資料暫停)/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(stream, /\"text\":\" \\|/);
   assert.match(stream, /FINAL/);
   assert.doesNotMatch(stream, /\/home\/master\/workspace-claude/);
   for (const event of ['base_upstream_request_start', 'base_upstream_headers_received', 'base_upstream_first_event', 'base_upstream_stream_completed']) {
@@ -646,17 +647,13 @@ test('Base lifecycle state changes are delivered immediately instead of waiting 
     }),
   });
   const stream = await response.text();
-  const requestStart = stream.indexOf('正在將內容送往模型');
-  const headersReceived = stream.indexOf('模型已接受請求');
-  const firstEvent = stream.indexOf('模型開始回應');
-  assert.ok(requestStart >= 0);
-  assert.ok(headersReceived > requestStart);
-  assert.ok(firstEvent > headersReceived);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(stream, /\d+s ◆/);
   assert.match(stream, /DONE/);
 
   const sent = logs.filter((entry) => entry.event === 'progress_sse_sent');
   assert.ok(sent.some((entry) => entry.phase === 'base_request_start' && entry.delivery_latency_ms < 25));
-  assert.ok(sent.some((entry) => entry.phase === 'base_headers_received' && entry.delivery_latency_ms < 25));
+  assert.equal(sent.some((entry) => entry.phase === 'base_headers_received'), false); // absorbed into the single-line model timeline
   assert.ok(logs.some((entry) => entry.event === 'progress_state_changed' && entry.phase === 'base_headers_received'));
 });
 
@@ -708,12 +705,8 @@ test('V0.2.27.3 continuation visible progress resets received bytes for the new 
   });
   assert.equal(response.status, 200);
   const stream = await response.text();
-  const continuationIndex = stream.indexOf('模型尚未形成有效下一步；');
-  assert.ok(continuationIndex >= 0, 'missing continuation progress');
-  const continuationStream = stream.slice(continuationIndex);
-
-  assert.match(continuationStream, /◌ 模型等待輸出 · \d+s · 0 B/);
-  assert.doesNotMatch(continuationStream, /◌ 模型等待輸出 · \d+s · [0-9.]+ KB/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.ok((stream.match(/ ○/g) || []).length >= 2, 'expected a new waiting marker for continuation round');
   assert.match(stream, /RECOVERED/);
 
   const roundFirstByte = logs.filter((entry) => entry.event === 'managed_model_first_byte_received').at(-1);
@@ -1931,10 +1924,9 @@ test('V0.2.28.17 JSON compatibility fallback does not misreport wire framing as 
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /模型處理中 · \d{2}:\d{2}:\d{2}/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
   assert.doesNotMatch(stream, /目前處理進度（已收到/);
-  assert.match(stream, /◌ 模型等待輸出 · \d+s · 0 B/);
-  assert.doesNotMatch(stream, /◌ 模型等待輸出 · \d+s · (?:512 B|1\.22 KB)/);
+  assert.doesNotMatch(stream, /(?:512 B|1\.22 KB)/);
   assert.match(stream, /FINAL/);
   assert.equal(round, 2);
 });
@@ -1973,7 +1965,7 @@ test('V0.2.28.14 reports a post-first-byte upstream stall without retrying the a
   });
   const stream = await response.text();
   assert.equal(response.status, 200);
-  assert.match(stream, /⚠ 模型資料暫停 · \d+s 無新資料 · 總計 [^\\n]+/);
+  assert.match(stream, /\| ⚠/);
   assert.match(stream, /AB/);
   assert.equal(modelCalls, 1);
   assert.equal(logs.filter((entry) => String(entry.event || '').startsWith('base_upstream_busy_')).length, 0);
@@ -2075,7 +2067,8 @@ test('V0.2.28.17 managed Base rounds expose semantic model bytes before completi
   const wire = await response.text();
   assert.deepEqual(observedStreams, [true]);
   assert.match(wire, /STREAMED/);
-  assert.match(wire, /◆ 模型回應中 · \d+s · 8 B(?: · [^\n]*\/s)?/);
+  assert.match(wire, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(wire, /\d+s ◆/);
 });
 
 test('V0.2.28.17 emits semantic-byte progress immediately on first model delta between heartbeats', async (t) => {
@@ -2111,8 +2104,8 @@ test('V0.2.28.17 emits semantic-byte progress immediately on first model delta b
     }),
   });
   const wire = await response.text();
-  assert.match(wire, /◌ 模型等待輸出 · 0s · 0 B/);
-  assert.match(wire, /◆ 模型回應中 · \d+s · 4 B(?: · [^\n]*\/s)?/);
+  assert.match(wire, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(wire, /\d+s ◆/);
   assert.match(wire, /DONE/);
 
   const firstByte = logs.find((entry) => entry.event === 'managed_model_first_byte_received');
@@ -2813,12 +2806,11 @@ test('V0.2.28.7 managed model progress exposes compact thinking and response pha
   });
   const stream = await response.text();
 
-  assert.match(stream, /◐ 模型開始思考 · [^\n"]+/);
-  assert.match(stream, /◆ 模型開始回應 · [^\n"]+/);
-  assert.match(stream, /(?:[◐◓◑◒] 模型思考中|◆ 模型回應中|⚠ 模型資料暫停) · [^\n"]+/);
-  assert.match(stream, /◆ 模型回應中 · \d+s · [^\n"]+/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(stream, /\d+s ◐/);
+  assert.match(stream, /\d+s ◆/);
+  assert.match(stream, / \|/);
   assert.match(stream, /完成/);
-  assert.doesNotMatch(stream, /模型處理中[^\n]*\n[^\n]*秒/);
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'response']);
@@ -2864,9 +2856,10 @@ test('V0.2.28.7 managed Claude Code tool handoff exposes thinking then tool phas
     }),
   });
   const stream = await response.text();
-  assert.match(stream, /◐ 模型開始思考 · [^\n"]+/);
-  assert.match(stream, /◇ 模型建立工具動作 · [^\n"]+/);
-  assert.match(stream, /模型已產生下一步 WebSearch/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(stream, /\d+s ◐/);
+  assert.match(stream, /\d+s ◇/);
+  assert.match(stream, /已產生下一步 WebSearch；交還執行/);
 
   const phases = logs.filter((entry) => entry.event === 'managed_model_stream_phase_changed');
   assert.deepEqual(phases.map((entry) => entry.phase), ['thinking', 'tool']);
@@ -3175,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.35/);
+  assert.match(first, /VERSION\s+0\.29\.36/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3205,10 +3198,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.35');
+  assert.equal(payload.version, '0.29.36');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CC TOOL PROXY 0\.29\.35/);
+  assert.match(payload.display, /CCTP 0\.29\.36/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -3335,7 +3328,7 @@ test('V0.2.28.19 status endpoint combines current-round semantic telemetry with 
   assert.deepEqual(payload.proxy, { sessions: 3, active: 3, waiting: 1 });
   assert.equal(payload.round, 2);
   assert.equal(payload.received_bytes, 45_076);
-  assert.match(payload.display, /CC TOOL PROXY/);
+  assert.match(payload.display, /CCTP/);
   assert.match(payload.display, /▦ 3\s+▶ 3\s+⋯ 1/);
   assert.match(payload.display, /思考中/);
   assert.match(payload.display, /59s/);
@@ -3978,7 +3971,8 @@ test('V0.29.23 keeps Main visible progress while Sub Agent is liveness-only acro
     }),
   });
   const parentWire = await parent.text();
-  assert.match(parentWire, /正在請模型規劃下一步/);
+  assert.match(parentWire, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(parentWire, /已產生下一步 Agent；交還執行/);
   assert.doesNotMatch(parentWire, /查證 WebSearch 行為\\n目前處理進度：/);
 
   const childHeaders = { ...sessionHeaders, 'x-claude-code-agent-id': 'child-agent-stable-id' };
@@ -3988,8 +3982,8 @@ test('V0.29.23 keeps Main visible progress while Sub Agent is liveness-only acro
   });
   const child1Wire = await child1.text();
   assert.match(child1Wire, /event: ping/);
-  assert.doesNotMatch(child1Wire, /\"type\":\"text_delta\",\"text\":\"目前處理進度：/);
-  assert.doesNotMatch(child1Wire, /\"type\":\"thinking_delta\",\"thinking\":\"目前處理進度：/);
+  assert.doesNotMatch(child1Wire, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.doesNotMatch(child1Wire, /\"type\":\"thinking_delta\",\"thinking\":\"處理中 · /);
   assert.match(child1Wire, /子代理第一輪完成/);
   assert.doesNotMatch(child1Wire, /查證 WebSearch 行為\\n目前處理進度：/);
 
@@ -4003,8 +3997,8 @@ test('V0.29.23 keeps Main visible progress while Sub Agent is liveness-only acro
   });
   const child2Wire = await child2.text();
   assert.match(child2Wire, /event: ping/);
-  assert.doesNotMatch(child2Wire, /\"type\":\"text_delta\",\"text\":\"目前處理進度：/);
-  assert.doesNotMatch(child2Wire, /\"type\":\"thinking_delta\",\"thinking\":\"目前處理進度：/);
+  assert.doesNotMatch(child2Wire, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.doesNotMatch(child2Wire, /\"type\":\"thinking_delta\",\"thinking\":\"處理中 · /);
   assert.match(child2Wire, /子代理續接完成/);
   assert.doesNotMatch(child2Wire, /查證 WebSearch 行為\\n目前處理進度：/);
 

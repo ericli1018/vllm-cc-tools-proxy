@@ -1,9 +1,39 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.35 adds a client-rendered second-row statusLine semantic preview: thinking and response streams are tracked independently, logical-line changes use a `▌` PRE→CURRENT wipe overlay without carriage-return/ANSI cursor control, CJK width is terminal-cell aware, and tool JSON is excluded. V0.29.34 bounded PDF zoom-context continuity, V0.29.33 neutral timestamped progress, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.36 replaces verbose multi-line model progress with one append-only timeline (`○/◐/◆/◇` plus real 30-second `|` liveness bars), keeps cumulative phase timing on the same row, and shortens the native statusLine brand to `◆ CCTP <version>`. V0.29.35 second-row semantic preview, V0.29.34 bounded PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
 
 
+
+## V0.29.36 Single-Line Model Progress Timeline
+
+V0.29.36 replaces the verbose model-progress block with one append-only row. The row starts when an actual Base-model attempt begins and remains on the same line for waiting, thinking, response, tool generation, heartbeat liveness, recovery attempts, and final handoff:
+
+```text
+處理中 · 15:52:07 ○ || 62s ◐ | 95s ◆ || 130s ◇ | 168s 已產生下一步工具；交還執行…
+```
+
+The symbols are intentionally orthogonal:
+
+- `○` — an upstream model request was sent and the Proxy is waiting for semantic output;
+- `◐` — thinking phase entered;
+- `◆` — response phase entered;
+- `◇` — tool-generation phase entered;
+- `|` — one real semantic liveness heartbeat. The existing heartbeat cadence is preserved; bars are not synthesized afterward and are never compressed into `×N`;
+- `↻` — explicit upstream busy/retry wait;
+- `| ⚠` — a heartbeat that has crossed the existing stall-warning threshold.
+
+Elapsed values are cumulative from the first model attempt in the current progress timeline. A continuation/recovery attempt appends another `○` without resetting the elapsed clock. Heartbeat bars within the same phase are compacted visually by concatenation (`||`, `|||`) while each bar still arrives as a distinct streamed text delta. Phase transitions reset the visual bar run.
+
+If startup/media progress has already opened the Proxy progress block, the model timeline opens exactly one new row and then remains append-only on that row. Generic PDF/media progress keeps its existing renderer. Existing Main/Sub visibility policy, SSE ping transport liveness, managed recovery, ToolSearch, Native/Proxy Vision, WebSearch/WebFetch, and Context Compact behavior are unchanged.
+
+The native Claude Code statusLine brand is shortened from `◆ CC TOOL PROXY <version>` to:
+
+```text
+◆ CCTP 0.29.36 │ ▦ 1   ▶ 1   ⋯ 0 │ ◓ 思考中 │ 45s │ 11.26 KB │ 278 B/s
+```
+
+The V0.29.35 optional second-row semantic preview (`↳ ...▌`) remains unchanged. No new ENV variables are introduced; cache generations remain `media-v8`, `visual-v18`, and `evidence-v14`.
 
 ## V0.29.35 Two-Line Streaming Status Preview
 

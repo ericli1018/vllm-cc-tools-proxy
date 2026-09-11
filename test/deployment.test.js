@@ -701,3 +701,21 @@ test('V0.29.35 adds a bounded two-line semantic status preview with client-side 
   assert.ok(changeLogEntries.includes('V0.29.35-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.35-實作與驗證報告.md'));
 });
+
+test('V0.29.36 renders one append-only model timeline and uses compact CCTP statusLine branding', async () => {
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const languageSource = await fs.readFile(new URL('../src/i18n/response-language.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(progressSource, /modelTimeline/);
+  assert.match(progressSource, /fragment \+= ` \${elapsed}s \${this\.#modelTimelineGlyph\(nextPhase\)}`/);
+  assert.match(progressSource, /heartbeatRun/);
+  assert.match(progressSource, /isBusyWait/);
+  assert.match(languageSource, /◆ CCTP/);
+  assert.match(languageSource, /timelineHeader: '處理中'/);
+  assert.match(readme, /V0\.29\.36 Single-Line Model Progress Timeline/);
+  assert.match(readme, /○.*◐.*◆.*◇.*\|/s);
+  assert.ok(changeLogEntries.includes('V0.29.36-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.36-實作與驗證報告.md'));
+});
+

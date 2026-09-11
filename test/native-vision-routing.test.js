@@ -820,5 +820,6 @@ test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only
   assert.doesNotMatch(stream, /圖片 1\/1/);
   assert.doesNotMatch(stream, /文件與圖片內容已就緒/);
   assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
-  assert.match(stream, /模型開始思考/);
+  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(stream, /\"text\":\" 0s ◐\"/);
 });

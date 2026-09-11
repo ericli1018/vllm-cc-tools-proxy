@@ -265,7 +265,7 @@ test('V0.2.28.16 native status line localizes runtime phases for every supported
       version: '0.2.28.16', phase: 'thinking', elapsedMs: 59000,
       receivedBytes: 45906, throughputBps: 760, pulseIndex: 1,
     });
-    assert.match(line, /CC TOOL PROXY 0\.2\.28\.16/);
+    assert.match(line, /CCTP 0\.2\.28\.16/);
     assert.match(line, expected);
     assert.match(line, /59s/);
     assert.match(line, /44\.83 KB/);
@@ -282,7 +282,7 @@ test('V0.2.28.19 status line puts Proxy counters after title and renders whole s
   });
   assert.equal(
     line,
-    '◆ CC TOOL PROXY 0.2.28.20 │ ▦ 3   ▶ 2   ⋯ 1 │ ◓ 思考中 │ 59s │ 44.02 KB │ 790 B/s',
+    '◆ CCTP 0.2.28.20 │ ▦ 3   ▶ 2   ⋯ 1 │ ◓ 思考中 │ 59s │ 44.02 KB │ 790 B/s',
   );
   assert.doesNotMatch(line, /59\.\d+s/);
 });

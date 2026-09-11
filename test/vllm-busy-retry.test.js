@@ -96,8 +96,10 @@ test('streaming vLLM busy wait reports progress and then continues the same conn
   });
   const text = await response.text();
   assert.equal(response.status, 200);
-  assert.match(text, /模型目前忙碌/);
-  assert.match(text, /正在重試/);
+  assert.match(text, /處理中 · \d{2}:\d{2}:\d{2} ○/);
+  assert.match(text, /\"text\":\" ↻\"/);
+  assert.ok(text.indexOf(' ○') < text.indexOf(' ↻'));
+  assert.doesNotMatch(text, /模型目前忙碌|正在重試/);
   assert.match(text, /OK/);
   assert.match(text, /event: message_stop/);
   assert.equal(calls, 2);
