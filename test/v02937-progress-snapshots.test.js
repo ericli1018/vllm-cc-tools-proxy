@@ -40,17 +40,12 @@ test('V0.29.37 emits a complete cumulative timeline snapshot on every semantic p
   await progress.closeProgress('done', { phase: 'handoff_to_claude_code', details: { timeline_elapsed_ms: 27_000, tool_names: ['Write', 'Edit'] } });
   await progress.stop();
 
-  const lines = timelineLines(response).map((line) => line.replace(/^處理中 · \d{2}:\d{2}:\d{2}/, '處理中 · HH:mm:ss'));
-  assert.deepEqual(lines, [
-    '處理中 · HH:mm:ss ○ 2s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s ◆ 26s',
-    '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s ◆ 26s ◇ 27s 已產生下一步工具；交還執行…',
-  ]);
+  const deltas = textDeltas(response);
+  const visible = deltas.filter((delta) => delta !== '\n\n').join('');
+  const normalized = visible.replace(/^處理中 · \d{2}:\d{2}:\d{2}/, '處理中 · HH:mm:ss');
+  assert.equal(normalized, '處理中 · HH:mm:ss ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s ◆ 26s ◇ 27s 已產生下一步工具；交還執行…');
+  assert.equal((visible.match(/處理中 · /g) || []).length, 1);
+  assert.equal(visible.includes('\n'), false);
 });
 
 test('V0.29.37 heartbeat emits a full snapshot immediately and stays attached to the active phase', async () => {
@@ -64,13 +59,11 @@ test('V0.29.37 heartbeat emits a full snapshot immediately and stays attached to
   await progress.update('response', { force: true, details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'response', timeline_elapsed_ms: 65_000 } });
   await progress.stop();
 
-  const lines = timelineLines(response).map((line) => line.replace(/^處理中 · \d{2}:\d{2}:\d{2}/, '處理中 · HH:mm:ss'));
-  assert.deepEqual(lines, [
-    '處理中 · HH:mm:ss ○ 2s',
-    '處理中 · HH:mm:ss ○ 2s ◐ |',
-    '處理中 · HH:mm:ss ○ 2s ◐ ||',
-    '處理中 · HH:mm:ss ○ 2s ◐ || 65s',
-  ]);
+  const visible = textDeltas(response).join('');
+  const normalized = visible.replace(/^處理中 · \d{2}:\d{2}:\d{2}/, '處理中 · HH:mm:ss');
+  assert.equal(normalized, '處理中 · HH:mm:ss ○ 2s ◐ || 65s ◆');
+  assert.equal((visible.match(/處理中 · /g) || []).length, 1);
+  assert.equal(visible.includes('\n'), false);
 });
 
 test('V0.29.37 terminal handoff emits the first cumulative snapshot even when no earlier phase made progress visible', async () => {

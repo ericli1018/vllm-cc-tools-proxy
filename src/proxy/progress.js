@@ -134,7 +134,7 @@ export class ProgressStream {
       startedAt: 0,
       phase: 'waiting',
       round: 0,
-      history: [],
+      content: '',
       rendered: false,
       heartbeatRun: 0,
     };
@@ -286,25 +286,16 @@ export class ProgressStream {
     return Math.floor(elapsedMs / 1000);
   }
 
-  #modelTimelineActiveSegment({ includeElapsed = false, elapsed = 0, warning = false } = {}) {
-    const glyph = this.#modelTimelineGlyph(this.modelTimeline.phase);
-    const bars = this.modelTimeline.heartbeatRun > 0 ? ` ${'|'.repeat(this.modelTimeline.heartbeatRun)}` : '';
-    const warningText = warning ? ' ⚠' : '';
-    const elapsedText = includeElapsed ? ` ${elapsed}s` : '';
-    return `${glyph}${bars}${warningText}${elapsedText}`;
+  #modelTimelineSnapshot() {
+    return `${this.timelineHeader}${this.modelTimeline.content}`;
   }
 
-  #modelTimelineSnapshot({ includeActive = false, warning = false } = {}) {
-    const segments = [...this.modelTimeline.history];
-    if (includeActive) segments.push(this.#modelTimelineActiveSegment({ warning }));
-    return `${this.timelineHeader}${segments.length ? ` ${segments.join(' ')}` : ''}`;
-  }
-
-  #closeModelTimelinePhase(elapsed) {
-    const segment = this.#modelTimelineActiveSegment({ includeElapsed: true, elapsed });
-    this.modelTimeline.history.push(segment);
-    this.modelTimeline.heartbeatRun = 0;
-    return segment;
+  #appendModelTimeline(fragment, { resetHeartbeat = true } = {}) {
+    const value = String(fragment || '');
+    if (!value) return '';
+    this.modelTimeline.content += value;
+    if (resetHeartbeat) this.modelTimeline.heartbeatRun = 0;
+    return value;
   }
 
   #prepareModelTimeline(kind, details = {}, changedAt = Date.now(), message = '') {
@@ -321,7 +312,7 @@ export class ProgressStream {
     if (!this.modelTimeline.active && !(isStart || isPhase || isFirstSemantic || isBusyWait)) return null;
 
     let emit = false;
-    let snapshot = '';
+    let append = '';
     let terminal = false;
 
     if (!this.modelTimeline.active) {
@@ -331,46 +322,42 @@ export class ProgressStream {
       this.timelineHeader = modelTimelineHeader(this.locale, { timestampMs: this.modelTimeline.startedAt });
       this.modelTimeline.phase = 'waiting';
       this.modelTimeline.round = round;
-      this.modelTimeline.history = [];
+      this.modelTimeline.content = ' ○';
       this.modelTimeline.heartbeatRun = 0;
     } else if (isStart) {
       const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-      this.#closeModelTimelinePhase(elapsed);
+      append += this.#appendModelTimeline(` ${elapsed}s ○`);
       this.modelTimeline.phase = 'waiting';
-      this.modelTimeline.heartbeatRun = 0;
       if (round > 0) this.modelTimeline.round = round;
-      snapshot = `${this.#modelTimelineSnapshot()} ○`;
       emit = true;
     }
 
     if (isBusyWait) {
-      snapshot = `${this.#modelTimelineSnapshot({ includeActive: true })} ↻`;
+      append += this.#appendModelTimeline(' ↻');
       emit = true;
-      this.modelTimeline.heartbeatRun = 0;
     } else if (isPhase) {
       const nextPhase = String(details.model_phase);
       if (this.modelTimeline.phase !== nextPhase) {
         const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-        this.#closeModelTimelinePhase(elapsed);
-        snapshot = this.#modelTimelineSnapshot();
-        emit = true;
+        append += this.#appendModelTimeline(` ${elapsed}s ${this.#modelTimelineGlyph(nextPhase)}`);
         this.modelTimeline.phase = nextPhase;
-        this.modelTimeline.heartbeatRun = 0;
+        emit = true;
       }
     } else if (isHeartbeat && this.modelTimeline.active) {
-      this.modelTimeline.heartbeatRun += 1;
       const warning = String(message || '').trim().startsWith('⚠');
-      snapshot = this.#modelTimelineSnapshot({ includeActive: true, warning });
+      const bar = this.modelTimeline.heartbeatRun > 0 ? '|' : ' |';
+      append += this.#appendModelTimeline(`${bar}${warning ? ' ⚠' : ''}`, { resetHeartbeat: false });
+      this.modelTimeline.heartbeatRun = warning ? 0 : this.modelTimeline.heartbeatRun + 1;
       emit = true;
     } else if (isTerminal && this.modelTimeline.active) {
       const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-      this.#closeModelTimelinePhase(elapsed);
-      snapshot = this.#modelTimelineSnapshot();
+      append += this.#appendModelTimeline(` ${elapsed}s`);
       emit = true;
       terminal = true;
     }
 
-    return { active: true, emit, snapshot, fullText: snapshot, terminal };
+    const snapshot = this.#modelTimelineSnapshot();
+    return { active: true, emit, append, snapshot, fullText: snapshot, terminal };
   }
 
   #emitUpdate(entry) {
@@ -405,10 +392,19 @@ export class ProgressStream {
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: initialText }
             : { type: 'text_delta', text: initialText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_snapshot' : metadata.renderMode, carrier: this.carrier });
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_inline' : metadata.renderMode, carrier: this.carrier });
       } else {
-        const deltaText = timeline?.active ? `\n${timeline.snapshot}` : `\n${message}`;
-        if (timeline?.active) this.modelTimeline.rendered = true;
+        let deltaText = `\n${message}`;
+        let timelineRenderMode = metadata.renderMode;
+        if (timeline?.active) {
+          if (!this.modelTimeline.rendered) {
+            deltaText = `\n${timeline.snapshot}`;
+            this.modelTimeline.rendered = true;
+          } else {
+            deltaText = timeline.append;
+          }
+          timelineRenderMode = 'timeline_inline';
+        }
         if (!deltaText) return;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
@@ -416,7 +412,7 @@ export class ProgressStream {
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: deltaText }
             : { type: 'text_delta', text: deltaText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_snapshot' : metadata.renderMode, carrier: this.carrier });
+        }), { ...metadata, renderMode: timelineRenderMode, carrier: this.carrier });
       }
     });
   }
@@ -478,7 +474,10 @@ export class ProgressStream {
           ? statusText(this.locale, 'timelineHandoffSingle', { tool: toolNames[0] })
           : statusText(this.locale, 'timelineHandoffMultiple');
       }
-      timeline.snapshot += ` ${terminalMessage}`;
+      const terminalFragment = ` ${terminalMessage}`;
+      this.modelTimeline.content += terminalFragment;
+      timeline.append += terminalFragment;
+      timeline.snapshot += terminalFragment;
       timeline.fullText = timeline.snapshot;
     }
     const entry = { message, kind, details, revision, changedAt, renderMode, timeline };

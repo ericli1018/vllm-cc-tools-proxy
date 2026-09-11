@@ -1,9 +1,34 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.37 changes model progress from fragment-only appends to cumulative timeline snapshots: every semantic phase transition and real liveness heartbeat immediately emits the complete timeline-so-far, preserving rapid `◆ ↔ ◇` alternation and cumulative elapsed timing. V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.38 corrects model progress to a true single physical line: the header is emitted once and every later semantic transition, liveness heartbeat, busy marker, and terminal handoff is appended as a small text delta with no replayed timeline and no newline. V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
 
 
+
+## V0.29.38 True Single-Line Incremental Timeline
+
+V0.29.38 fixes the V0.29.37 snapshot renderer. A model-progress block now owns exactly one physical timeline row. The first visible model event emits the localized header once; later state changes append only the new fragment to that same row. There is no timeline replay, no carriage return, and no newline between timeline updates.
+
+Wire-level example:
+
+```text
+"處理中 · 17:43:48 ○ 1s ◐"
+" 4s ◆"
+" 5s ◇"
+" 5s ◆"
+" 6s ◇"
+" 7s 已產生下一步工具；交還執行…"
+```
+
+The user therefore sees one line grow in place as Claude Code consumes the streamed text deltas:
+
+```text
+處理中 · 17:43:48 ○ 1s ◐ 4s ◆ 5s ◇ 5s ◆ 6s ◇ 7s 已產生下一步工具；交還執行…
+```
+
+The real liveness heartbeat remains a streamed delta. The first heartbeat group appends ` |`; consecutive heartbeats append only `|`, producing `||...` without replaying the header. Semantic transitions append `<elapsed>s <glyph>` immediately, and `◆ ↔ ◇` alternation remains lossless. `↻` busy/retry and `| ⚠` stall-warning markers stay inline. If a startup/media banner already opened the progress content block, the model timeline opens one new row exactly once and then stays on that row.
+
+The V0.29.35 second-row statusLine preview and `◆ CCTP <version>` branding are unchanged. No routing, Vision, ToolSearch, Web, Compact, recovery, ENV, or cache-generation behavior changes.
 
 ## V0.29.37 Cumulative Timeline Snapshots
 

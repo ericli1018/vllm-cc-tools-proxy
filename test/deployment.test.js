@@ -721,17 +721,24 @@ test('V0.29.36 renders one append-only model timeline and uses compact CCTP stat
 
 
 
-test('V0.29.37 emits cumulative model timeline snapshots on every state change and heartbeat', async () => {
+test('V0.29.37 cumulative snapshot release history remains documented', async () => {
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(readme, /V0\.29\.37 Cumulative Timeline Snapshots/);
+  assert.ok(changeLogEntries.includes('V0.29.37-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.37-實作與驗證報告.md'));
+});
+
+test('V0.29.38 uses one physical model timeline row with incremental wire deltas', async () => {
   const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(progressSource, /#closeModelTimelinePhase/);
-  assert.match(progressSource, /this\.modelTimeline\.history/);
-  assert.match(progressSource, /timeline_snapshot/);
-  assert.match(progressSource, /snapshot = this\.#modelTimelineSnapshot\(\)/);
-  assert.match(progressSource, /heartbeatRun \+= 1/);
-  assert.match(readme, /V0\.29\.37 Cumulative Timeline Snapshots/);
-  assert.match(readme, /○ 2s.*◐ 22s.*◆ 25s.*◇ 25s.*◆ 25s/s);
-  assert.ok(changeLogEntries.includes('V0.29.37-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.29.37-實作與驗證報告.md'));
+  assert.match(progressSource, /timeline\.append/);
+  assert.match(progressSource, /timeline_inline/);
+  assert.match(progressSource, /this\.modelTimeline\.content/);
+  assert.doesNotMatch(progressSource, /timeline_snapshot/);
+  assert.match(readme, /V0\.29\.38 True Single-Line Incremental Timeline/);
+  assert.match(readme, /header is emitted once/i);
+  assert.ok(changeLogEntries.includes('V0.29.38-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.38-實作與驗證報告.md'));
 });
