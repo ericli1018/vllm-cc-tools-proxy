@@ -11,7 +11,7 @@ import { runManagedLoop } from '../proxy/managed-loop.js';
 import { ProtocolDiagnosticStore } from '../proxy/protocol-diagnostic-store.js';
 import { WebToolDiagnosticTraceStore } from '../proxy/web-tool-diagnostic-trace-store.js';
 import { createWebToolDiagnosticController } from '../proxy/web-tool-diagnostic.js';
-import { emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
+import { describeFinalAnthropicProgress, emitFinalAnthropicResponse, emitSseError, pipeAnthropicUpstreamStream, createServerToolStreamBridge } from '../proxy/anthropic-sse.js';
 import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector.js';
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
@@ -743,6 +743,14 @@ export function createProxyServer(config, dependencies = {}) {
           : null,
         stop_reason: String(response?.stop_reason || ''),
         handoffs,
+      });
+    };
+    const closeProgressForFinalResponse = async (response) => {
+      if (!progress || progress.progressClosed) return;
+      const finalProgress = describeFinalAnthropicProgress(response, { locale: config.responseLanguage });
+      await progress.closeProgress(finalProgress.message, {
+        phase: finalProgress.phase,
+        details: finalProgress.details,
       });
     };
     const observeServerResponseCapabilities = (response, stage = 'base_response') => {
@@ -1631,6 +1639,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, original);
           progress.stopSemanticHeartbeat();
+          await closeProgressForFinalResponse(response);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
@@ -1913,6 +1922,7 @@ export function createProxyServer(config, dependencies = {}) {
           );
           response = observeServerResponseCapabilities(response, 'cached_transform_stream');
           response = await applyFinalPresentationLanguage(response, request);
+          await closeProgressForFinalResponse(response);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {
@@ -2347,6 +2357,7 @@ export function createProxyServer(config, dependencies = {}) {
               - totalAnthropicInputTokens(initialStreamUsage),
             output_tokens: observedUsage.output_tokens || 0,
           });
+          await closeProgressForFinalResponse(result);
           observeAgentHandoff(result);
           await emitFinalAnthropicResponse(progress, result, { startIndex: serverToolBridge?.nextIndex, locale: config.responseLanguage });
         } else {
@@ -2432,6 +2443,7 @@ export function createProxyServer(config, dependencies = {}) {
           runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
           modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, request);
+          await closeProgressForFinalResponse(response);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
         } else {

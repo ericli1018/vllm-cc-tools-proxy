@@ -134,7 +134,7 @@ export class ProgressStream {
       startedAt: 0,
       phase: 'waiting',
       round: 0,
-      text: '',
+      history: [],
       rendered: false,
       heartbeatRun: 0,
     };
@@ -286,6 +286,27 @@ export class ProgressStream {
     return Math.floor(elapsedMs / 1000);
   }
 
+  #modelTimelineActiveSegment({ includeElapsed = false, elapsed = 0, warning = false } = {}) {
+    const glyph = this.#modelTimelineGlyph(this.modelTimeline.phase);
+    const bars = this.modelTimeline.heartbeatRun > 0 ? ` ${'|'.repeat(this.modelTimeline.heartbeatRun)}` : '';
+    const warningText = warning ? ' ⚠' : '';
+    const elapsedText = includeElapsed ? ` ${elapsed}s` : '';
+    return `${glyph}${bars}${warningText}${elapsedText}`;
+  }
+
+  #modelTimelineSnapshot({ includeActive = false, warning = false } = {}) {
+    const segments = [...this.modelTimeline.history];
+    if (includeActive) segments.push(this.#modelTimelineActiveSegment({ warning }));
+    return `${this.timelineHeader}${segments.length ? ` ${segments.join(' ')}` : ''}`;
+  }
+
+  #closeModelTimelinePhase(elapsed) {
+    const segment = this.#modelTimelineActiveSegment({ includeElapsed: true, elapsed });
+    this.modelTimeline.history.push(segment);
+    this.modelTimeline.heartbeatRun = 0;
+    return segment;
+  }
+
   #prepareModelTimeline(kind, details = {}, changedAt = Date.now(), message = '') {
     const phase = String(details.phase || '');
     const round = Math.max(0, Math.trunc(Number(details.round) || 0));
@@ -299,7 +320,10 @@ export class ProgressStream {
 
     if (!this.modelTimeline.active && !(isStart || isPhase || isFirstSemantic || isBusyWait)) return null;
 
-    let fragment = '';
+    let emit = false;
+    let snapshot = '';
+    let terminal = false;
+
     if (!this.modelTimeline.active) {
       const startedAt = Number(details.model_started_at);
       this.modelTimeline.active = true;
@@ -307,43 +331,46 @@ export class ProgressStream {
       this.timelineHeader = modelTimelineHeader(this.locale, { timestampMs: this.modelTimeline.startedAt });
       this.modelTimeline.phase = 'waiting';
       this.modelTimeline.round = round;
+      this.modelTimeline.history = [];
       this.modelTimeline.heartbeatRun = 0;
-      this.modelTimeline.text = `${this.timelineHeader} ○`;
     } else if (isStart) {
       const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-      fragment = ` ${elapsed}s ○`;
+      this.#closeModelTimelinePhase(elapsed);
       this.modelTimeline.phase = 'waiting';
       this.modelTimeline.heartbeatRun = 0;
       if (round > 0) this.modelTimeline.round = round;
+      snapshot = `${this.#modelTimelineSnapshot()} ○`;
+      emit = true;
     }
 
     if (isBusyWait) {
-      fragment += ' ↻';
+      snapshot = `${this.#modelTimelineSnapshot({ includeActive: true })} ↻`;
+      emit = true;
       this.modelTimeline.heartbeatRun = 0;
     } else if (isPhase) {
       const nextPhase = String(details.model_phase);
       if (this.modelTimeline.phase !== nextPhase) {
         const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-        fragment += ` ${elapsed}s ${this.#modelTimelineGlyph(nextPhase)}`;
+        this.#closeModelTimelinePhase(elapsed);
+        snapshot = this.#modelTimelineSnapshot();
+        emit = true;
         this.modelTimeline.phase = nextPhase;
         this.modelTimeline.heartbeatRun = 0;
       }
     } else if (isHeartbeat && this.modelTimeline.active) {
-      const warning = String(message || '').trim().startsWith('⚠');
-      fragment += this.modelTimeline.heartbeatRun > 0 ? (warning ? '| ⚠' : '|') : (warning ? ' | ⚠' : ' |');
       this.modelTimeline.heartbeatRun += 1;
+      const warning = String(message || '').trim().startsWith('⚠');
+      snapshot = this.#modelTimelineSnapshot({ includeActive: true, warning });
+      emit = true;
     } else if (isTerminal && this.modelTimeline.active) {
       const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
-      fragment += ` ${elapsed}s`;
+      this.#closeModelTimelinePhase(elapsed);
+      snapshot = this.#modelTimelineSnapshot();
+      emit = true;
+      terminal = true;
     }
 
-    if (fragment) this.modelTimeline.text += fragment;
-    return {
-      active: true,
-      fragment,
-      fullText: this.modelTimeline.text,
-      terminal: isTerminal,
-    };
+    return { active: true, emit, snapshot, fullText: snapshot, terminal };
   }
 
   #emitUpdate(entry) {
@@ -359,6 +386,8 @@ export class ProgressStream {
       const message = String(entry.message);
       const timeline = entry.timeline || null;
       const thinkingCarrier = this.carrier === 'thinking';
+      if (timeline?.active && !timeline.emit) return;
+
       if (!this.visible) {
         this.visible = true;
         await this.#write(event('content_block_start', {
@@ -368,7 +397,7 @@ export class ProgressStream {
             ? { type: 'thinking', thinking: '', signature: '' }
             : { type: 'text', text: '' },
         }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier });
-        const initialText = timeline?.active ? timeline.fullText : `${this.progressHeader}\n${message}`;
+        const initialText = timeline?.active ? timeline.snapshot : `${this.progressHeader}\n${message}`;
         if (timeline?.active) this.modelTimeline.rendered = true;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
@@ -376,15 +405,10 @@ export class ProgressStream {
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: initialText }
             : { type: 'text_delta', text: initialText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_append' : metadata.renderMode, carrier: this.carrier });
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_snapshot' : metadata.renderMode, carrier: this.carrier });
       } else {
-        let deltaText = timeline?.active ? timeline.fragment : `
-${message}`;
-        if (timeline?.active && !this.modelTimeline.rendered) {
-          deltaText = `
-${timeline.fullText}`;
-          this.modelTimeline.rendered = true;
-        }
+        const deltaText = timeline?.active ? `\n${timeline.snapshot}` : `\n${message}`;
+        if (timeline?.active) this.modelTimeline.rendered = true;
         if (!deltaText) return;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
@@ -392,7 +416,7 @@ ${timeline.fullText}`;
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: deltaText }
             : { type: 'text_delta', text: deltaText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_append' : metadata.renderMode, carrier: this.carrier });
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_snapshot' : metadata.renderMode, carrier: this.carrier });
       }
     });
   }
@@ -454,9 +478,8 @@ ${timeline.fullText}`;
           ? statusText(this.locale, 'timelineHandoffSingle', { tool: toolNames[0] })
           : statusText(this.locale, 'timelineHandoffMultiple');
       }
-      timeline.fragment += ` ${terminalMessage}`;
-      timeline.fullText += ` ${terminalMessage}`;
-      this.modelTimeline.text = timeline.fullText;
+      timeline.snapshot += ` ${terminalMessage}`;
+      timeline.fullText = timeline.snapshot;
     }
     const entry = { message, kind, details, revision, changedAt, renderMode, timeline };
     const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
@@ -477,7 +500,7 @@ ${timeline.fullText}`;
     this.stopSemanticHeartbeat();
     this.#clearPending();
     const closeDetails = { ...details, phase };
-    if (finalMessage && this.visible) await this.update(finalMessage, { force: true, details: closeDetails });
+    if (finalMessage && (this.visible || this.modelTimeline.active)) await this.update(finalMessage, { force: true, details: closeDetails });
     this.progressClosed = true;
     await this.#enqueue(async () => {
       if (this.visible) {

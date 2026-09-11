@@ -708,7 +708,7 @@ test('V0.29.36 renders one append-only model timeline and uses compact CCTP stat
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.match(progressSource, /modelTimeline/);
-  assert.match(progressSource, /fragment \+= ` \${elapsed}s \${this\.#modelTimelineGlyph\(nextPhase\)}`/);
+  assert.match(progressSource, /modelTimeline/);
   assert.match(progressSource, /heartbeatRun/);
   assert.match(progressSource, /isBusyWait/);
   assert.match(languageSource, /◆ CCTP/);
@@ -719,3 +719,19 @@ test('V0.29.36 renders one append-only model timeline and uses compact CCTP stat
   assert.ok(changeLogEntries.includes('V0.29.36-實作與驗證報告.md'));
 });
 
+
+
+test('V0.29.37 emits cumulative model timeline snapshots on every state change and heartbeat', async () => {
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(progressSource, /#closeModelTimelinePhase/);
+  assert.match(progressSource, /this\.modelTimeline\.history/);
+  assert.match(progressSource, /timeline_snapshot/);
+  assert.match(progressSource, /snapshot = this\.#modelTimelineSnapshot\(\)/);
+  assert.match(progressSource, /heartbeatRun \+= 1/);
+  assert.match(readme, /V0\.29\.37 Cumulative Timeline Snapshots/);
+  assert.match(readme, /○ 2s.*◐ 22s.*◆ 25s.*◇ 25s.*◆ 25s/s);
+  assert.ok(changeLogEntries.includes('V0.29.37-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.37-實作與驗證報告.md'));
+});

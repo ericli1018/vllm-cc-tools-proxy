@@ -61,14 +61,16 @@ test('V0.29.36 model progress is one append-only timeline with real heartbeat ba
   await progress.stop();
 
   const deltas = textDeltas(response);
-  assert.match(deltas[0], /^處理中 · \d{2}:\d{2}:\d{2} ○$/);
-  assert.equal(deltas[1], ' |');
-  assert.equal(deltas[2], ' 62s ◐');
-  assert.equal(deltas[3], ' |');
-  assert.equal(deltas[4], ' 65s ◆');
-  assert.equal(deltas[5], ' 67s ◇');
-  assert.equal(deltas[6], ' 70s 已產生下一步 Write；交還執行…');
-  assert.doesNotMatch(deltas.slice(0, 7).join(''), /\n|\r|模型開始思考|模型思考中|模型開始回應|模型建立工具動作/);
+  const lines = deltas.flatMap((delta) => String(delta).split('\n')).filter((line) => line.startsWith('處理中 · '));
+  assert.equal(lines.length, 6);
+  assert.match(lines[0], /^處理中 · \d{2}:\d{2}:\d{2} ○ \|$/);
+  assert.match(lines[1], /^處理中 · \d{2}:\d{2}:\d{2} ○ \| 62s$/);
+  assert.match(lines[2], /^處理中 · \d{2}:\d{2}:\d{2} ○ \| 62s ◐ \|$/);
+  assert.match(lines[3], /^處理中 · \d{2}:\d{2}:\d{2} ○ \| 62s ◐ \| 65s$/);
+  assert.match(lines[4], /^處理中 · \d{2}:\d{2}:\d{2} ○ \| 62s ◐ \| 65s ◆ 67s$/);
+  assert.match(lines[5], /^處理中 · \d{2}:\d{2}:\d{2} ○ \| 62s ◐ \| 65s ◆ 67s ◇ 70s 已產生下一步 Write；交還執行…$/);
+  assert.doesNotMatch(lines.join(''), /模型開始思考|模型思考中|模型開始回應|模型建立工具動作/);
+
 });
 
 test('V0.29.36 progress timeline keeps waiting, thinking, response and tool heartbeat bars independent', async () => {
@@ -85,7 +87,9 @@ test('V0.29.36 progress timeline keeps waiting, thinking, response and tool hear
   await progress.update('tool', { force: true, details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'tool', timeline_elapsed_ms: 130_000 } });
   await progress.update('hb5', { force: true, kind: 'semantic_heartbeat', details: { phase: 'semantic_heartbeat' } });
   await progress.stop();
-  assert.match(textDeltas(response).join(''), /^處理中 · \d{2}:\d{2}:\d{2} ○ \|\| 62s ◐ \| 95s ◆ \| 130s ◇ \|$/);
+  const timeline = textDeltas(response).flatMap((delta) => String(delta).split('\n')).filter((line) => line.startsWith('處理中 · '));
+  assert.equal(timeline.length, 8);
+  assert.match(timeline.at(-1), /^處理中 · \d{2}:\d{2}:\d{2} ○ \|\| 62s ◐ \| 95s ◆ \| 130s ◇ \|$/);
 });
 
 test('V0.29.36 localized progress headers use compact Processing wording and remain strippable', () => {
@@ -100,8 +104,8 @@ test('V0.29.36 localized progress headers use compact Processing wording and rem
 });
 
 test('V0.29.36 runtime statusLine brand is compact CCTP', () => {
-  const line = formatRuntimeStatusLine('zh-TW', { version: '0.29.36', phase: 'thinking', elapsedMs: 45_000 });
-  assert.match(line, /^◆ CCTP 0\.29\.36 │/);
+  const line = formatRuntimeStatusLine('zh-TW', { version: '0.29.37', phase: 'thinking', elapsedMs: 45_000 });
+  assert.match(line, /^◆ CCTP 0\.29\.37 │/);
   assert.doesNotMatch(line, /CC TOOL PROXY/);
 });
 
@@ -122,9 +126,8 @@ test('V0.29.36 model timeline opens as one new row after an existing banner/prog
   await progress.stop();
   const deltas = textDeltas(response);
   assert.equal(deltas[0], 'BANNER');
-  assert.match(deltas[1], /^\n處理中 · \d{2}:\d{2}:\d{2} ○$/);
-  assert.equal(deltas[2], ' 3s ◐');
-  assert.equal(deltas[3], ' |');
+  assert.match(deltas[1], /^\n處理中 · \d{2}:\d{2}:\d{2} ○ 3s$/);
+  assert.match(deltas[2], /^\n處理中 · \d{2}:\d{2}:\d{2} ○ 3s ◐ \|$/);
 });
 
 test('V0.29.36 stalled semantic heartbeat stays single-line but preserves a visible warning marker', async () => {

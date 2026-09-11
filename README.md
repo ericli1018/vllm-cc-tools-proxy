@@ -1,8 +1,37 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.36 replaces verbose multi-line model progress with one append-only timeline (`○/◐/◆/◇` plus real 30-second `|` liveness bars), keeps cumulative phase timing on the same row, and shortens the native statusLine brand to `◆ CCTP <version>`. V0.29.35 second-row semantic preview, V0.29.34 bounded PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.37 changes model progress from fragment-only appends to cumulative timeline snapshots: every semantic phase transition and real liveness heartbeat immediately emits the complete timeline-so-far, preserving rapid `◆ ↔ ◇` alternation and cumulative elapsed timing. V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
 
+
+
+## V0.29.37 Cumulative Timeline Snapshots
+
+V0.29.37 keeps the V0.29.36 compact model-progress vocabulary but changes the streaming contract. Progress is no longer rendered as a sequence of tiny append fragments that only becomes readable after the whole stream is concatenated. Instead, every semantic state transition and every real 30-second liveness heartbeat emits a new complete snapshot line containing the timeline accumulated so far.
+
+Example state progression:
+
+```text
+處理中 · 17:10:12 ○ 2s
+處理中 · 17:10:12 ○ 2s ◐ 22s
+處理中 · 17:10:12 ○ 2s ◐ 22s ◆ 25s
+處理中 · 17:10:12 ○ 2s ◐ 22s ◆ 25s ◇ 25s
+處理中 · 17:10:12 ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s
+處理中 · 17:10:12 ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s ◆ 26s
+處理中 · 17:10:12 ○ 2s ◐ 22s ◆ 25s ◇ 25s ◆ 25s ◇ 26s ◆ 26s ◇ 27s 已產生下一步工具；交還執行…
+```
+
+A timeline node is closed when the next semantic phase starts, so the elapsed value appears after the phase glyph (`○ 2s`, `◐ 22s`, `◆ 25s`, `◇ 25s`). Response and tool phases may alternate repeatedly; no `◆/◇` transition is collapsed merely because the same glyph appeared earlier in the request.
+
+If the active phase remains unchanged long enough for the existing semantic heartbeat to fire, the heartbeat immediately emits another full snapshot and remains attached to that active phase:
+
+```text
+處理中 · 17:10:12 ○ 2s ◐ |
+處理中 · 17:10:12 ○ 2s ◐ ||
+處理中 · 17:10:12 ○ 2s ◐ || 65s
+```
+
+Each `|` still corresponds to a real streamed liveness heartbeat; bars are not synthesized after the fact. `↻` busy/retry and `| ⚠` stall-warning semantics remain visible. Recovery attempts keep cumulative timing and may add another waiting attempt without resetting the request clock. The compact native statusLine brand remains `◆ CCTP <version>`, and the V0.29.35 second-row `↳ ...▌` semantic preview is unchanged. No new ENV variables or cache-generation changes are introduced.
 
 
 ## V0.29.36 Single-Line Model Progress Timeline
