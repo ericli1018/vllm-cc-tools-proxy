@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.39'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.39'
+test "$(node -p "require('./package.json').version")" = '0.29.40'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.40'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.39'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.40'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1137,3 +1137,16 @@ grep -Fq "requestStage = 'managed_model_round'" src/services/proxy-server.js
 node --test test/anthropic-sse-collector.test.js --test-name-pattern='V0.29.39 collector preserves malformed tool diagnostics'
 node --test test/proxy-server.test.js --test-name-pattern='V0.29.39 malformed managed tool JSON logs'
 node --test test/deployment.test.js --test-name-pattern='V0.29.39 keeps malformed tool handling diagnostics-only'
+
+
+# V0.29.40 startup card + 30-second buffered visible-progress contract
+test -f change_log/V0.29.40-更新說明.md
+test -f change_log/V0.29.40-實作與驗證報告.md
+grep -Fq 'V0.29.40 30-Second Buffered Progress + Startup Card Flush' README.md
+grep -Fq 'PROGRESS_VISIBLE_AFTER_MS=30000' .env.example
+grep -Fq 'PROGRESS_VISIBLE_AFTER_MS: ${PROGRESS_VISIBLE_AFTER_MS:-30000}' compose.yaml
+grep -Fq 'startup_banner_newline' src/proxy/progress.js
+grep -Fq 'pendingUpdates' src/proxy/progress.js
+node --test test/progress.test.js --test-name-pattern='V0.29.40'
+node --test test/config.test.js --test-name-pattern='V0.29.40'
+node --test test/deployment.test.js --test-name-pattern='V0.29.40 buffers visible progress'

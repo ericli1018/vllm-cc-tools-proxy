@@ -149,6 +149,8 @@ export class ProgressStream {
     this.semanticHeartbeatTimer = null;
     this.pendingTimer = null;
     this.pendingUpdate = null;
+    this.pendingUpdates = [];
+    this.pendingRelease = null;
     this.pingTimer = setInterval(() => {
       this.writeRaw(event('ping', { type: 'ping' }), { kind: 'ping' }).catch(() => {});
     }, pingIntervalMs);
@@ -213,6 +215,11 @@ export class ProgressStream {
         index: 0,
         delta: { type: 'text_delta', text: String(text) },
       }), { kind: 'startup_banner', phase: 'startup_banner', revision, changedAt });
+      await this.#write(event('content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: '\n' },
+      }), { kind: 'startup_banner_newline', phase: 'startup_banner', revision, changedAt });
     });
     return true;
   }
@@ -252,6 +259,7 @@ export class ProgressStream {
     if (this.pendingTimer) clearTimeout(this.pendingTimer);
     this.pendingTimer = null;
     this.pendingUpdate = null;
+    this.pendingUpdates.length = 0;
   }
 
   #stateKey(message, details) {
@@ -259,16 +267,31 @@ export class ProgressStream {
   }
 
   #schedulePending() {
-    if (this.pendingTimer || !this.pendingUpdate) return;
+    if (this.pendingTimer || this.pendingUpdates.length === 0) return;
     const remaining = Math.max(0, this.visibleAfterMs - (Date.now() - this.startedAt));
     this.pendingTimer = setTimeout(() => {
       this.pendingTimer = null;
-      const pending = this.pendingUpdate;
-      this.pendingUpdate = null;
-      if (!pending || this.closed || this.progressClosed) return;
-      this.#emitUpdate(pending).catch(() => {});
+      if (this.closed || this.progressClosed) return;
+      this.#flushPending().catch(() => {});
     }, remaining);
     this.pendingTimer.unref?.();
+  }
+
+  async #flushPending() {
+    if (this.pendingRelease) return this.pendingRelease;
+    if (this.pendingUpdates.length === 0 || this.closed || this.progressClosed) return;
+    if (this.pendingTimer) clearTimeout(this.pendingTimer);
+    this.pendingTimer = null;
+    const entries = this.pendingUpdates.splice(0);
+    this.pendingUpdate = null;
+    this.pendingRelease = (async () => {
+      for (const entry of entries) await this.#emitUpdate(entry);
+    })();
+    try {
+      await this.pendingRelease;
+    } finally {
+      this.pendingRelease = null;
+    }
   }
 
   #modelTimelineGlyph(phase) {
@@ -481,16 +504,15 @@ export class ProgressStream {
       timeline.fullText = timeline.snapshot;
     }
     const entry = { message, kind, details, revision, changedAt, renderMode, timeline };
-    const belowThreshold = !this.visible && Date.now() - this.startedAt < this.visibleAfterMs;
-    if (!force && belowThreshold) {
+    const belowThreshold = Date.now() - this.startedAt < this.visibleAfterMs;
+    if (belowThreshold) {
+      this.pendingUpdates.push(entry);
       this.pendingUpdate = entry;
       this.#schedulePending();
       return;
     }
 
-    if (this.pendingTimer) clearTimeout(this.pendingTimer);
-    this.pendingTimer = null;
-    this.pendingUpdate = null;
+    await this.#flushPending();
     await this.#emitUpdate(entry);
   }
 
@@ -526,7 +548,7 @@ export class ProgressStream {
   }
 
   async dispose() {
-    if (!this.res && !this.pingTimer && !this.semanticHeartbeatTimer && !this.pendingTimer && !this.pendingUpdate) return;
+    if (!this.res && !this.pingTimer && !this.semanticHeartbeatTimer && !this.pendingTimer && !this.pendingUpdate && this.pendingUpdates.length === 0 && !this.pendingRelease) return;
     await this.stop();
     this.res = null;
     this.getReceivedBytes = null;

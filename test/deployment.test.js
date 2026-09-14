@@ -758,3 +758,16 @@ test('V0.29.39 keeps malformed tool handling diagnostics-only and documents the 
   assert.ok(changeLogEntries.includes('V0.29.39-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.39-實作與驗證報告.md'));
 });
+
+test('V0.29.40 buffers visible progress for 30 seconds and flushes the startup card', async () => {
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const configSource = await fs.readFile(new URL('../src/config.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(progressSource, /pendingUpdates/);
+  assert.match(progressSource, /startup_banner_newline/);
+  assert.match(configSource, /PROGRESS_VISIBLE_AFTER_MS, 30000/);
+  assert.match(readme, /V0\.29\.40 30-Second Buffered Progress \+ Startup Card Flush/);
+  assert.ok(changeLogEntries.includes('V0.29.40-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.40-實作與驗證報告.md'));
+});

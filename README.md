@@ -1,7 +1,23 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.39 adds diagnostics-only evidence for malformed streamed tool JSON: bounded tool-input tail/size, tool name, final stop reason, output token usage, configured max token budget, and the correct managed-model request stage. It deliberately does not repair JSON or expand recovery behavior. V0.29.38 true single-line progress, V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.40 changes visible progress timing: each Main Claude Code session still receives one immediate Proxy startup card, followed by a standalone newline so Claude Code can render the card completely; all subsequent synthetic progress is buffered for the first 30 seconds, then flushed in original order and continued live only if the request is still running. Requests that finish before 30 seconds never show synthetic progress. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
+
+
+## V0.29.40 30-Second Buffered Progress + Startup Card Flush
+
+V0.29.40 keeps the existing once-per-Main-session startup card, but emits a separate `\n` text delta immediately after the card. This gives Claude Code a clean boundary to render the full card before any later progress appears.
+
+Visible synthetic progress now uses a 30-second gate by default (`PROGRESS_VISIBLE_AFTER_MS=30000`):
+
+- progress generated before 30 seconds is buffered in original order, including forced milestones and semantic heartbeat events;
+- the startup card does **not** open the progress gate early;
+- if the request is still active at 30 seconds, every buffered progress entry is flushed in order, then later progress continues live;
+- if the request completes before 30 seconds, buffered progress is never emitted;
+- SSE transport pings and non-visible protocol/usage traffic remain independent from this visible-progress gate;
+- Sub Agent visible-progress policy remains unchanged.
+
+This preserves the existing append-only single-line timeline once progress becomes visible; it does not use `\r` or ANSI cursor manipulation.
 
 ## V0.29.39 Malformed Tool JSON Diagnostics
 
@@ -2257,7 +2273,7 @@ PROGRESS_HEARTBEAT_MS=30000
   keeps Claude Code's semantic stream watchdog active
 ```
 
-Every actual state revision is sent immediately as an Anthropic `content_block_delta`; the 30-second visible heartbeat is used only when the current state has not changed. Before the 1.5-second visibility threshold, the proxy retains the latest pending snapshot instead of discarding early updates. If the task is still active when the threshold expires, that latest state is emitted immediately.
+State revisions are collected immediately, but visible synthetic progress is gated for the first 30 seconds by default. During that window the proxy buffers every progress entry in original order rather than retaining only the latest snapshot. If the request is still active when the threshold expires, the buffered entries are flushed in order and subsequent progress is sent live; if the request finishes earlier, no synthetic progress is shown. The 30-second semantic heartbeat remains a liveness sample when the current state has not otherwise changed.
 
 For a Web-only request, merely having `WebSearch` or `WebFetch` available no longer creates a visible `目前處理進度：` block. The first planning round remains invisible unless it lasts until the semantic-heartbeat threshold. A real managed tool call, queue wait, media operation, retry or repair activates progress immediately. A short direct Base-model answer therefore remains visually transparent.
 
@@ -2327,7 +2343,7 @@ VISION_MAX_CONCURRENCY=
 Streaming progress settings:
 
 ```env
-PROGRESS_VISIBLE_AFTER_MS=1500
+PROGRESS_VISIBLE_AFTER_MS=30000
 PROGRESS_PING_INTERVAL_MS=5000
 PROGRESS_HEARTBEAT_MS=30000
 SSE_DRAIN_TIMEOUT_MS=10000

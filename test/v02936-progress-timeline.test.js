@@ -123,8 +123,9 @@ test('V0.29.36 model timeline opens as one new row after an existing banner/prog
   await progress.stop();
   const deltas = textDeltas(response);
   assert.equal(deltas[0], 'BANNER');
-  assert.match(deltas[1], /^\n處理中 · \d{2}:\d{2}:\d{2} ○ 3s ◐$/);
-  assert.equal(deltas[2], ' |');
+  assert.equal(deltas[1], '\n');
+  assert.match(deltas[2], /^\n處理中 · \d{2}:\d{2}:\d{2} ○ 3s ◐$/);
+  assert.equal(deltas[3], ' |');
 });
 
 test('V0.29.36 stalled semantic heartbeat stays single-line but preserves a visible warning marker', async () => {

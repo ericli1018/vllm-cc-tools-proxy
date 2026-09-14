@@ -474,3 +474,8 @@ test('V0.29.11 managed model stall timeout is configurable and zero disables ina
     MANAGED_MODEL_STALL_TIMEOUT_MS: '-1',
   }), /MANAGED_MODEL_STALL_TIMEOUT_MS/);
 });
+
+test('V0.29.40 defaults visible progress delay to 30 seconds', () => {
+  const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(config.progressVisibleAfterMs, 30_000);
+});

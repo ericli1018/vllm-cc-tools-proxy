@@ -259,7 +259,7 @@ export function loadConfig(env = process.env) {
     managedTaskTimeoutMs: optionalTimeoutValue(env.MANAGED_TASK_TIMEOUT_MS, 'MANAGED_TASK_TIMEOUT_MS'),
     managedModelRoundTimeoutMs: intValue(env.MANAGED_MODEL_ROUND_TIMEOUT_MS, 360000, 'MANAGED_MODEL_ROUND_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     managedModelStallTimeoutMs: optionalTimeoutValue(env.MANAGED_MODEL_STALL_TIMEOUT_MS === undefined ? '90000' : env.MANAGED_MODEL_STALL_TIMEOUT_MS, 'MANAGED_MODEL_STALL_TIMEOUT_MS', { min: 1000, max: 3600000 }),
-    progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 1500, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
+    progressVisibleAfterMs: intValue(env.PROGRESS_VISIBLE_AFTER_MS, 30000, 'PROGRESS_VISIBLE_AFTER_MS', { min: 0 }),
     progressPingIntervalMs: intValue(env.PROGRESS_PING_INTERVAL_MS, 5000, 'PROGRESS_PING_INTERVAL_MS', { min: 1000 }),
     progressHeartbeatMs: intValue(env.PROGRESS_HEARTBEAT_MS, 30000, 'PROGRESS_HEARTBEAT_MS', { min: 5000 }),
     sseDrainTimeoutMs: intValue(env.SSE_DRAIN_TIMEOUT_MS, 10000, 'SSE_DRAIN_TIMEOUT_MS', { min: 1000, max: 300000 }),

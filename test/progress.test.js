@@ -269,7 +269,7 @@ test('upstream progress remains open through first-event wait and heartbeat stop
   assert.equal(progress.semanticHeartbeatTimer, null);
 });
 
-test('pre-threshold progress retains the latest pending state and reveals it at the visibility threshold', async () => {
+test('V0.29.40 pre-threshold progress buffers every state and flushes them in order at the visibility threshold', async () => {
   const response = new FakeResponse();
   const progress = new ProgressStream(response, {
     visibleAfterMs: 30,
@@ -277,17 +277,70 @@ test('pre-threshold progress retains the latest pending state and reveals it at 
     heartbeatIntervalMs: 60_000,
   });
   await progress.open();
-  await progress.update('狀態 A', { details: { phase: 'a' } });
+  await progress.update('狀態 A', { force: true, details: { phase: 'a' } });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  await progress.update('狀態 B', { details: { phase: 'b' } });
+  await progress.update('狀態 B', { force: true, details: { phase: 'b' } });
+
+  const beforeThreshold = response.chunks.join('');
+  assert.doesNotMatch(beforeThreshold, /狀態 A|狀態 B/);
+
   await new Promise((resolve) => setTimeout(resolve, 30));
   await progress.closeProgress();
   await progress.stop();
 
   const stream = response.chunks.join('');
   assert.equal(progress.visible, true);
-  assert.doesNotMatch(stream, /狀態 A/);
+  assert.match(stream, /狀態 A/);
   assert.match(stream, /狀態 B/);
+  assert.ok(stream.indexOf('狀態 A') < stream.indexOf('狀態 B'));
+});
+
+test('V0.29.40 startup banner emits a standalone newline and does not release buffered progress before threshold', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 30,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.showStartupBanner('BANNER');
+  await progress.update('進度 A', { force: true, details: { phase: 'a' } });
+  await progress.update('進度 B', { force: true, details: { phase: 'b' } });
+
+  const earlyDeltas = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)))
+    .filter((data) => data?.type === 'content_block_delta')
+    .map((data) => data.delta?.text || '');
+
+  assert.deepEqual(earlyDeltas.slice(0, 2), ['BANNER', '\n']);
+  assert.doesNotMatch(earlyDeltas.join(''), /進度 A|進度 B/);
+
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.match(stream, /進度 A/);
+  assert.match(stream, /進度 B/);
+  assert.ok(stream.indexOf('進度 A') < stream.indexOf('進度 B'));
+});
+
+test('V0.29.40 request completed before threshold never emits its buffered progress', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 60_000,
+    pingIntervalMs: 60_000,
+  });
+  await progress.open();
+  await progress.update('短請求進度 A', { force: true, details: { phase: 'a' } });
+  await progress.update('短請求進度 B', { force: true, details: { phase: 'b' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  const stream = response.chunks.join('');
+  assert.doesNotMatch(stream, /短請求進度 A|短請求進度 B/);
+  assert.doesNotMatch(stream, /event: content_block_start/);
 });
 
 test('equal progress text with different structured state revisions is delivered twice', async () => {
