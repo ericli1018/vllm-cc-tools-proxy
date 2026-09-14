@@ -1528,9 +1528,42 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const maybeShowStartupBanner = async (stream) => {
-        if (!stream || original?.stream !== true || !clientSessionId) return false;
-        if (claudeAgentRequestContext?.context === 'subagent') return false;
-        if (!runtimeTelemetry.claimBanner(clientSessionId)) return false;
+        const lastUserMessage = Array.isArray(original?.messages) && original.messages.length > 0
+          ? original.messages[original.messages.length - 1]
+          : null;
+        const skip = (reason) => {
+          log(config, 'info', 'startup_banner_skipped', {
+            requestId,
+            session_id: clientSessionId,
+            reason,
+            stream: original?.stream === true,
+            agent_context: claudeAgentRequestContext?.context || 'unknown',
+            message_count: Array.isArray(original?.messages) ? original.messages.length : 0,
+            last_role: String(lastUserMessage?.role || ''),
+            tool_result_continuation: Boolean(toolResultContinuation),
+          });
+          return false;
+        };
+
+        if (!stream) return skip('no_progress_stream');
+        if (messagesPath !== '/v1/messages') return skip('not_messages_endpoint');
+        if (original?.stream !== true) return skip('non_stream_request');
+        if (!clientSessionId) return skip('missing_session_id');
+        if (claudeAgentRequestContext?.context === 'subagent') return skip('subagent');
+        if (toolResultContinuation) return skip('tool_result_continuation');
+        if (lastUserMessage?.role !== 'user') return skip('not_visible_user_turn');
+
+        log(config, 'info', 'startup_banner_candidate', {
+          requestId,
+          session_id: clientSessionId,
+          message_count: original.messages.length,
+          declared_tool_count: Array.isArray(original.tools) ? original.tools.length : 0,
+        });
+
+        if (!runtimeTelemetry.reserveBanner(clientSessionId, requestId)) {
+          return skip('already_shown_or_reserved');
+        }
+
         const snapshot = runtimeTelemetry.snapshot();
         const banner = formatStartupBanner({
           version: VERSION,
@@ -1541,9 +1574,32 @@ export function createProxyServer(config, dependencies = {}) {
             vision: Boolean(config.vllmVisionUrl && config.vllmVisionModel),
           },
         });
-        const shown = await stream.showStartupBanner(banner);
-        if (shown) {
-          log(config, 'info', 'startup_banner_shown', {
+
+        try {
+          const shown = await stream.showStartupBanner(banner);
+          if (!shown) {
+            runtimeTelemetry.releaseBanner(clientSessionId, requestId);
+            return skip('stream_rejected_banner');
+          }
+
+          log(config, 'info', 'startup_banner_sent', {
+            requestId,
+            session_id: clientSessionId,
+            content_block_stopped: true,
+            next_content_index: Number.isInteger(stream.nextContentIndex) ? stream.nextContentIndex : null,
+          });
+
+          if (!runtimeTelemetry.commitBanner(clientSessionId, requestId)) {
+            runtimeTelemetry.releaseBanner(clientSessionId, requestId);
+            log(config, 'warn', 'startup_banner_skipped', {
+              requestId,
+              session_id: clientSessionId,
+              reason: 'commit_failed',
+            });
+            return false;
+          }
+
+          log(config, 'info', 'startup_banner_committed', {
             requestId,
             session_id: clientSessionId,
             sessions: snapshot.sessions,
@@ -1553,8 +1609,18 @@ export function createProxyServer(config, dependencies = {}) {
             lang_enabled: languageProcessorAvailable(),
             vision_enabled: Boolean(config.vllmVisionUrl && config.vllmVisionModel),
           });
+          return true;
+        } catch (error) {
+          runtimeTelemetry.releaseBanner(clientSessionId, requestId);
+          log(config, 'warn', 'startup_banner_skipped', {
+            requestId,
+            session_id: clientSessionId,
+            reason: 'send_failed',
+            error_name: String(error?.name || ''),
+            error_message: String(error?.message || '').slice(0, 240),
+          });
+          return false;
         }
-        return shown;
       };
 
       requestStage = 'request_classification';

@@ -221,3 +221,17 @@ test('V0.29.35 RuntimeTelemetry resets semantic preview at each model round and 
   assert.equal(snapshot.previewCurrentLine, '');
   release();
 });
+
+test('V0.29.41 startup banner reservation is released on failed delivery and committed only after successful delivery', () => {
+  const telemetry = new RuntimeTelemetry();
+  assert.equal(typeof telemetry.reserveBanner, 'function');
+  assert.equal(typeof telemetry.releaseBanner, 'function');
+  assert.equal(typeof telemetry.commitBanner, 'function');
+
+  assert.equal(telemetry.reserveBanner('session-a', 'request-a'), true);
+  assert.equal(telemetry.reserveBanner('session-a', 'request-b'), false);
+  assert.equal(telemetry.releaseBanner('session-a', 'request-a'), true);
+  assert.equal(telemetry.reserveBanner('session-a', 'request-b'), true);
+  assert.equal(telemetry.commitBanner('session-a', 'request-b'), true);
+  assert.equal(telemetry.reserveBanner('session-a', 'request-c'), false);
+});

@@ -155,11 +155,16 @@ export function createServerToolStreamBridge(progress) {
   const ensureStarted = async () => {
     if (nextIndex !== null) return;
     await progress.closeProgress();
-    nextIndex = progress.visible ? 1 : 0;
+    nextIndex = Number.isInteger(progress.nextContentIndex)
+      ? progress.nextContentIndex
+      : (progress.visible ? 1 : 0);
   };
   return {
     get nextIndex() {
-      return nextIndex === null ? (progress.visible ? 1 : 0) : nextIndex;
+      if (nextIndex !== null) return nextIndex;
+      return Number.isInteger(progress.nextContentIndex)
+        ? progress.nextContentIndex
+        : (progress.visible ? 1 : 0);
     },
     async emit(event) {
       if (!event?.block) return;
@@ -182,7 +187,9 @@ export async function emitFinalAnthropicResponse(progress, response, { startInde
     phase: finalProgress.phase,
     details: finalProgress.details,
   });
-  let index = Number.isInteger(startIndex) ? startIndex : (progress.visible ? 1 : 0);
+  let index = Number.isInteger(startIndex)
+    ? startIndex
+    : (Number.isInteger(progress.nextContentIndex) ? progress.nextContentIndex : (progress.visible ? 1 : 0));
   for (const block of response.content || []) {
     if (block.type === 'text') await emitTextBlock(progress, index, block);
     else if (block.type === 'thinking') await emitThinkingBlock(progress, index, block);
@@ -290,7 +297,9 @@ export async function pipeAnthropicUpstreamStream(progress, upstream, {
     const state = describeStreamingAnthropicProgress(payload, { locale });
     await progress.closeProgress(state.message, { phase: state.phase, details: state.details });
     progressClosedForModel = true;
-    offset = progress.visible ? 1 : 0;
+    offset = Number.isInteger(progress.nextContentIndex)
+      ? progress.nextContentIndex
+      : (progress.visible ? 1 : 0);
   };
   const processBlock = async (block) => {
     if (!block.trim()) return;

@@ -290,3 +290,30 @@ test('V0.2.23 Anthropic progress descriptions use the configured locale', () => 
   assert.equal(describeFinalAnthropicProgress({ content: [{ type: 'text', text: 'ok' }] }, { locale: 'ja-JP' }).message,
     'モデルの応答が完了しました。結果を返しています…');
 });
+
+test('V0.29.41 final model content starts after separate startup-banner and progress blocks', async () => {
+  const { ProgressStream } = await import('../src/proxy/progress.js');
+  class ResponseSink {
+    constructor() { this.chunks = []; }
+    writeHead() {}
+    write(chunk) { this.chunks.push(String(chunk)); return true; }
+    end() {}
+    once() {}
+    off() {}
+  }
+  const responseSink = new ResponseSink();
+  const progress = new ProgressStream(responseSink, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
+  await progress.open();
+  await progress.showStartupBanner('BANNER');
+  await progress.update('PROGRESS', { force: true, details: { phase: 'waiting' } });
+  await emitFinalAnthropicResponse(progress, {
+    content: [{ type: 'text', text: 'FINAL' }],
+    stop_reason: 'end_turn',
+    usage: { output_tokens: 1 },
+  });
+  const payloads = responseSink.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)));
+  const finalDelta = payloads.find((entry) => entry?.type === 'content_block_delta' && entry?.delta?.text === 'FINAL');
+  assert.equal(finalDelta?.index, 2);
+});

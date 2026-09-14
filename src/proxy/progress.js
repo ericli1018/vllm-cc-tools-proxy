@@ -139,6 +139,10 @@ export class ProgressStream {
       heartbeatRun: 0,
     };
     this.visible = false;
+    this.nextContentIndex = 0;
+    this.progressBlockOpen = false;
+    this.progressBlockIndex = -1;
+    this.bannerShown = false;
     this.closed = false;
     this.progressClosed = false;
     this.lastStateKey = '';
@@ -202,26 +206,35 @@ export class ProgressStream {
     const revision = ++this.revision;
     this.lastStateKey = this.#stateKey(text, { phase: 'startup_banner' });
     try { await this.onStateChange({ revision, phase: 'startup_banner', changedAt, message: text }); } catch {}
+    let shown = false;
     await this.#enqueue(async () => {
       if (this.closed || this.progressClosed || this.visible) return;
+      const index = this.nextContentIndex;
+      this.nextContentIndex += 1;
       this.visible = true;
       await this.#write(event('content_block_start', {
         type: 'content_block_start',
-        index: 0,
+        index,
         content_block: { type: 'text', text: '' },
-      }), { kind: 'progress_block_start', phase: 'startup_banner', revision, changedAt });
+      }), { kind: 'progress_block_start', phase: 'startup_banner', revision, changedAt, contentIndex: index });
       await this.#write(event('content_block_delta', {
         type: 'content_block_delta',
-        index: 0,
+        index,
         delta: { type: 'text_delta', text: String(text) },
-      }), { kind: 'startup_banner', phase: 'startup_banner', revision, changedAt });
+      }), { kind: 'startup_banner', phase: 'startup_banner', revision, changedAt, contentIndex: index });
       await this.#write(event('content_block_delta', {
         type: 'content_block_delta',
-        index: 0,
+        index,
         delta: { type: 'text_delta', text: '\n' },
-      }), { kind: 'startup_banner_newline', phase: 'startup_banner', revision, changedAt });
+      }), { kind: 'startup_banner_newline', phase: 'startup_banner', revision, changedAt, contentIndex: index });
+      await this.#write(event('content_block_stop', {
+        type: 'content_block_stop',
+        index,
+      }), { kind: 'startup_banner_block_stop', phase: 'startup_banner', revision, changedAt, contentIndex: index });
+      this.bannerShown = true;
+      shown = true;
     });
-    return true;
+    return shown;
   }
 
   writeRaw(chunk, metadata = {}) {
@@ -398,24 +411,27 @@ export class ProgressStream {
       const thinkingCarrier = this.carrier === 'thinking';
       if (timeline?.active && !timeline.emit) return;
 
-      if (!this.visible) {
+      if (!this.progressBlockOpen) {
         this.visible = true;
+        this.progressBlockIndex = this.nextContentIndex;
+        this.nextContentIndex += 1;
+        this.progressBlockOpen = true;
         await this.#write(event('content_block_start', {
           type: 'content_block_start',
-          index: 0,
+          index: this.progressBlockIndex,
           content_block: thinkingCarrier
             ? { type: 'thinking', thinking: '', signature: '' }
             : { type: 'text', text: '' },
-        }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier });
+        }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier, contentIndex: this.progressBlockIndex });
         const initialText = timeline?.active ? timeline.snapshot : `${this.progressHeader}\n${message}`;
         if (timeline?.active) this.modelTimeline.rendered = true;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
-          index: 0,
+          index: this.progressBlockIndex,
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: initialText }
             : { type: 'text_delta', text: initialText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_inline' : metadata.renderMode, carrier: this.carrier });
+        }), { ...metadata, renderMode: timeline?.active ? 'timeline_inline' : metadata.renderMode, carrier: this.carrier, contentIndex: this.progressBlockIndex });
       } else {
         let deltaText = `\n${message}`;
         let timelineRenderMode = metadata.renderMode;
@@ -431,7 +447,7 @@ export class ProgressStream {
         if (!deltaText) return;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
-          index: 0,
+          index: this.progressBlockIndex,
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: deltaText }
             : { type: 'text_delta', text: deltaText },
@@ -524,17 +540,20 @@ export class ProgressStream {
     if (finalMessage && (this.visible || this.modelTimeline.active)) await this.update(finalMessage, { force: true, details: closeDetails });
     this.progressClosed = true;
     await this.#enqueue(async () => {
-      if (this.visible) {
+      if (this.progressBlockOpen) {
+        const index = this.progressBlockIndex;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
-          index: 0,
+          index,
           delta: this.carrier === 'thinking'
             ? { type: 'thinking_delta', thinking: '\n\n' }
             : { type: 'text_delta', text: '\n\n' },
-        }), { kind: 'progress_close_delta', phase, carrier: this.carrier });
-        await this.#write(event('content_block_stop', { type: 'content_block_stop', index: 0 }), {
-          kind: 'progress_block_stop', phase,
+        }), { kind: 'progress_close_delta', phase, carrier: this.carrier, contentIndex: index });
+        await this.#write(event('content_block_stop', { type: 'content_block_stop', index }), {
+          kind: 'progress_block_stop', phase, contentIndex: index,
         });
+        this.progressBlockOpen = false;
+        this.progressBlockIndex = -1;
       }
     });
   }

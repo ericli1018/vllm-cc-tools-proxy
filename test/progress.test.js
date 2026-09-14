@@ -785,3 +785,37 @@ test('V0.29.23 liveness-only ProgressStream sends ping without synthetic visible
   assert.doesNotMatch(wire, /"type":"thinking_delta"/);
   assert.equal(progress.visible, false);
 });
+
+test('V0.29.41 startup banner closes its own block immediately and later progress uses the next content index', async () => {
+  const response = new FakeResponse();
+  const progress = new ProgressStream(response, {
+    visibleAfterMs: 0,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+  });
+  await progress.open();
+  assert.equal(await progress.showStartupBanner('BANNER'), true);
+
+  let events = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)));
+  const bannerStarts = events.filter((entry) => entry?.type === 'content_block_start');
+  const bannerStops = events.filter((entry) => entry?.type === 'content_block_stop');
+  assert.equal(bannerStarts.length, 1);
+  assert.equal(bannerStarts[0].index, 0);
+  assert.equal(bannerStops.length, 1);
+  assert.equal(bannerStops[0].index, 0);
+
+  await progress.update('PROGRESS', { force: true, details: { phase: 'waiting' } });
+  await progress.closeProgress();
+  await progress.stop();
+
+  events = response.chunks.join('').split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)));
+  const starts = events.filter((entry) => entry?.type === 'content_block_start');
+  const stops = events.filter((entry) => entry?.type === 'content_block_stop');
+  assert.deepEqual(starts.map((entry) => entry.index), [0, 1]);
+  assert.deepEqual(stops.map((entry) => entry.index), [0, 1]);
+  assert.equal(progress.nextContentIndex, 2);
+});

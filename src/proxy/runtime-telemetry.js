@@ -56,6 +56,7 @@ export class RuntimeTelemetry {
     this.activeSessions = new Map();
     this.busyRequests = new Set();
     this.bannerSessions = new Map();
+    this.bannerReservations = new Map();
     this.requestStates = new Map();
     this.lastSessionStates = new Map();
   }
@@ -280,15 +281,44 @@ export class RuntimeTelemetry {
     }
   }
 
-  claimBanner(sessionId) {
+  reserveBanner(sessionId, requestId = '') {
     const session = String(sessionId || '').trim();
-    if (!session || this.bannerSessions.has(session)) return false;
+    const owner = String(requestId || '').trim();
+    if (!session || !owner || this.bannerSessions.has(session) || this.bannerReservations.has(session)) return false;
+    this.bannerReservations.set(session, owner);
+    while (this.bannerReservations.size > this.maxRememberedSessions) {
+      const oldest = this.bannerReservations.keys().next().value;
+      this.bannerReservations.delete(oldest);
+    }
+    return true;
+  }
+
+  releaseBanner(sessionId, requestId = '') {
+    const session = String(sessionId || '').trim();
+    const owner = String(requestId || '').trim();
+    if (!session || !owner || this.bannerReservations.get(session) !== owner) return false;
+    this.bannerReservations.delete(session);
+    return true;
+  }
+
+  commitBanner(sessionId, requestId = '') {
+    const session = String(sessionId || '').trim();
+    const owner = String(requestId || '').trim();
+    if (!session || !owner || this.bannerReservations.get(session) !== owner || this.bannerSessions.has(session)) return false;
+    this.bannerReservations.delete(session);
     this.bannerSessions.set(session, this.clock());
     while (this.bannerSessions.size > this.maxRememberedSessions) {
       const oldest = this.bannerSessions.keys().next().value;
       this.bannerSessions.delete(oldest);
     }
     return true;
+  }
+
+  // Backward-compatible helper for older callers. New code should reserve -> send -> commit.
+  claimBanner(sessionId) {
+    const owner = `legacy:${this.clock()}:${this.bannerSessions.size}:${this.bannerReservations.size}`;
+    if (!this.reserveBanner(sessionId, owner)) return false;
+    return this.commitBanner(sessionId, owner);
   }
 
   snapshotRequest(requestId, now = this.clock()) {

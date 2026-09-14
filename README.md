@@ -1,7 +1,27 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.40 changes visible progress timing: each Main Claude Code session still receives one immediate Proxy startup card, followed by a standalone newline so Claude Code can render the card completely; all subsequent synthetic progress is buffered for the first 30 seconds, then flushed in original order and continued live only if the request is still running. Requests that finish before 30 seconds never show synthetic progress. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.41 hardens the once-per-Main-session startup card: the card is now a complete standalone Anthropic content block (`start → CARD → \n → stop`), session state is committed only after the block is actually delivered, and candidate/skip/send/commit diagnostics make missing cards traceable. The V0.29.40 30-second buffered-progress gate remains unchanged. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, compact `◆ CCTP <version>` statusLine branding, second-row semantic preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
+
+
+## V0.29.41 Reliable Startup Card Delivery
+
+V0.29.41 fixes intermittent first-turn startup-card visibility observed in Claude Code. The card no longer remains attached to an open progress block. It is emitted as its own complete Anthropic content block:
+
+```text
+content_block_start index=0
+CARD
+"\n"
+content_block_stop index=0
+```
+
+If visible progress later crosses the 30-second gate, it opens a new content block at the next index; final model / tool content is shifted after every Proxy-owned block. This prevents index reuse and gives Claude Code a complete block boundary before Thought, WebSearch, tool, or final-response output begins.
+
+The once-per-session state now uses `reserve → send → commit` semantics. A session is not permanently marked as having shown the card until `showStartupBanner()` has finished writing the CARD, newline, and `content_block_stop`. Failed delivery releases the reservation, allowing a later eligible Main request to try again. Tool-result continuations, Sub Agents, non-stream requests, and requests without a visible final user turn do not consume the card.
+
+New safe diagnostics include `startup_banner_candidate`, `startup_banner_skipped`, `startup_banner_sent`, and `startup_banner_committed`, with bounded reason/state metadata and no prompt contents.
+
+The V0.29.40 progress policy is unchanged: progress generated before 30 seconds remains buffered; requests finishing before 30 seconds emit no synthetic progress; requests still running at 30 seconds flush buffered progress in order and continue live.
 
 
 ## V0.29.40 30-Second Buffered Progress + Startup Card Flush

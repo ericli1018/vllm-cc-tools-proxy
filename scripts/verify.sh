@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.40'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.40'
+test "$(node -p "require('./package.json').version")" = '0.29.41'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.41'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.40'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.41'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1150,3 +1150,17 @@ grep -Fq 'pendingUpdates' src/proxy/progress.js
 node --test test/progress.test.js --test-name-pattern='V0.29.40'
 node --test test/config.test.js --test-name-pattern='V0.29.40'
 node --test test/deployment.test.js --test-name-pattern='V0.29.40 buffers visible progress'
+
+# V0.29.41 reliable startup-card delivery contract
+test -f change_log/V0.29.41-更新說明.md
+test -f change_log/V0.29.41-實作與驗證報告.md
+grep -Fq 'V0.29.41 Reliable Startup Card Delivery' README.md
+grep -Fq 'startup_banner_block_stop' src/proxy/progress.js
+grep -Fq 'nextContentIndex' src/proxy/progress.js
+grep -Fq 'reserveBanner(clientSessionId, requestId)' src/services/proxy-server.js
+grep -Fq 'commitBanner(clientSessionId, requestId)' src/services/proxy-server.js
+grep -Fq 'startup_banner_skipped' src/services/proxy-server.js
+node --test test/progress.test.js --test-name-pattern='V0.29.41 startup banner closes'
+node --test test/runtime-telemetry.test.js --test-name-pattern='V0.29.41 startup banner reservation'
+node --test test/anthropic-sse.test.js --test-name-pattern='V0.29.41 final model content'
+node --test test/deployment.test.js --test-name-pattern='V0.29.41 startup card reserves'

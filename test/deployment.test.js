@@ -771,3 +771,22 @@ test('V0.29.40 buffers visible progress for 30 seconds and flushes the startup c
   assert.ok(changeLogEntries.includes('V0.29.40-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.40-實作與驗證報告.md'));
 });
+
+test('V0.29.41 startup card reserves eligible main turns and commits only after the card block is sent', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  assert.match(serverSource, /reserveBanner\(clientSessionId, requestId\)/);
+  assert.match(serverSource, /commitBanner\(clientSessionId, requestId\)/);
+  assert.match(serverSource, /releaseBanner\(clientSessionId, requestId\)/);
+  assert.match(serverSource, /startup_banner_candidate/);
+  assert.match(serverSource, /startup_banner_skipped/);
+  assert.match(serverSource, /startup_banner_sent/);
+  assert.match(serverSource, /startup_banner_committed/);
+  assert.doesNotMatch(serverSource, /claimBanner\(clientSessionId\)/);
+  assert.match(serverSource, /lastUserMessage/);
+  assert.match(serverSource, /toolResultContinuation/);
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(readme, /V0\.29\.41 Reliable Startup Card Delivery/);
+  assert.ok(changeLogEntries.includes('V0.29.41-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.41-實作與驗證報告.md'));
+});

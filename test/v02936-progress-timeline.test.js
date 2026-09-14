@@ -124,7 +124,7 @@ test('V0.29.36 model timeline opens as one new row after an existing banner/prog
   const deltas = textDeltas(response);
   assert.equal(deltas[0], 'BANNER');
   assert.equal(deltas[1], '\n');
-  assert.match(deltas[2], /^\n處理中 · \d{2}:\d{2}:\d{2} ○ 3s ◐$/);
+  assert.match(deltas[2], /^處理中 · \d{2}:\d{2}:\d{2} ○ 3s ◐$/);
   assert.equal(deltas[3], ' |');
 });
 
