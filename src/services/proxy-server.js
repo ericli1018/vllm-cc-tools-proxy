@@ -203,12 +203,24 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
       contentType,
     });
   }
-  if (contentType.includes('text/event-stream')) return collectAnthropicMessageFromSse(response, {
-    ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
-    ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
-    ...(typeof onCheckpoint === 'function' ? { onCheckpoint } : {}),
-    ...(typeof onStreamSummary === 'function' ? { onComplete: onStreamSummary } : {}),
-  });
+  if (contentType.includes('text/event-stream')) {
+    try {
+      return await collectAnthropicMessageFromSse(response, {
+        ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
+        ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
+        ...(typeof onCheckpoint === 'function' ? { onCheckpoint } : {}),
+        ...(typeof onStreamSummary === 'function' ? { onComplete: onStreamSummary } : {}),
+      });
+    } catch (error) {
+      if (error?.code === 'vllm_invalid_stream' && error?.details && typeof error.details === 'object') {
+        error.details = {
+          ...error.details,
+          max_tokens: Number.isFinite(Number(request?.max_tokens)) ? Number(request.max_tokens) : null,
+        };
+      }
+      throw error;
+    }
+  }
 
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
   // Raw body chunks are still counted by requestBaseUpstream, but live token activity requires SSE.
@@ -2194,6 +2206,7 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       const upstream = async (body, signal, runtimeOptions = {}) => {
+        requestStage = 'managed_model_round';
         const invoke = (requestBody) => callUpstreamManagedStream(requestBody, config, req.headers, signal, '/v1/messages', {
           onResponseChunk: onBaseResponseChunk,
           onStreamPhase: onManagedModelStreamPhase,
@@ -2205,6 +2218,7 @@ export function createProxyServer(config, dependencies = {}) {
         });
         try {
           const response = await invoke(body);
+          requestStage = 'managed_loop';
           return observeServerResponseCapabilities(response, 'managed_round');
         } catch (error) {
           if (!isNativeVisionCapabilityRejection(error) || nativeVisionEligibleCount <= 0 || nativeVisionRuntimeFallbackUsed) throw error;
@@ -2217,6 +2231,7 @@ export function createProxyServer(config, dependencies = {}) {
           });
           const fallbackBody = await materializeRuntimeNativeVisionFallback(body);
           const response = await invoke(fallbackBody);
+          requestStage = 'managed_loop';
           return observeServerResponseCapabilities(response, 'managed_round');
         }
       };
@@ -2473,6 +2488,17 @@ export function createProxyServer(config, dependencies = {}) {
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
+      const invalidStreamDetails = error?.code === 'vllm_invalid_stream' && error?.details && typeof error.details === 'object'
+        ? {
+            tool_index: Number.isInteger(error.details.index) ? error.details.index : null,
+            tool_name: typeof error.details.tool_name === 'string' ? error.details.tool_name : '',
+            partial_json_bytes: Number.isFinite(Number(error.details.partial_json_bytes)) ? Number(error.details.partial_json_bytes) : null,
+            partial_json_tail: typeof error.details.partial_json_tail === 'string' ? error.details.partial_json_tail : '',
+            stop_reason: typeof error.details.stop_reason === 'string' ? error.details.stop_reason : null,
+            output_tokens: Number.isFinite(Number(error.details.output_tokens)) ? Number(error.details.output_tokens) : null,
+            max_tokens: Number.isFinite(Number(error.details.max_tokens)) ? Number(error.details.max_tokens) : null,
+          }
+        : {};
       if (typeof error.code === 'string' && error.code.startsWith('vllm_')) {
         log(config, failureLevel, 'base_upstream_request_failed', {
           requestId,
@@ -2481,6 +2507,7 @@ export function createProxyServer(config, dependencies = {}) {
           timeout_ms: error.details?.timeout_ms,
           elapsed_ms: error.details?.elapsed_ms ?? error.details?.timeout_ms,
           cause_code: error.details?.cause_code,
+          ...invalidStreamDetails,
         });
       }
       const errorStack = String(error?.stack || '')
@@ -2506,6 +2533,7 @@ export function createProxyServer(config, dependencies = {}) {
         request_stage: requestStage,
         error_name: String(error?.name || 'Error'),
         ...managedTimeoutDetails,
+        ...invalidStreamDetails,
         ...(errorStack ? { error_stack: errorStack } : {}),
       });
       if (progress) await emitSseError(progress, error);

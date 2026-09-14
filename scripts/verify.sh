@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.38'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.38'
+test "$(node -p "require('./package.json').version")" = '0.29.39'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.39'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.38'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.39'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1126,3 +1126,14 @@ node --test test/deployment.test.js --test-name-pattern='V0.29.36 renders one ap
  ! grep -Fq 'timeline_snapshot' src/proxy/progress.js
  node --test test/v02938-progress-inline.test.js test/v02937-progress-snapshots.test.js test/v02936-progress-timeline.test.js test/vllm-busy-retry.test.js
  node --test test/deployment.test.js --test-name-pattern='V0.29.38 uses one physical model timeline row'
+
+
+# V0.29.39 malformed tool JSON diagnostics-only release contract
+test -f change_log/V0.29.39-更新說明.md
+test -f change_log/V0.29.39-實作與驗證報告.md
+grep -Fq 'V0.29.39 Malformed Tool JSON Diagnostics' README.md
+grep -Fq 'partial_json_tail' src/proxy/anthropic-sse-collector.js
+grep -Fq "requestStage = 'managed_model_round'" src/services/proxy-server.js
+node --test test/anthropic-sse-collector.test.js --test-name-pattern='V0.29.39 collector preserves malformed tool diagnostics'
+node --test test/proxy-server.test.js --test-name-pattern='V0.29.39 malformed managed tool JSON logs'
+node --test test/deployment.test.js --test-name-pattern='V0.29.39 keeps malformed tool handling diagnostics-only'

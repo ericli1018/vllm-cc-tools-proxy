@@ -1,13 +1,27 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.38 corrects model progress to a true single physical line: the header is emitted once and every later semantic transition, liveness heartbeat, busy marker, and terminal handoff is appended as a small text delta with no replayed timeline and no newline. V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.39 adds diagnostics-only evidence for malformed streamed tool JSON: bounded tool-input tail/size, tool name, final stop reason, output token usage, configured max token budget, and the correct managed-model request stage. It deliberately does not repair JSON or expand recovery behavior. V0.29.38 true single-line progress, V0.29.36 compact `◆ CCTP <version>` statusLine branding, V0.29.35 second-row semantic preview, V0.29.34 PDF zoom-context continuity, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
 
+## V0.29.39 Malformed Tool JSON Diagnostics
 
+V0.29.39 is diagnostics-only. When the Base vLLM closes a streamed `tool_use` block with malformed or truncated `input_json_delta`, the collector still rejects the response with `vllm_invalid_stream`, but it now keeps reading the remaining Anthropic SSE framing long enough to capture the final `message_delta` evidence when available.
+
+The failure diagnostics now include:
+
+- `tool_index` / `tool_name`
+- `partial_json_bytes`
+- `partial_json_tail` bounded to the final 1024 UTF-8 bytes
+- `stop_reason`
+- `output_tokens`
+- request `max_tokens`
+- `request_stage=managed_model_round` for failures occurring inside a managed Base round
+
+This release does **not** auto-close braces, repair or execute partial tool input, retry `vllm_invalid_stream`, or add a new Managed Recovery route. The malformed tool call remains a hard API error so the new evidence can distinguish token-budget truncation from malformed model/parser output before recovery semantics are changed.
 
 ## V0.29.38 True Single-Line Incremental Timeline
 
-V0.29.38 fixes the V0.29.37 snapshot renderer. A model-progress block now owns exactly one physical timeline row. The first visible model event emits the localized header once; later state changes append only the new fragment to that same row. There is no timeline replay, no carriage return, and no newline between timeline updates.
+V0.29.38 fixes the V0.29.37 snapshot renderer. A model-progress block now owns exactly one physical timeline row. The localized header is emitted once on the first visible model event; later state changes append only the new fragment to that same row. There is no timeline replay, no carriage return, and no newline between timeline updates.
 
 Wire-level example:
 

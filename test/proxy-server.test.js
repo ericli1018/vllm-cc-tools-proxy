@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.38', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.39', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.38/);
+  assert.match(first, /VERSION\s+0\.29\.39/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3198,10 +3198,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.38');
+  assert.equal(payload.version, '0.29.39');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.38/);
+  assert.match(payload.display, /CCTP 0\.29\.39/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4108,4 +4108,60 @@ test('V0.29.35 session status exposes only bounded thinking/response preview lin
   resolveFinish();
   const response = await responsePromise;
   await response.text();
+});
+
+test('V0.29.39 malformed managed tool JSON logs bounded tail token budget and the managed model stage', async (t) => {
+  const logs = [];
+  const partialJson = `{"query":"${'Q'.repeat(1400)}`;
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m39","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-39","name":"WebSearch","input":{}}}\n\n',
+      `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: partialJson } })}\n\n`,
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens","stop_sequence":null},"usage":{"output_tokens":32768}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true, max_tokens: 32768,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: {
+        type: 'object', properties: { query: { type: 'string' } }, required: ['query'],
+      } }],
+      messages: [{ role: 'user', content: 'search current news' }],
+    }),
+  });
+  const body = await response.text();
+  assert.match(body, /vllm returned malformed tool input JSON/i);
+
+  const upstreamFailed = logs.find((entry) => entry.event === 'base_upstream_request_failed');
+  assert.ok(upstreamFailed);
+  assert.equal(upstreamFailed.tool_name, 'WebSearch');
+  assert.equal(upstreamFailed.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
+  assert.equal(upstreamFailed.partial_json_tail, partialJson.slice(-1024));
+  assert.equal(upstreamFailed.stop_reason, 'max_tokens');
+  assert.equal(upstreamFailed.output_tokens, 32768);
+  assert.equal(upstreamFailed.max_tokens, 32768);
+
+  const requestFailed = logs.find((entry) => entry.event === 'request_failed');
+  assert.ok(requestFailed);
+  assert.equal(requestFailed.request_stage, 'managed_model_round');
+  assert.equal(requestFailed.tool_name, 'WebSearch');
+  assert.equal(requestFailed.stop_reason, 'max_tokens');
+  assert.equal(requestFailed.output_tokens, 32768);
+  assert.equal(requestFailed.max_tokens, 32768);
 });

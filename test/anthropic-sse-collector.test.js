@@ -263,3 +263,60 @@ test('V0.29.35 collector forwards semantic values for preview while preserving s
   assert.equal(deltas[0].bytes, Buffer.byteLength('想法一\n想法二', 'utf8'));
   assert.equal(deltas[1].bytes, Buffer.byteLength('回答', 'utf8'));
 });
+
+test('V0.29.39 collector preserves malformed tool diagnostics through message_delta before failing', async () => {
+  const partialJson = `{"file_path":"/tmp/out.txt","content":"${'A'.repeat(1400)}`;
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm39', type: 'message', role: 'assistant', model: 'm', content: [],
+      stop_reason: null, usage: { input_tokens: 123, output_tokens: 0 },
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'tool_use', id: 'tool-39', name: 'Write', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: partialJson,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: {
+      stop_reason: 'max_tokens', stop_sequence: null,
+    }, usage: { output_tokens: 32768 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    assert.equal(error.details.index, 0);
+    assert.equal(error.details.tool_name, 'Write');
+    assert.equal(error.details.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
+    assert.equal(error.details.partial_json_tail, partialJson.slice(-1024));
+    assert.equal(error.details.stop_reason, 'max_tokens');
+    assert.equal(error.details.output_tokens, 32768);
+    return true;
+  });
+});
+
+test('V0.29.39 malformed tool input never becomes a completed recovery checkpoint', async () => {
+  const checkpoints = [];
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm39-checkpoint', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'tool_use', id: 'tool-39-checkpoint', name: 'Write', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: '{"file_path":"/tmp/x","content":"unfinished',
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 32768 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire]), {
+    onCheckpoint: async (snapshot) => checkpoints.push(snapshot),
+  }), /malformed tool input JSON/i);
+
+  assert.equal(checkpoints.some((snapshot) => snapshot.completed_blocks.some((block) => block.id === 'tool-39-checkpoint')), false);
+  assert.equal(checkpoints.at(-1)?.partial_block?.id, 'tool-39-checkpoint');
+});

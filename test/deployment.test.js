@@ -742,3 +742,19 @@ test('V0.29.38 uses one physical model timeline row with incremental wire deltas
   assert.ok(changeLogEntries.includes('V0.29.38-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.38-實作與驗證報告.md'));
 });
+
+
+test('V0.29.39 keeps malformed tool handling diagnostics-only and documents the release', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /partial_json_tail/);
+  assert.match(collectorSource, /output_tokens/);
+  assert.match(serverSource, /requestStage = 'managed_model_round'/);
+  assert.match(serverSource, /max_tokens/);
+  assert.match(readme, /V0\.29\.39 Malformed Tool JSON Diagnostics/);
+  assert.match(readme, /does \*\*not\*\* auto-close braces/i);
+  assert.ok(changeLogEntries.includes('V0.29.39-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.39-實作與驗證報告.md'));
+});

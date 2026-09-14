@@ -62,6 +62,14 @@ function applyDelta(block, delta, toolJson) {
   }
 }
 
+function boundedUtf8Tail(value, maxBytes = 1024) {
+  const buffer = Buffer.from(String(value || ''), 'utf8');
+  if (buffer.byteLength <= maxBytes) return buffer.toString('utf8');
+  let start = buffer.byteLength - maxBytes;
+  while (start < buffer.byteLength && (buffer[start] & 0xc0) === 0x80) start += 1;
+  return buffer.subarray(start).toString('utf8');
+}
+
 function finalizeToolInput(block, partialJson, index) {
   if (!partialJson) return;
   try {
@@ -69,7 +77,10 @@ function finalizeToolInput(block, partialJson, index) {
   } catch {
     throw invalidStream('vLLM returned malformed tool input JSON in Anthropic SSE.', {
       index,
+      tool_name: String(block?.name || ''),
+      partial_json_bytes: Buffer.byteLength(partialJson, 'utf8'),
       partial_json_prefix: partialJson.slice(0, 200),
+      partial_json_tail: boundedUtf8Tail(partialJson),
     });
   }
 }
@@ -85,6 +96,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
   const blocks = new Map();
   const toolJson = new Map();
   let sawMessageStop = false;
+  let deferredMalformedToolError = null;
   let firstModelEventObserved = false;
   let currentStreamPhase = 'waiting';
   const completedIndexes = new Set();
@@ -222,12 +234,21 @@ export async function collectAnthropicMessageFromSse(upstream, {
     if (parsed.name === 'content_block_stop') {
       const index = payload?.index;
       const block = ensureBlock(blocks, index);
+      let malformedToolInput = false;
       if (toolJson.has(index)) {
-        finalizeToolInput(block, toolJson.get(index), index);
+        try {
+          finalizeToolInput(block, toolJson.get(index), index);
+        } catch (error) {
+          if (error?.code !== 'vllm_invalid_stream') throw error;
+          if (!deferredMalformedToolError) deferredMalformedToolError = error;
+          malformedToolInput = true;
+        }
         toolJson.delete(index);
       }
-      completedIndexes.add(index);
-      if (openIndex === index) openIndex = null;
+      if (!malformedToolInput) {
+        completedIndexes.add(index);
+        if (openIndex === index) openIndex = null;
+      }
       await notifyCheckpoint();
       return;
     }
@@ -261,9 +282,24 @@ export async function collectAnthropicMessageFromSse(upstream, {
   if (buffer.trim()) await processBlock(buffer);
 
   if (!message) throw invalidStream('vLLM Anthropic SSE ended without message_start.');
-  for (const [index, partial] of toolJson.entries()) finalizeToolInput(ensureBlock(blocks, index), partial, index);
+  for (const [index, partial] of toolJson.entries()) {
+    try {
+      finalizeToolInput(ensureBlock(blocks, index), partial, index);
+    } catch (error) {
+      if (error?.code !== 'vllm_invalid_stream') throw error;
+      if (!deferredMalformedToolError) deferredMalformedToolError = error;
+    }
+  }
   message.content = [...blocks.entries()].sort(([a], [b]) => a - b).map(([, block]) => block);
   message.usage = message.usage || {};
+  if (deferredMalformedToolError) {
+    deferredMalformedToolError.details = {
+      ...(deferredMalformedToolError.details || {}),
+      stop_reason: message.stop_reason ?? null,
+      output_tokens: Number.isFinite(Number(message.usage?.output_tokens)) ? Number(message.usage.output_tokens) : null,
+    };
+    throw deferredMalformedToolError;
+  }
   if (!sawMessageStop) throw invalidStream('vLLM Anthropic SSE ended without message_stop.');
   try {
     await onComplete({
