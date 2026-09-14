@@ -819,3 +819,40 @@ test('V0.29.41 startup banner closes its own block immediately and later progres
   assert.deepEqual(stops.map((entry) => entry.index), [0, 1]);
   assert.equal(progress.nextContentIndex, 2);
 });
+
+test('V0.29.42 first-visible hook can emit startup card before delayed buffered progress', async () => {
+  const response = new FakeResponse();
+  let hookCalls = 0;
+  let progress;
+  progress = new ProgressStream(response, {
+    visibleAfterMs: 20,
+    pingIntervalMs: 60_000,
+    heartbeatIntervalMs: 60_000,
+    onBeforeFirstVisible: async () => {
+      hookCalls += 1;
+      await progress.showStartupBanner('BANNER');
+    },
+  });
+  await progress.open();
+  await progress.update('DELAYED_PROGRESS', { force: true, details: { phase: 'waiting' } });
+
+  assert.doesNotMatch(response.chunks.join(''), /BANNER|DELAYED_PROGRESS/);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await progress.closeProgress();
+  await progress.stop();
+
+  const wire = response.chunks.join('');
+  assert.equal(hookCalls, 1);
+  assert.match(wire, /BANNER/);
+  assert.match(wire, /DELAYED_PROGRESS/);
+  assert.ok(wire.indexOf('BANNER') < wire.indexOf('DELAYED_PROGRESS'));
+
+  const events = wire.split(/\r?\n/)
+    .filter((line) => line.startsWith('data: '))
+    .map((line) => JSON.parse(line.slice(6)));
+  assert.deepEqual(
+    events.filter((entry) => entry?.type === 'content_block_start').map((entry) => entry.index),
+    [0, 1],
+  );
+});
+

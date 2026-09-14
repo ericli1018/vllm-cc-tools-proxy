@@ -110,7 +110,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text', visibleProgressEnabled = true,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, onBeforeFirstVisible = null, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text', visibleProgressEnabled = true,
   } = {}) {
     this.res = res;
     this.model = model;
@@ -122,6 +122,9 @@ export class ProgressStream {
     this.initialUsage = normalizeAnthropicUsage(initialUsage, { includeZeroCacheFields: true });
     this.authoritativeUsage = this.initialUsage;
     this.onStateChange = onStateChange;
+    this.onBeforeFirstVisible = typeof onBeforeFirstVisible === 'function' ? onBeforeFirstVisible : null;
+    this.beforeFirstVisibleDone = false;
+    this.beforeFirstVisiblePromise = null;
     this.locale = locale;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
     this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
@@ -279,6 +282,24 @@ export class ProgressStream {
     try { return JSON.stringify([message, details || {}]); } catch { return `${message}|${String(details?.phase || '')}`; }
   }
 
+  async #runBeforeFirstVisible() {
+    if (this.beforeFirstVisibleDone || !this.onBeforeFirstVisible || this.closed || this.progressClosed) return;
+    if (!this.beforeFirstVisiblePromise) {
+      this.beforeFirstVisiblePromise = (async () => {
+        try {
+          await this.onBeforeFirstVisible();
+        } finally {
+          this.beforeFirstVisibleDone = true;
+        }
+      })();
+    }
+    try {
+      await this.beforeFirstVisiblePromise;
+    } finally {
+      this.beforeFirstVisiblePromise = null;
+    }
+  }
+
   #schedulePending() {
     if (this.pendingTimer || this.pendingUpdates.length === 0) return;
     const remaining = Math.max(0, this.visibleAfterMs - (Date.now() - this.startedAt));
@@ -298,6 +319,7 @@ export class ProgressStream {
     const entries = this.pendingUpdates.splice(0);
     this.pendingUpdate = null;
     this.pendingRelease = (async () => {
+      await this.#runBeforeFirstVisible();
       for (const entry of entries) await this.#emitUpdate(entry);
     })();
     try {
@@ -529,6 +551,7 @@ export class ProgressStream {
     }
 
     await this.#flushPending();
+    await this.#runBeforeFirstVisible();
     await this.#emitUpdate(entry);
   }
 

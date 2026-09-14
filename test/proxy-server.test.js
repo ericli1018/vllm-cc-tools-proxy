@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.41', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.42', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.41/);
+  assert.match(first, /VERSION\s+0\.29\.42/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3178,6 +3178,78 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   assert.doesNotMatch(second, /CC TOOL PROXY/);
   assert.equal(upstreamBodies.length, 2);
   assert.doesNotMatch(JSON.stringify(upstreamBodies), /CC TOOL PROXY/);
+});
+
+
+
+test('V0.29.42 plain auxiliary request cannot consume startup card before canonical tool-bearing main request', async (t) => {
+  const upstreamBodies = [];
+  const upstream = http.createServer(async (req, res) => {
+    upstreamBodies.push(JSON.parse((await read(req)).toString()));
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    res.end([
+      'event: message_start',
+      'data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}',
+      '',
+      'event: content_block_start',
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+      '',
+      'event: content_block_delta',
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"完成。"}}',
+      '',
+      'event: content_block_stop',
+      'data: {"type":"content_block_stop","index":0}',
+      '',
+      'event: message_delta',
+      'data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}',
+      '',
+      'event: message_stop',
+      'data: {"type":"message_stop"}',
+      '', '',
+    ].join('\n'));
+  });
+  const upstreamUrl = await listen(upstream);
+  const logs = [];
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstreamUrl,
+    progressVisibleAfterMs: 60_000,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.close());
+  t.after(() => proxy.close());
+
+  const send = (tools = []) => fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-claude-code-session-id': 'banner-priority-session' },
+    body: JSON.stringify({
+      model: 'm',
+      stream: true,
+      tools,
+      messages: [{ role: 'user', content: 'hi' }],
+    }),
+  }).then((response) => response.text());
+
+  const auxiliary = await send([]);
+  const canonical = await send([{
+    name: 'Bash',
+    description: 'Execute a shell command.',
+    input_schema: { type: 'object', properties: { command: { type: 'string' } } },
+  }]);
+  const repeatedCanonical = await send([{
+    name: 'Bash',
+    description: 'Execute a shell command.',
+    input_schema: { type: 'object', properties: { command: { type: 'string' } } },
+  }]);
+
+  assert.doesNotMatch(auxiliary, /CC TOOL PROXY/);
+  assert.match(canonical, /CC TOOL PROXY/);
+  assert.doesNotMatch(repeatedCanonical, /CC TOOL PROXY/);
+  assert.equal(upstreamBodies.length, 3);
+  assert.doesNotMatch(JSON.stringify(upstreamBodies), /CC TOOL PROXY/);
+  assert.ok(logs.some((entry) => entry.event === 'startup_banner_deferred' && entry.reason === 'plain_request_waiting_for_visible_progress'));
+  assert.ok(logs.some((entry) => entry.event === 'startup_banner_committed' && entry.delivery_mode === 'canonical_interactive'));
 });
 
 test('V0.2.28.17 read-only session status endpoint returns semantic telemetry without contacting Base vLLM', async (t) => {
@@ -3198,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.41');
+  assert.equal(payload.version, '0.29.42');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.41/);
+  assert.match(payload.display, /CCTP 0\.29\.42/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);

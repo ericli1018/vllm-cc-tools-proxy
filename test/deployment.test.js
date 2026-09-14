@@ -790,3 +790,19 @@ test('V0.29.41 startup card reserves eligible main turns and commits only after 
   assert.ok(changeLogEntries.includes('V0.29.41-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.41-實作與驗證報告.md'));
 });
+
+
+test('V0.29.42 startup card prioritizes canonical tool-bearing Main requests and falls back at first visible progress', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(serverSource, /startupBannerCanonicalInteractive/);
+  assert.match(serverSource, /plain_request_waiting_for_visible_progress/);
+  assert.match(serverSource, /deliveryMode: 'progress_fallback'/);
+  assert.match(progressSource, /onBeforeFirstVisible/);
+  assert.match(progressSource, /#runBeforeFirstVisible/);
+  assert.match(readme, /V0\.29\.42 Canonical Startup Card Ownership/);
+  assert.ok(changeLogEntries.includes('V0.29.42-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.42-實作與驗證報告.md'));
+});

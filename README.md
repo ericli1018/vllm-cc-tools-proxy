@@ -1,7 +1,39 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.41 hardens the once-per-Main-session startup card: the card is now a complete standalone Anthropic content block (`start → CARD → \n → stop`), session state is committed only after the block is actually delivered, and candidate/skip/send/commit diagnostics make missing cards traceable. The V0.29.40 30-second buffered-progress gate remains unchanged. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, compact `◆ CCTP <version>` statusLine branding, second-row semantic preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.42 fixes startup-card ownership when Claude Code issues multiple same-session requests at once: a tool-bearing canonical Main request gets the CARD immediately, while a plain `tools=0` request cannot consume the session card and may only fall back at the first actually-visible progress boundary. V0.29.41 standalone CARD block delivery and reserve/send/commit safety remain intact, as does the V0.29.40 30-second buffered-progress gate. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, compact `◆ CCTP <version>` statusLine branding, second-row semantic preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
+
+
+## V0.29.42 Canonical Startup Card Ownership
+
+V0.29.42 fixes a real Claude Code startup race observed with V0.29.41. Claude Code can issue two Main requests for the same session only milliseconds apart: an earlier plain Anthropic request with `tools=0`, followed by the actual interactive request carrying the normal Claude Code tool declarations. V0.29.41 allowed the earlier plain request to reserve, send, and permanently commit the once-per-session CARD, so the real interactive request later logged `already_shown_or_reserved` and the user never saw the CARD in the main conversation.
+
+The new ownership policy is:
+
+```text
+same Claude Code session
+  ├─ plain Main request, tools=0
+  │    → do not reserve / commit CARD immediately
+  │    → defer CARD eligibility until visible progress actually opens
+  │
+  └─ canonical Main request, tools>0
+       → reserve
+       → CARD + "\\n" + content_block_stop
+       → commit
+```
+
+A tool-bearing Main request is preferred because normal Claude Code interactive requests carry client tool declarations, while the observed auxiliary request did not. This criterion deliberately uses only the presence of tool declarations rather than a fixed tool count or fixed tool-name list, so Claude Code tool-set changes do not require Proxy updates.
+
+Plain requests keep a bounded fallback. `ProgressStream` now supports an `onBeforeFirstVisible` hook. If a plain request is still alive when the existing visible-progress threshold is reached, the hook attempts the session CARD immediately before the first buffered progress block is flushed. Requests that finish before the 30-second threshold still emit neither progress nor fallback CARD. If a canonical request has already committed the session CARD, the fallback safely no-ops through the existing reservation state.
+
+New diagnostics distinguish ownership mode:
+
+- `startup_banner_deferred` with `reason=plain_request_waiting_for_visible_progress`
+- `startup_banner_candidate.delivery_mode=canonical_interactive|progress_fallback`
+- `startup_banner_sent.delivery_mode=...`
+- `startup_banner_committed.delivery_mode=...`
+
+No prompt contents, tool arguments, credentials, or session data beyond the existing session identifier are added to these diagnostics. Compact bypass, Managed Response Recovery, ToolSearch, WebSearch/WebFetch, Native/Proxy Vision, PDF processing, Main/Sub Agent policy, statusLine/preview, and the 30-second progress buffer remain unchanged.
 
 
 ## V0.29.41 Reliable Startup Card Delivery

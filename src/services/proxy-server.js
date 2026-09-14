@@ -1527,18 +1527,24 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      const maybeShowStartupBanner = async (stream) => {
-        const lastUserMessage = Array.isArray(original?.messages) && original.messages.length > 0
-          ? original.messages[original.messages.length - 1]
+      const startupBannerRequest = original;
+      const startupBannerDeclaredToolCount = Array.isArray(startupBannerRequest?.tools)
+        ? startupBannerRequest.tools.length
+        : 0;
+      const startupBannerCanonicalInteractive = startupBannerDeclaredToolCount > 0;
+
+      const maybeShowStartupBanner = async (stream, { deliveryMode = 'canonical_interactive' } = {}) => {
+        const lastUserMessage = Array.isArray(startupBannerRequest?.messages) && startupBannerRequest.messages.length > 0
+          ? startupBannerRequest.messages[startupBannerRequest.messages.length - 1]
           : null;
         const skip = (reason) => {
           log(config, 'info', 'startup_banner_skipped', {
             requestId,
             session_id: clientSessionId,
             reason,
-            stream: original?.stream === true,
+            stream: startupBannerRequest?.stream === true,
             agent_context: claudeAgentRequestContext?.context || 'unknown',
-            message_count: Array.isArray(original?.messages) ? original.messages.length : 0,
+            message_count: Array.isArray(startupBannerRequest?.messages) ? startupBannerRequest.messages.length : 0,
             last_role: String(lastUserMessage?.role || ''),
             tool_result_continuation: Boolean(toolResultContinuation),
           });
@@ -1547,17 +1553,27 @@ export function createProxyServer(config, dependencies = {}) {
 
         if (!stream) return skip('no_progress_stream');
         if (messagesPath !== '/v1/messages') return skip('not_messages_endpoint');
-        if (original?.stream !== true) return skip('non_stream_request');
+        if (startupBannerRequest?.stream !== true) return skip('non_stream_request');
         if (!clientSessionId) return skip('missing_session_id');
         if (claudeAgentRequestContext?.context === 'subagent') return skip('subagent');
         if (toolResultContinuation) return skip('tool_result_continuation');
         if (lastUserMessage?.role !== 'user') return skip('not_visible_user_turn');
+        if (deliveryMode === 'canonical_interactive' && !startupBannerCanonicalInteractive) {
+          log(config, 'info', 'startup_banner_deferred', {
+            requestId,
+            session_id: clientSessionId,
+            reason: 'plain_request_waiting_for_visible_progress',
+            declared_tool_count: startupBannerDeclaredToolCount,
+          });
+          return false;
+        }
 
         log(config, 'info', 'startup_banner_candidate', {
           requestId,
           session_id: clientSessionId,
-          message_count: original.messages.length,
-          declared_tool_count: Array.isArray(original.tools) ? original.tools.length : 0,
+          message_count: startupBannerRequest.messages.length,
+          declared_tool_count: startupBannerDeclaredToolCount,
+          delivery_mode: deliveryMode,
         });
 
         if (!runtimeTelemetry.reserveBanner(clientSessionId, requestId)) {
@@ -1587,6 +1603,7 @@ export function createProxyServer(config, dependencies = {}) {
             session_id: clientSessionId,
             content_block_stopped: true,
             next_content_index: Number.isInteger(stream.nextContentIndex) ? stream.nextContentIndex : null,
+            delivery_mode: deliveryMode,
           });
 
           if (!runtimeTelemetry.commitBanner(clientSessionId, requestId)) {
@@ -1608,6 +1625,7 @@ export function createProxyServer(config, dependencies = {}) {
             compact_enabled: Boolean(config.contextCompact?.enabled),
             lang_enabled: languageProcessorAvailable(),
             vision_enabled: Boolean(config.vllmVisionUrl && config.vllmVisionModel),
+            delivery_mode: deliveryMode,
           });
           return true;
         } catch (error) {
@@ -1677,6 +1695,9 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
+            onBeforeFirstVisible: !startupBannerCanonicalInteractive
+              ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
+              : null,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
@@ -1989,6 +2010,9 @@ export function createProxyServer(config, dependencies = {}) {
             drainTimeoutMs: config.sseDrainTimeoutMs,
             visibleAfterMs: config.progressVisibleAfterMs,
             visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
+            onBeforeFirstVisible: !startupBannerCanonicalInteractive
+              ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
+              : null,
             locale: config.responseLanguage,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
@@ -2037,6 +2061,9 @@ export function createProxyServer(config, dependencies = {}) {
           drainTimeoutMs: config.sseDrainTimeoutMs,
           visibleAfterMs: config.progressVisibleAfterMs,
           visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
+          onBeforeFirstVisible: !startupBannerCanonicalInteractive
+            ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
+            : null,
           locale: config.responseLanguage,
           getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
