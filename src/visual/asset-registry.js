@@ -47,6 +47,7 @@ export class VisualAssetRegistry {
   }
 
   add({
+    sourceId: requestedSourceId = '',
     buffer, mediaType, width, height, label = '',
     originalBuffer = buffer, originalMediaType = mediaType,
     originalWidth = width, originalHeight = height,
@@ -55,7 +56,8 @@ export class VisualAssetRegistry {
     if (!Buffer.isBuffer(buffer) || !Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) {
       throw new HttpError(422, 'Invalid visual asset.', { code: 'invalid_visual_asset' });
     }
-    const sourceId = `asset-${this.nextId++}`;
+    const sourceId = requestedSourceId ? String(requestedSourceId) : `asset-${this.nextId++}`;
+    if (this.assets.has(sourceId)) throw new HttpError(422, `Duplicate visual source: ${sourceId}`, { code: 'duplicate_visual_source' });
     const asset = {
       sourceId,
       rootSourceId: sourceId,

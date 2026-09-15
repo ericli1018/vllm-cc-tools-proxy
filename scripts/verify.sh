@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.43'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.43'
+test "$(node -p "require('./package.json').version")" = '0.30.0'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.0'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.43'
+test "$(node -p "require('./package-lock.json').version")" = '0.30.0'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1080,7 +1080,7 @@ grep -Fq 'VCC_PDF_ZOOM_CONTEXT' src/visual/pdf-zoom-context.js
 grep -Fq 'Prior adjacent tile observations' src/visual/pdf-zoom-context.js
 grep -Fq 'buildPdfZoomContext' src/parsers/pdf.js
 node --test test/pdf-zoom-context.test.js
-node --test test/pdf-parser.test.js --test-name-pattern='V0.29.34'
+node --test --test-name-pattern='V0.29.34' test/pdf-parser.test.js
 
 
 # V0.29.35 Two-Line Streaming Status Preview
@@ -1095,8 +1095,8 @@ grep -Fq "const cursor = '▌'" scripts/cc-tool-proxy-statusline.js
 grep -Fq 'dropLeftColumns' scripts/cc-tool-proxy-statusline.js
 grep -Fq 'process.env.COLUMNS' scripts/cc-tool-proxy-statusline.js
 node --test test/statusline-client.test.js test/runtime-telemetry.test.js test/anthropic-sse-collector.test.js
-node --test test/proxy-server.test.js --test-name-pattern='V0.29.35 session status exposes'
-node --test test/deployment.test.js --test-name-pattern='V0.29.35 adds a bounded two-line semantic status preview'
+node --test --test-name-pattern='V0.29.35 session status exposes' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.35 adds a bounded two-line semantic status preview' test/deployment.test.js
 
 # V0.29.36 Single-Line Model Progress Timeline
 test -f change_log/V0.29.36-更新說明.md
@@ -1106,7 +1106,7 @@ grep -Fq 'heartbeatRun' src/proxy/progress.js
 grep -Fq "timelineHeader: '處理中'" src/i18n/response-language.js
 grep -Fq '◆ CCTP' src/i18n/response-language.js
 node --test test/v02936-progress-timeline.test.js test/vllm-busy-retry.test.js
-node --test test/deployment.test.js --test-name-pattern='V0.29.36 renders one append-only model timeline'
+node --test --test-name-pattern='V0.29.36 renders one append-only model timeline' test/deployment.test.js
 
 
 
@@ -1114,7 +1114,7 @@ node --test test/deployment.test.js --test-name-pattern='V0.29.36 renders one ap
  test -f change_log/V0.29.37-更新說明.md
  test -f change_log/V0.29.37-實作與驗證報告.md
  grep -Fq 'V0.29.37 Cumulative Timeline Snapshots' README.md
- node --test test/deployment.test.js --test-name-pattern='V0.29.37 cumulative snapshot release history remains documented'
+ node --test --test-name-pattern='V0.29.37 cumulative snapshot release history remains documented' test/deployment.test.js
 
 # V0.29.38 True Single-Line Incremental Timeline
  test -f change_log/V0.29.38-更新說明.md
@@ -1125,7 +1125,7 @@ node --test test/deployment.test.js --test-name-pattern='V0.29.36 renders one ap
  grep -Fq 'this.modelTimeline.content' src/proxy/progress.js
  ! grep -Fq 'timeline_snapshot' src/proxy/progress.js
  node --test test/v02938-progress-inline.test.js test/v02937-progress-snapshots.test.js test/v02936-progress-timeline.test.js test/vllm-busy-retry.test.js
- node --test test/deployment.test.js --test-name-pattern='V0.29.38 uses one physical model timeline row'
+ node --test --test-name-pattern='V0.29.38 uses one physical model timeline row' test/deployment.test.js
 
 
 # V0.29.39 malformed tool JSON diagnostics-only release contract
@@ -1134,9 +1134,9 @@ test -f change_log/V0.29.39-實作與驗證報告.md
 grep -Fq 'V0.29.39 Malformed Tool JSON Diagnostics' README.md
 grep -Fq 'partial_json_tail' src/proxy/anthropic-sse-collector.js
 grep -Fq "requestStage = 'managed_model_round'" src/services/proxy-server.js
-node --test test/anthropic-sse-collector.test.js --test-name-pattern='V0.29.39 collector preserves malformed tool diagnostics'
-node --test test/proxy-server.test.js --test-name-pattern='V0.29.39 malformed managed tool JSON logs'
-node --test test/deployment.test.js --test-name-pattern='V0.29.39 keeps malformed tool handling diagnostics-only'
+node --test --test-name-pattern='V0.29.39 collector preserves malformed tool diagnostics' test/anthropic-sse-collector.test.js
+node --test --test-name-pattern='V0.29.39 malformed managed tool JSON logs' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.39 keeps malformed tool handling diagnostics-only' test/deployment.test.js
 
 
 # V0.29.40 startup card + 30-second buffered visible-progress contract
@@ -1147,9 +1147,9 @@ grep -Fq 'PROGRESS_VISIBLE_AFTER_MS=30000' .env.example
 grep -Fq 'PROGRESS_VISIBLE_AFTER_MS: ${PROGRESS_VISIBLE_AFTER_MS:-30000}' compose.yaml
 grep -Fq 'startup_banner_newline' src/proxy/progress.js
 grep -Fq 'pendingUpdates' src/proxy/progress.js
-node --test test/progress.test.js --test-name-pattern='V0.29.40'
-node --test test/config.test.js --test-name-pattern='V0.29.40'
-node --test test/deployment.test.js --test-name-pattern='V0.29.40 buffers visible progress'
+node --test --test-name-pattern='V0.29.40' test/progress.test.js
+node --test --test-name-pattern='V0.29.40' test/config.test.js
+node --test --test-name-pattern='V0.29.40 buffers visible progress' test/deployment.test.js
 
 # V0.29.41 reliable startup-card delivery contract
 test -f change_log/V0.29.41-更新說明.md
@@ -1160,10 +1160,10 @@ grep -Fq 'nextContentIndex' src/proxy/progress.js
 grep -Fq 'reserveBanner(clientSessionId, requestId)' src/services/proxy-server.js
 grep -Fq 'commitBanner(clientSessionId, requestId)' src/services/proxy-server.js
 grep -Fq 'startup_banner_skipped' src/services/proxy-server.js
-node --test test/progress.test.js --test-name-pattern='V0.29.41 startup banner closes'
-node --test test/runtime-telemetry.test.js --test-name-pattern='V0.29.41 startup banner reservation'
-node --test test/anthropic-sse.test.js --test-name-pattern='V0.29.41 final model content'
-node --test test/deployment.test.js --test-name-pattern='V0.29.41 startup card reserves'
+node --test --test-name-pattern='V0.29.41 startup banner closes' test/progress.test.js
+node --test --test-name-pattern='V0.29.41 startup banner reservation' test/runtime-telemetry.test.js
+node --test --test-name-pattern='V0.29.41 final model content' test/anthropic-sse.test.js
+node --test --test-name-pattern='V0.29.41 startup card reserves' test/deployment.test.js
 
 
 # V0.29.42 canonical startup-card ownership + visible-progress fallback contract
@@ -1175,9 +1175,9 @@ grep -Fq 'plain_request_waiting_for_visible_progress' src/services/proxy-server.
 grep -Fq "deliveryMode: 'progress_fallback'" src/services/proxy-server.js
 grep -Fq 'onBeforeFirstVisible' src/proxy/progress.js
 grep -Fq '#runBeforeFirstVisible' src/proxy/progress.js
-node --test test/progress.test.js --test-name-pattern='V0.29.42 first-visible hook'
-node --test test/proxy-server.test.js --test-name-pattern='V0.29.42 plain auxiliary request'
-node --test test/deployment.test.js --test-name-pattern='V0.29.42 startup card prioritizes'
+node --test --test-name-pattern='V0.29.42 first-visible hook' test/progress.test.js
+node --test --test-name-pattern='V0.29.42 plain auxiliary request' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.42 startup card prioritizes' test/deployment.test.js
 
 
 # V0.29.43 Base-bound runtime clock contract
@@ -1190,5 +1190,25 @@ grep -q '^PROXY_RUNTIME_TIMEZONE=Asia/Taipei$' .env.example
 grep -Fq 'PROXY_RUNTIME_TIME_ENABLED: ${PROXY_RUNTIME_TIME_ENABLED:-true}' compose.yaml
 grep -Fq 'PROXY_RUNTIME_TIMEZONE: ${PROXY_RUNTIME_TIMEZONE:-Asia/Taipei}' compose.yaml
 grep -Fq 'injectRuntimeClockReminder' src/services/proxy-server.js
-node --test test/config.test.js --test-name-pattern='V0.29.43 runtime clock'
-node --test test/proxy-server.test.js --test-name-pattern='V0.29.43 injects a second-precision'
+node --test --test-name-pattern='V0.29.43 runtime clock' test/config.test.js
+node --test --test-name-pattern='V0.29.43 injects a second-precision' test/proxy-server.test.js
+
+# V0.30.0 External Visual Directed Perception contract
+test -f src/visual/directed-visual-session.js
+test -f src/visual/visual-query-tool.js
+test -f src/visual/directed-perception.js
+test -f src/cache/perception-cache.js
+test -f change_log/V0.30.0-更新說明.md
+test -f change_log/V0.30.0-實作與驗證報告.md
+grep -Fq 'V0.30.0 External Visual Directed Perception' README.md
+grep -q '^VISION_ORCHESTRATION_MODE=legacy$' .env.example
+grep -Fq 'VISION_ORCHESTRATION_MODE: ${VISION_ORCHESTRATION_MODE:-legacy}' compose.yaml
+grep -Fq 'proxy_visual_query' src/visual/visual-query-tool.js
+grep -Fq 'visual-perception-v1' src/visual/directed-perception.js
+node --test --test-name-pattern='V0.30.0 visual orchestration' test/config.test.js
+node --test --test-name-pattern='V0.30.0 directed image' test/media-adapters.test.js
+node --test --test-name-pattern='V0.30.0' test/managed-loop.test.js
+node --test --test-name-pattern='V0.30.0' test/proxy-server.test.js
+node --test --test-name-pattern='V0.30.0' test/native-vision-routing.test.js
+node --test test/directed-perception.test.js
+node --test --test-name-pattern='V0.30.0 documents directed visual' test/deployment.test.js

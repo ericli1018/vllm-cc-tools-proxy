@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.43', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.0', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.43/);
+  assert.match(first, /VERSION\s+0\.30\.0/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.43');
+  assert.equal(payload.version, '0.30.0');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.43/);
+  assert.match(payload.display, /CCTP 0\.30\.0/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4280,4 +4280,127 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.match(reminder.text, /Current local datetime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+08:00/);
   assert.match(reminder.text, /Timezone: Asia\/Taipei/);
   assert.match(reminder.text, /<\/system-reminder>$/);
+});
+
+test('V0.30.0 directed image reaches first Base round as manifest plus proxy_visual_query without eager Vision', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let observed;
+  let visionCalls = 0;
+  const base = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'directed-first',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    visionOrchestrationMode: 'directed',
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision',
+    vllmVisionProvider: 'vllm',
+    vllmVisionThink: false,
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
+      analyzeVisualAssets: async () => { visionCalls += 1; return { markdown:'SHOULD NOT RUN', warnings:[], cropCount:0 }; },
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ model:'m', stream:false, messages:[{ role:'user', content:[{ type:'image', source:{ type:'base64', media_type:'image/png', data:png.toString('base64') } }] }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'OK');
+  assert.equal(visionCalls, 0);
+  assert.match(JSON.stringify(observed.messages), /VCC_VISUAL_SOURCE/);
+  assert.equal(JSON.stringify(observed.messages).includes(png.toString('base64')), false);
+  assert.ok(Array.isArray(observed.tools));
+  assert.ok(observed.tools.some((tool) => tool?.name === 'proxy_visual_query'));
+  assert.match(String(observed.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V1/);
+});
+
+test('V0.30.0 directed visual query executes Sensor JSON internally and returns evidence to Main', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let baseCalls = 0;
+  let visionCalls = 0;
+  const perception = {
+    schema_version:'visual-perception-v1', status:'complete',
+    answers:[{ question_id:'q1', answer:'RESET_N', confidence:0.98, source_ids:['img_01'], support_refs:['img_01:e1'] }],
+    source_results:[{ source_id:'img_01', evidence:[{ evidence_id:'e1', kind:'text', observation:'RESET_N', verbatim:'RESET_N', bbox:[100,100,200,140], coordinate_space:'normalized_1000', confidence:0.99 }], relationships:[], unresolved:[] }],
+    needs_followup:false,
+  };
+  const vision = await startJsonServer(async (req, res) => {
+    visionCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    assert.match(JSON.stringify(payload.messages), /reset signal/i);
+    res.writeHead(200, {'content-type':'application/json'});
+    res.end(JSON.stringify({ choices:[{ message:{ role:'assistant', content:JSON.stringify(perception), tool_calls:[] } }] }));
+  });
+  const base = await startJsonServer(async (req, res) => {
+    baseCalls += 1;
+    const payload = JSON.parse((await read(req)).toString());
+    res.writeHead(200, {'content-type':'application/json'});
+    if (baseCalls === 1) {
+      assert.match(JSON.stringify(payload.messages), /VCC_VISUAL_SOURCE/);
+      res.end(JSON.stringify({ id:'d1',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'vis-1',name:'proxy_visual_query',input:{source_ids:['img_01'],objective:'Determine the reset signal.',questions:[{id:'q1',question:'What reset signal is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'tool_use',usage:{input_tokens:1,output_tokens:1} }));
+      return;
+    }
+    const resultBlock = payload.messages.at(-1).content[0];
+    assert.equal(resultBlock.type, 'tool_result');
+    const observed = JSON.parse(resultBlock.content);
+    assert.equal(observed.schema_version, 'visual-perception-v1');
+    assert.equal(observed.answers[0].answer, 'RESET_N');
+    res.end(JSON.stringify({ id:'d2',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'RESET_N is visible.'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:2} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    visionOrchestrationMode:'directed',
+    vllmVisionUrl: vision.url,
+    vllmVisionModel:'vision',
+    vllmVisionProvider:'vllm',
+    vllmVisionThink:false,
+  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
+  const proxyUrl = await listen(proxy);
+  t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}] }) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'RESET_N is visible.');
+  assert.equal(baseCalls, 2);
+  assert.equal(visionCalls, 1);
+});
+
+test('V0.30.0 identical directed perception requests reuse perception cache across requests', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'v0300-perception-cache-'));
+  t.after(() => fs.rm(cacheRoot, { recursive:true, force:true }));
+  let visionCalls = 0;
+  let baseCalls = 0;
+  const perception = { schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'q1',answer:'RESET_N',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'text',observation:'RESET_N',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false };
+  const vision = await startJsonServer(async (req,res)=>{ visionCalls += 1; await read(req); res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify({choices:[{message:{role:'assistant',content:JSON.stringify(perception),tool_calls:[]}}]})); });
+  const base = await startJsonServer(async (req,res)=>{
+    baseCalls += 1;
+    const body = JSON.parse((await read(req)).toString());
+    res.writeHead(200,{'content-type':'application/json'});
+    if (body.messages.at(-1)?.content?.[0]?.type === 'tool_result') {
+      res.end(JSON.stringify({id:`f-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:'done'}],stop_reason:'end_turn',usage:{}}));
+    } else {
+      res.end(JSON.stringify({id:`q-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:`vis-${baseCalls}`,name:'proxy_visual_query',input:{source_ids:['img_01'],objective:'Determine reset net.',questions:[{id:'q1',question:'What reset net is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'tool_use',usage:{}}));
+    }
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', vllmVisionUrl:vision.url, vllmVisionModel:'vision', vllmVisionProvider:'vllm',
+    cache:{ rootDir:cacheRoot, maxBytes:0, retentionMs:60_000, pipelineVersion:'media-v8', visualPromptVersion:'visual-v18', evidenceContractVersion:'evidence-v14' },
+  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
+  const proxyUrl = await listen(proxy); t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const body = {model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}]};
+  for (let i=0;i<2;i+=1) {
+    const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    assert.equal(response.status,200);
+    assert.equal((await response.json()).content[0].text,'done');
+  }
+  assert.equal(visionCalls,1);
 });

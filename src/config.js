@@ -125,6 +125,7 @@ export function loadConfig(env = process.env) {
   const vllmBaseResponseMode = enumValue(env.VLLM_BASE_RESPONSE_MODE, 'auto', 'VLLM_BASE_RESPONSE_MODE', ['auto', 'streaming', 'buffered']);
   const vllmBaseVisionEnabled = booleanValue(env.VLLM_BASE_VISION_ENABLED, false, 'VLLM_BASE_VISION_ENABLED');
   const visionNativePassthrough = booleanValue(env.VISION_NATIVE_PASSTHROUGH, false, 'VISION_NATIVE_PASSTHROUGH');
+  const visionOrchestrationMode = enumValue(env.VISION_ORCHESTRATION_MODE, 'legacy', 'VISION_ORCHESTRATION_MODE', ['legacy', 'directed']);
   const hasExplicitWebFetchProcessorUrl = Boolean(env.WEB_FETCH_PROCESSOR_URL);
   const webToolDiagnostic = Object.freeze({
     enabled: booleanValue(env.DIAGNOSTIC_WEB_TOOL_PASSTHROUGH, false, 'DIAGNOSTIC_WEB_TOOL_PASSTHROUGH'),
@@ -238,6 +239,7 @@ export function loadConfig(env = process.env) {
     vllmBaseApiKey,
     vllmBaseVisionEnabled,
     visionNativePassthrough,
+    visionOrchestrationMode,
     runtimeClockEnabled: booleanValue(env.PROXY_RUNTIME_TIME_ENABLED, true, 'PROXY_RUNTIME_TIME_ENABLED'),
     runtimeClockTimezone: timeZoneValue(env.PROXY_RUNTIME_TIMEZONE, 'Asia/Taipei', 'PROXY_RUNTIME_TIMEZONE'),
     vllmBaseTimeouts: Object.freeze({

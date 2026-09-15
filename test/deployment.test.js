@@ -14,6 +14,7 @@ const visionClientSource = await fs.readFile(new URL('../src/visual/vision-clien
 const serverCapabilitiesSource = await fs.readFile(new URL('../src/proxy/server-capabilities.js', import.meta.url), 'utf8');
 const toolSearchSource = await fs.readFile(new URL('../src/proxy/tool-search.js', import.meta.url), 'utf8');
 const mediaAdaptersSource = await fs.readFile(new URL('../src/proxy/media-adapters.js', import.meta.url), 'utf8');
+const visualQueryToolSource = await fs.readFile(new URL('../src/visual/visual-query-tool.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -37,7 +38,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_MODEL','VLLM_BASE_RESPONSE_MODE','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','MANAGED_MODEL_STALL_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_MODEL','VLLM_BASE_RESPONSE_MODE','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VISION_ORCHESTRATION_MODE','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','MANAGED_MODEL_STALL_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -805,4 +806,16 @@ test('V0.29.42 startup card prioritizes canonical tool-bearing Main requests and
   assert.match(readme, /V0\.29\.42 Canonical Startup Card Ownership/);
   assert.ok(changeLogEntries.includes('V0.29.42-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.42-實作與驗證報告.md'));
+});
+
+test('V0.30.0 documents directed visual orchestration as an opt-in image-only mode', async () => {
+  assert.match(readme, /V0\.30\.0 External Visual Directed Perception/);
+  assert.match(readme, /VISION_ORCHESTRATION_MODE=directed/);
+  assert.match(envExample, /^VISION_ORCHESTRATION_MODE=legacy$/m);
+  assert.match(compose, /VISION_ORCHESTRATION_MODE:\s*\$\{VISION_ORCHESTRATION_MODE:-legacy\}/);
+  assert.match(mediaAdaptersSource, /VCC_VISUAL_SOURCE/);
+  assert.match(visualQueryToolSource, /proxy_visual_query/);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.30.0-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.0-實作與驗證報告.md'));
 });

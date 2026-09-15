@@ -1,7 +1,44 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.43 adds a deterministic Proxy runtime clock: immediately before every Base `/v1/messages` generation call, the Proxy appends a bounded `<system-reminder>` to the last Base-bound user turn containing the current `Asia/Taipei` date and time down to seconds. The reminder is generated on a cloned upstream payload, never written back into Claude Code history, and Compact continues to bypass it. V0.29.42 canonical startup-card ownership, V0.29.41 standalone CARD block delivery, V0.29.40 30-second buffered progress, V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, statusLine/preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.0 adds opt-in External Visual Directed Perception for text-only Main models: eligible images become bounded `VCC_VISUAL_SOURCE` manifests, the Main model decides what visual facts it needs via internal `proxy_visual_query`, and the Vision model returns validated `visual-perception-v1` evidence as an internal `tool_result`. Legacy image analysis remains the default, Native Vision precedence is preserved, and the existing PDF pipeline is intentionally unchanged.
 
+
+
+## V0.30.0 External Visual Directed Perception
+
+V0.30.0 introduces an opt-in image-only orchestration mode for text-only Main models. It changes external Vision from eager generic evidence extraction to task-conditioned perception directed by the Main model.
+
+```text
+User / Tool Image
+  → Proxy registers request-scoped visual source
+  → Main receives VCC_VISUAL_SOURCE manifest
+  → Main calls proxy_visual_query with the facts it actually needs
+  → Vision Sensor observes only those requested facts
+  → Proxy validates visual-perception-v1 JSON
+  → correlated tool_result returns to Main
+  → Main completes the original task
+```
+
+Enable it explicitly:
+
+```env
+VISION_ORCHESTRATION_MODE=directed
+```
+
+The default remains `VISION_ORCHESTRATION_MODE=legacy` for controlled A/B comparison. Phase 1 applies directed perception only to `direct_image`, `read_image`, and generic `tool_result_image`. `read_pdf_image` and the existing PDF parse/map/page-selection/tiling/merge pipeline remain on the V0.29.43 behavior. If Base Native Vision is explicitly enabled, `direct_image` / `read_image` still prefer Native Vision; an explicit Base image-capability rejection falls back to the directed manifest/tool route rather than generic evidence.
+
+Directed mode invariants:
+
+- No external Vision request occurs before the Main model's first reasoning round for directed external images.
+- `proxy_visual_query` is a Proxy-internal Managed Loop tool and is never handed to Claude Code for execution.
+- Main Director visual-query rounds are hard-bounded to 2.
+- Sensor crop rounds are bounded to 3 per directed query.
+- Sensor output uses `visual-perception-v1` with source/question attribution, confidence, evidence, relationships, and unresolved uncertainty.
+- One strict JSON repair is allowed; repair disables further crops. Persistent Sensor/service failure returns structured `status=unavailable` evidence.
+- Complete perception results use a separate cache keyed by image hash + canonical perception request + Vision/schema/prompt/runtime versions. Legacy generic evidence cache entries are not reused.
+- Image text is always untrusted observed data. It is returned as `tool_result`, never promoted to system/runtime instruction.
+
+The directed path reuses existing image normalization, `VisualAssetRegistry` crop safety, Vision transport, media cache storage mechanics, Managed Loop recovery/liveness, and Native Vision routing while leaving Compact, WebSearch/WebFetch, ToolSearch, PDF Vision, statusLine/preview, startup CARD, runtime clock, and Main/Sub Agent behavior intact.
 
 
 ## V0.29.43 Base-Bound Runtime Clock

@@ -395,6 +395,7 @@ export async function analyzeVisualAssets(assets, {
   allowNeedsZoomFallback = false,
   recoveryContext = 'default',
   outputContract = 'evidence',
+  systemPrompt = '',
   timeoutMs = 120000,
   prompt = 'Analyze observable content only. Preserve source identifiers. Extract visible text, tables, diagrams, arrows, relationships and uncertainty. Do not answer the user final task. Request a crop only when necessary.',
 } = {}) {
@@ -402,7 +403,7 @@ export async function analyzeVisualAssets(assets, {
   if (!['vllm', 'ollama'].includes(provider)) throw new HttpError(500, 'Unsupported visual provider.', { code: 'vision_provider_invalid' });
   const endpoint = endpointFor(baseUrl, provider);
   const messages = [
-    { role: 'system', content: outputContract === 'raw' ? RAW_SYSTEM_PROMPT : SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt || (outputContract === 'raw' ? RAW_SYSTEM_PROMPT : SYSTEM_PROMPT) },
     userMessageForAssets(provider, assets, prompt),
   ];
   let cropCount = 0;

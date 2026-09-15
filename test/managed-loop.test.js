@@ -1309,3 +1309,76 @@ test('V0.29.31 a second empty end_turn fails with a dedicated bounded-regenerati
   assert.ok(diagnostics.some((entry) => entry.event === 'managed_empty_end_turn_regeneration_exhausted'));
   assert.equal(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'), false);
 });
+
+test('V0.30.0 runManagedLoop intercepts proxy_visual_query internally and continues with correlated tool_result', async () => {
+  const requests = [];
+  const visualCalls = [];
+  const upstream = async (request) => {
+    requests.push(structuredClone(request));
+    if (requests.length === 1) {
+      return response([{ type:'tool_use', id:'vis-1', name:'proxy_visual_query', input:{
+        source_ids:['img_01'], objective:'read reset net', questions:[{id:'q1',question:'What reset net is visible?'}], detail_level:'high',
+      } }], 'tool_use');
+    }
+    const last = request.messages.at(-1);
+    assert.equal(last.role, 'user');
+    assert.equal(last.content[0].tool_use_id, 'vis-1');
+    const result = JSON.parse(last.content[0].content);
+    assert.equal(result.schema_version, 'visual-perception-v1');
+    assert.equal(result.answers[0].answer, 'RESET_N');
+    return response([{ type:'text', text:'final from evidence' }]);
+  };
+
+  const result = await runManagedLoop({
+    model:'m',
+    tools:[{ name:'proxy_visual_query', input_schema:{ type:'object' } }],
+    messages:[{ role:'user', content:'inspect image' }],
+  }, {
+    upstream,
+    executeTool: async () => assert.fail('visual query must not use web executor'),
+    executeVisualTool: async (toolUse) => {
+      visualCalls.push(structuredClone(toolUse));
+      return {
+        schema_version:'visual-perception-v1', status:'complete',
+        answers:[{ question_id:'q1', answer:'RESET_N', confidence:0.99, source_ids:['img_01'], support_refs:['img_01:e1'] }],
+        source_results:[{ source_id:'img_01', evidence:[{ evidence_id:'e1', kind:'text', observation:'RESET_N', verbatim:'RESET_N', bbox:[1,2,3,4], coordinate_space:'normalized_1000', confidence:0.99 }], relationships:[], unresolved:[] }],
+        needs_followup:false,
+      };
+    },
+  });
+
+  assert.equal(result.content[0].text, 'final from evidence');
+  assert.equal(visualCalls.length, 1);
+  assert.equal(requests.length, 2);
+});
+
+test('V0.30.0 proxy_visual_query is hard-bounded to two Director rounds', async () => {
+  let baseCalls = 0;
+  let visualCalls = 0;
+  const upstream = async (request) => {
+    baseCalls += 1;
+    if (baseCalls <= 3) {
+      if (baseCalls === 3) {
+        const previous = request.messages.at(-1).content[0];
+        assert.equal(previous.is_error, undefined);
+      }
+      return response([{ type:'tool_use', id:`vis-${baseCalls}`, name:'proxy_visual_query', input:{ source_ids:['img_01'], objective:`objective ${baseCalls}`, questions:[{id:`q${baseCalls}`,question:`question ${baseCalls}`}]} }], 'tool_use');
+    }
+    const errorBlock = request.messages.at(-1).content[0];
+    assert.equal(errorBlock.is_error, true);
+    assert.equal(JSON.parse(errorBlock.content).error.code, 'visual_query_round_limit');
+    assert.equal(request.tools.some((tool) => tool?.name === 'proxy_visual_query'), false);
+    return response([{ type:'text', text:'bounded final' }]);
+  };
+  const result = await runManagedLoop({ model:'m', tools:[{name:'proxy_visual_query',input_schema:{type:'object'}}], messages:[{role:'user',content:'go'}] }, {
+    upstream,
+    executeTool: async () => assert.fail('not web'),
+    executeVisualTool: async () => {
+      visualCalls += 1;
+      return { schema_version:'visual-perception-v1', status:'complete', answers:[], source_results:[], needs_followup:false };
+    },
+    maxRounds: 6,
+  });
+  assert.equal(result.content[0].text, 'bounded final');
+  assert.equal(visualCalls, 2);
+});

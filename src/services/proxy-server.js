@@ -18,6 +18,9 @@ import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } fro
 import { forwardTransparent } from '../proxy/bypass.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
+import { DirectedVisualSession } from '../visual/directed-visual-session.js';
+import { injectDirectedVisualContract, injectVisualQueryTool, isProxyVisualToolName } from '../visual/visual-query-tool.js';
+import { executeDirectedVisualQuery } from '../visual/directed-perception.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
 import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '../i18n/response-language.js';
@@ -604,6 +607,8 @@ export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
+  const perceptionCacheRoot = config.cache?.rootDir ? `${config.cache.rootDir}/perception-v1` : '';
+  const perceptionCache = dependencies.perceptionCache || new MediaCache({ ...(config.cache || { rootDir: '', maxBytes: 0 }), rootDir: perceptionCacheRoot });
   const mediaContinuationCache = dependencies.mediaContinuationCache || new MediaContinuationCache();
   const progressStreamFactory = dependencies.progressStreamFactory || ((response, options) => new ProgressStream(response, options));
   const documentSourceCache = dependencies.documentSourceCache || new DocumentSourceCache({
@@ -613,6 +618,7 @@ export function createProxyServer(config, dependencies = {}) {
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
   const cacheReady = Promise.all([
     mediaCache.initialize(),
+    perceptionCache.initialize(),
     typeof documentSourceCache.initialize === 'function' ? documentSourceCache.initialize() : Promise.resolve(documentSourceCache),
   ]);
   const protocolDiagnosticStore = config.logProtocolSnippets
@@ -1793,7 +1799,7 @@ export function createProxyServer(config, dependencies = {}) {
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
       const hasLocalToolSearch = Boolean(localToolSearchPrepared.state?.enabled) && messagesPath === '/v1/messages';
-      const hasManagedLoop = hasManagedTools || hasLocalToolSearch;
+      let hasManagedLoop = hasManagedTools || hasLocalToolSearch;
       const passthroughClientWebTools = hasManagedTools
         && serverWebUiDeclaration.native_count === 0
         && serverWebUiDeclaration.alias_count > 0;
@@ -1840,6 +1846,15 @@ export function createProxyServer(config, dependencies = {}) {
       let mediaBootstrapUsage = null;
       let nativeVisionRuntimeFallbackUsed = false;
       let nativeVisionRawOnly = false;
+      const directedVisualSession = config.visionOrchestrationMode === 'directed' ? new DirectedVisualSession() : null;
+      let directedVisualEligibleCount = 0;
+      const ensureDirectedVisualCapability = (body) => {
+        if (!directedVisualSession?.hasSources()) return body;
+        let next = body;
+        const alreadyInjected = Array.isArray(next?.tools) && next.tools.some((tool) => isProxyVisualToolName(tool?.name));
+        if (!alreadyInjected) next = injectVisualQueryTool(next);
+        return injectDirectedVisualContract(next);
+      };
 
       if (hasMedia) {
         requestStage = 'media_observation';
@@ -1851,8 +1866,17 @@ export function createProxyServer(config, dependencies = {}) {
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
+        if (directedVisualSession) {
+          directedVisualEligibleCount = mediaProgress.descriptors.filter((entry) => (
+            entry.kind === 'image'
+            && ['direct_image', 'read_image', 'tool_result_image'].includes(entry.sourceKind)
+            && !nativeVisionPassthroughPaths.has(entry.pathKey)
+          )).length;
+          if (directedVisualEligibleCount > 0) hasManagedLoop = true;
+        }
         nativeVisionRawOnly = nativeVisionEligibleCount > 0
           && nativeVisionEligibleCount === mediaProgress.descriptors.length;
+        if (directedVisualSession && nativeVisionEligibleCount > 0) hasManagedLoop = true;
         if (nativeVisionEligibleCount > 0) {
           nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
           log(config, 'info', 'native_vision_route_selected', {
@@ -1994,11 +2018,13 @@ export function createProxyServer(config, dependencies = {}) {
           );
         },
         mediaProgress,
+        directedVisualSession,
       };
 
       if (!needsManagedWork) {
         const adapters = createMediaAdapters(config, abortController.signal, () => {}, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
+        if (directedVisualSession?.hasSources()) request = ensureDirectedVisualCapability(request);
         request = injectEvidenceContract(request);
         await preparedMedia?.cleanup(); preparedMedia = null;
         rawBody = null;
@@ -2164,7 +2190,8 @@ export function createProxyServer(config, dependencies = {}) {
         if (!allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
-        const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount);
+        if (directedVisualSession?.hasSources()) request = ensureDirectedVisualCapability(request);
+        const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisualEligibleCount);
         if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
 
         if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages/count_tokens' && config.usagePreflightEnabled !== false) {
@@ -2194,7 +2221,9 @@ export function createProxyServer(config, dependencies = {}) {
               const fallbackConfig = { ...config, visionNativePassthrough: false };
               const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
               request = { ...nativeVisionFallbackRequest, messages: await adaptMessages(nativeVisionFallbackRequest.messages, fallbackAdapters) };
-              request = injectEvidenceContract(request);
+              request = directedVisualSession?.hasSources()
+                ? ensureDirectedVisualCapability(request)
+                : injectEvidenceContract(request);
               nativeVisionEligibleCount = 0;
               nativeVisionRawOnly = false;
               nativeVisionProbeUsage = null;
@@ -2297,10 +2326,14 @@ export function createProxyServer(config, dependencies = {}) {
           ...structuredClone(body),
           messages: await adaptMessages(structuredClone(body?.messages || []), fallbackAdapters),
         };
-        fallbackBody = injectEvidenceContract(fallbackBody);
+        fallbackBody = directedVisualSession?.hasSources()
+          ? ensureDirectedVisualCapability(fallbackBody)
+          : injectEvidenceContract(fallbackBody);
         if (body && typeof body === 'object') {
           body.messages = fallbackBody.messages;
           body.system = fallbackBody.system;
+          body.tools = fallbackBody.tools;
+          if (Object.prototype.hasOwnProperty.call(fallbackBody, 'tool_choice')) body.tool_choice = fallbackBody.tool_choice;
         }
         nativeVisionEligibleCount = 0;
         return body;
@@ -2342,6 +2375,18 @@ export function createProxyServer(config, dependencies = {}) {
       if (hasManagedLoop) {
         let result = await runManagedLoop(request, {
           upstream,
+          executeVisualTool: (toolUse, signal) => executeDirectedVisualQuery(toolUse, {
+            session: directedVisualSession,
+            config,
+            signal,
+            acquireVision: (options) => admission.acquireVision(options),
+            perceptionCache,
+            analysisRegistry,
+            ...(dependencies.directedPerceptionDependencies || {}),
+            onDiagnostic: (event, fields) => log(config, event.includes('invalid') || event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
+            onProgress,
+            onEvent: (event, fields) => log(config, event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info', event, { requestId, ...fields }),
+          }),
           executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
             model: request.model || '',
             policy: managedWebPolicyEnforcer.consume(toolUse.name),

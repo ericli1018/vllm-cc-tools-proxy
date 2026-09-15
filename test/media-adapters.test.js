@@ -646,3 +646,55 @@ test('V0.29.9 terminal unavailable image evidence is continuation-reusable but n
   assert.deepEqual(continuationWrites[0].value.block, output);
   assert.equal(continuationWrites[0].value.cacheable, false);
 });
+
+test('V0.30.0 directed image registers a manifest and does not call Vision before the main model', async () => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let visionCalls = 0;
+  const registered = [];
+  const directedVisualSession = {
+    register(entry) {
+      registered.push(entry);
+      return { sourceId: 'img_01' };
+    },
+  };
+  const adapters = createMediaAdapters({
+    visionOrchestrationMode: 'directed',
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 5000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
+    vllmBaseVisionEnabled: false,
+    visionNativePassthrough: false,
+    vllmVisionUrl: 'http://vision:8000', vllmVisionModel: 'vision', vllmVisionApiKey: '',
+    vllmVisionProvider: 'vllm', vllmVisionThink: false,
+  }, undefined, undefined, {
+    mediaProgress: {
+      contextForPath: () => ({
+        filename: 'schematic.png', origin: 'direct', originTool: '', sourceKind: 'direct_image', readSourceRef: '',
+      }),
+    },
+    directedVisualSession,
+    normalizeImage: async () => ({
+      buffer: Buffer.from('overview'), mediaType: 'image/png', width: 600, height: 180,
+      originalWidth: 600, originalHeight: 180,
+    }),
+    analyzeVisualAssets: async () => {
+      visionCalls += 1;
+      return { markdown: 'GENERIC EVIDENCE', warnings: [], cropCount: 0 };
+    },
+  });
+
+  const output = await adapters.adaptImage({
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') },
+  }, { path: ['messages', 0, 'content', 0] });
+
+  assert.equal(visionCalls, 0);
+  assert.equal(registered.length, 1);
+  assert.equal(registered[0].sourceKind, 'direct_image');
+  assert.equal(registered[0].filename, 'schematic.png');
+  assert.equal(registered[0].normalized.width, 600);
+  assert.equal(output.type, 'text');
+  assert.match(output.text, /VCC_VISUAL_SOURCE/);
+  assert.match(output.text, /"source_id":"img_01"/);
+  assert.match(output.text, /"source_kind":"direct_image"/);
+  assert.doesNotMatch(output.text, /GENERIC EVIDENCE/);
+  assert.equal(output.text.includes(png.toString('base64')), false);
+});

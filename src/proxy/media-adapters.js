@@ -29,6 +29,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const onDiagnostic = dependencies.onDiagnostic || (() => {});
   const onVisionEvent = dependencies.onVisionEvent || (() => {});
   const mediaProgress = dependencies.mediaProgress || null;
+  const directedVisualSession = dependencies.directedVisualSession || null;
   const { maxDecodedBytes, maxOutputChars } = config.limits;
 
   const diagnoseSourceControlTags = (value) => {
@@ -251,6 +252,9 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const nativeVisionPassthrough = config.vllmBaseVisionEnabled === true
         && config.visionNativePassthrough === true
         && ['direct_image', 'read_image'].includes(provenance.sourceKind);
+      const directedVisionEligible = config.visionOrchestrationMode === 'directed'
+        && ['direct_image', 'read_image', 'tool_result_image'].includes(provenance.sourceKind)
+        && !nativeVisionPassthrough;
       if (nativeVisionPassthrough) {
         if (block.source?.type === 'base64') {
           onVisionEvent('native_vision_raw_passthrough_selected', {
@@ -286,6 +290,40 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             media_type: block.source.media_type,
             data: sourceBuffer.toString('base64'),
           },
+        };
+      }
+      if (directedVisionEligible) {
+        if (!directedVisualSession || typeof directedVisualSession.register !== 'function') {
+          throw new HttpError(500, 'Directed visual session is unavailable.', { code: 'directed_visual_session_unavailable' });
+        }
+        const sourceBuffer = await readSource(block.source, block.source.media_type);
+        const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal });
+        const registered = directedVisualSession.register({
+          filename,
+          sourceKind: provenance.sourceKind,
+          provenance,
+          mediaType: block.source.media_type,
+          sourceBuffer,
+          normalized,
+        });
+        const sourceId = String(registered?.sourceId || registered?.source_id || '');
+        if (!sourceId) {
+          throw new HttpError(500, 'Directed visual session returned no source identifier.', { code: 'directed_visual_source_id_missing' });
+        }
+        const manifest = {
+          source_id: sourceId,
+          kind: 'image',
+          media_type: normalized.mediaType || block.source.media_type,
+          width: normalized.originalWidth || normalized.width || null,
+          height: normalized.originalHeight || normalized.height || null,
+          origin: provenance.origin || 'direct',
+          source_kind: provenance.sourceKind,
+          filename,
+          visual_query_available: true,
+        };
+        return {
+          type: 'text',
+          text: `[VCC_VISUAL_SOURCE version=1]\n${JSON.stringify(manifest)}\n[VCC_VISUAL_SOURCE_END]`,
         };
       }
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
