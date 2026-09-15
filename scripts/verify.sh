@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.30.3'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.3'
+test "$(node -p "require('./package.json').version")" = '0.30.4'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.4'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.30.3'
+test "$(node -p "require('./package-lock.json').version")" = '0.30.4'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1238,14 +1238,26 @@ node --test --test-name-pattern='V0.30.2 history-only directed images|V0.30.2 a 
 node --test --test-name-pattern='V0.30.2 documents history-only' test/deployment.test.js
 node --test --test-name-pattern='V0.30.2 runtime' test/version.test.js
 
-# V0.30.3 Directed Visual Intent / Tool Discoverability contract
+# V0.30.3 historical release documentation remains packaged
 test -f change_log/V0.30.3-更新說明.md
 test -f change_log/V0.30.3-實作與驗證報告.md
 grep -Fq 'V0.30.3 Directed Visual Intent and Tool Discoverability' README.md
-grep -Fq 'VCC_PROXY_DIRECTED_VISUAL_V2' src/visual/visual-query-tool.js
-grep -Fq 'visual_content_visible' src/proxy/media-adapters.js
-grep -Fq "visual_access: 'proxy_visual_query'" src/proxy/media-adapters.js
+node --test --test-name-pattern='V0.30.3 release documentation remains preserved' test/deployment.test.js
+
+# V0.30.4 Proxy-Owned Directed Visual Orchestration contract
+test -f change_log/V0.30.4-更新說明.md
+test -f change_log/V0.30.4-實作與驗證報告.md
+grep -Fq 'V0.30.4 Proxy-Owned Directed Visual Orchestration' README.md
+grep -Fq 'VCC_PROXY_DIRECTED_VISUAL_V3' src/visual/visual-query-tool.js
+grep -Fq 'VCC_PROXY_VISUAL_PLANNER_V1' src/visual/visual-query-planner.js
+grep -Fq "visual_orchestration: 'proxy_managed'" src/proxy/media-adapters.js
+grep -Fq "visual_access: 'proxy_managed'" src/proxy/media-adapters.js
+grep -Fq 'orchestrateFreshDirectedVisuals' src/services/proxy-server.js
+grep -Fq 'async setState(details = {})' src/proxy/progress.js
+node --test test/visual-query-planner.test.js
 node --test test/visual-query-tool.test.js
-node --test --test-name-pattern='V0.30.3 directed image reaches first Base round' test/proxy-server.test.js
-node --test --test-name-pattern='V0.30.3 documents directed visual intent' test/deployment.test.js
-node --test --test-name-pattern='V0.30.3 runtime' test/version.test.js
+node --test --test-name-pattern='V0.30.4 Claude Code Read\(image\)|V0.30.4 history-only directed image replay|V0.30.4 managed round start remains telemetry-only' test/proxy-server.test.js
+node --test --test-name-pattern='V0.30.4 directed mode Native Vision rejection' test/native-vision-routing.test.js
+node --test --test-name-pattern='V0.30.4 managed model round start' test/managed-loop.test.js
+node --test --test-name-pattern='V0.30.4 documents Proxy-owned directed visual orchestration' test/deployment.test.js
+node --test --test-name-pattern='V0.30.4 runtime' test/version.test.js

@@ -248,6 +248,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         sourceKind: tracked?.sourceKind || 'direct_image',
         readSourceRef: tracked?.readSourceRef || '',
         requestedPages: Array.isArray(tracked?.pageScope?.pages) ? tracked.pageScope.pages : null,
+        messageIndex: Number.isInteger(context.messageIndex) ? context.messageIndex : -1,
+        path: Array.isArray(context.path) ? [...context.path] : [],
       };
       const nativeVisionPassthrough = config.vllmBaseVisionEnabled === true
         && config.visionNativePassthrough === true
@@ -327,9 +329,9 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           origin: provenance.origin || 'direct',
           source_kind: provenance.sourceKind,
           filename,
-          visual_query_available: true,
+          visual_orchestration: 'proxy_managed',
           visual_content_visible: false,
-          visual_access: 'proxy_visual_query',
+          visual_access: 'proxy_managed',
         };
         return {
           type: 'text',

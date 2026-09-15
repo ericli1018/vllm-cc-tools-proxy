@@ -946,12 +946,6 @@ export async function runManagedLoop(initialRequest, {
 
   for (let round = 0; round < maxRounds; round += 1) {
     activeRound = round + 1;
-    if (round > 0 || showInitialModelProgress) {
-      await onProgress(
-        round === 0 ? statusText(locale, 'modelPlanning') : statusText(locale, 'modelToolResults'),
-        { phase: 'managed_model_round_start', round: round + 1 },
-      );
-    }
     let response = await containedUpstream(request, signal);
     let recovery = null;
     const recovered = await recoverInvalidResponse(request, response, {

@@ -1382,3 +1382,16 @@ test('V0.30.0 proxy_visual_query is hard-bounded to two Director rounds', async 
   assert.equal(result.content[0].text, 'bounded final');
   assert.equal(visualCalls, 2);
 });
+
+test('V0.30.4 managed model round start is telemetry-only and emits no planning progress', async () => {
+  const progress = [];
+  const result = await runManagedLoop({ model:'m', messages:[{role:'user',content:'go'}] }, {
+    upstream: async () => response([{type:'text',text:'done'}], 'end_turn'),
+    executeTool: async () => ({}),
+    showInitialModelProgress: true,
+    onProgress: async (message, details) => progress.push({message, details}),
+  });
+  assert.equal(result.content[0].text,'done');
+  assert.equal(progress.some((entry)=>entry.details?.phase==='managed_model_round_start'),false);
+  assert.equal(progress.some((entry)=>String(entry.message).includes('正在請模型規劃下一步')),false);
+});

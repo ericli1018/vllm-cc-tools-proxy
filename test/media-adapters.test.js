@@ -647,7 +647,7 @@ test('V0.29.9 terminal unavailable image evidence is continuation-reusable but n
   assert.equal(continuationWrites[0].value.cacheable, false);
 });
 
-test('V0.30.0 directed image registers a manifest and does not call Vision before the main model', async () => {
+test('V0.30.4 directed image adapter registers a proxy-managed manifest without invoking Vision itself', async () => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   let visionCalls = 0;
   const registered = [];
@@ -696,7 +696,8 @@ test('V0.30.0 directed image registers a manifest and does not call Vision befor
   assert.match(output.text, /"source_id":"img_01"/);
   assert.match(output.text, /"source_kind":"direct_image"/);
   assert.match(output.text, /"visual_content_visible":false/);
-  assert.match(output.text, /"visual_access":"proxy_visual_query"/);
+  assert.match(output.text, /"visual_orchestration":"proxy_managed"/);
+  assert.match(output.text, /"visual_access":"proxy_managed"/);
   assert.doesNotMatch(output.text, /GENERIC EVIDENCE/);
   assert.equal(output.text.includes(png.toString('base64')), false);
 });

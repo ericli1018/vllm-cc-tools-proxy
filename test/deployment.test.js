@@ -845,15 +845,32 @@ test('V0.30.2 documents history-only directed progress suppression and preserves
 });
 
 
-test('V0.30.3 documents directed visual intent and pixel-access semantics without changing lazy Vision', async () => {
+test('V0.30.3 release documentation remains preserved after the V0.30.4 orchestration redesign', async () => {
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.match(readme, /V0\.30\.3 Directed Visual Intent and Tool Discoverability/);
   assert.match(readme, /need or intend to inspect/i);
   assert.match(readme, /no visual claim|do not claim.*visually inspected/i);
-  assert.match(visualQueryToolSource, /VCC_PROXY_DIRECTED_VISUAL_V2/);
-  assert.match(visualQueryToolSource, /only tool.*observable image content/i);
-  assert.match(mediaAdaptersSource, /visual_content_visible/);
-  assert.match(mediaAdaptersSource, /visual_access/);
   assert.ok(changeLogEntries.includes('V0.30.3-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.3-實作與驗證報告.md'));
+});
+
+
+test('V0.30.4 documents Proxy-owned directed visual orchestration and silent round-start progress', async () => {
+  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
+  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+
+  assert.match(readme, /V0\.30\.4 Proxy-Owned Directed Visual Orchestration/);
+  assert.match(readme, /Proxy detects the fresh directed source/i);
+  assert.match(readme, /no longer exposed as a callable Main tool/i);
+  assert.match(visualQueryToolSource, /VCC_PROXY_DIRECTED_VISUAL_V3/);
+  assert.match(plannerSource, /VCC_PROXY_VISUAL_PLANNER_V1/);
+  assert.match(plannerSource, /visual-query-plan-v1/);
+  assert.match(mediaAdaptersSource, /visual_orchestration:\s*'proxy_managed'/);
+  assert.match(mediaAdaptersSource, /visual_access:\s*'proxy_managed'/);
+  assert.match(proxyServerSource, /orchestrateFreshDirectedVisuals/);
+  assert.match(progressSource, /async setState\(details = \{\}\)/);
+  assert.match(readme, /no "正在請模型規劃下一步…" output/);
+  assert.ok(changeLogEntries.includes('V0.30.4-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.4-實作與驗證報告.md'));
 });

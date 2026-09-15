@@ -165,3 +165,17 @@ test('V0.30.1 DirectedVisualSession reuses one source id for the same image byte
   assert.deepEqual(session.sourceIds(), ['img_01']);
   assert.equal(session.get('img_01').provenances.length, 2);
 });
+
+test('V0.30.4 DirectedVisualSession resolves fresh source ids by current message provenance', () => {
+  const session = new DirectedVisualSession();
+  const common = {
+    sourceBuffer: Buffer.from('same-image-v0304'), mediaType:'image/png',
+    normalized:{buffer:Buffer.from('normalized-v0304'),mediaType:'image/png',width:10,height:10,originalWidth:10,originalHeight:10},
+    filename:'screen.png', sourceKind:'read_image',
+  };
+  session.register({...common, provenance:{origin:'read',sourceKind:'read_image',messageIndex:1}});
+  session.register({...common, provenance:{origin:'read',sourceKind:'read_image',messageIndex:3}});
+  assert.deepEqual(session.sourceIdsForMessageIndex(1,{sourceKinds:['read_image']}),['img_01']);
+  assert.deepEqual(session.sourceIdsForMessageIndex(3,{sourceKinds:['read_image']}),['img_01']);
+  assert.deepEqual(session.sourceIdsForMessageIndex(2,{sourceKinds:['read_image']}),[]);
+});

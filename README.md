@@ -1,11 +1,60 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.3 strengthens Directed Visual intent-to-tool mapping: a `VCC_VISUAL_SOURCE` is explicitly a non-visible image handle, and whenever Main needs or intends to visually inspect it, `proxy_visual_query` is the required pixel-access path. Lazy Vision remains intact: if non-visual evidence is sufficient, Main may skip Vision, but it must not claim that the image itself was visually inspected. V0.30.2 progress semantics, the 30-second visible-progress gate, Native Vision precedence, and the PDF pipeline are unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.4 moves Directed Visual orchestration back into the Proxy: when a fresh directed image arrives from the current Claude Code turn (for example `Read(screenshot.png)`), the Proxy silently asks the Main/Base model what visual facts are needed, sends that plan plus the image to Ollama Vision, validates the existing `visual-perception-v1` result, and injects a synthetic `proxy_visual_query` tool result back into the Main flow before normal reasoning continues. Main no longer receives `proxy_visual_query` as a callable tool. V0.30.4 also removes the redundant user-visible `正在請模型規劃下一步…` round-start message while preserving the existing 30-second `處理中…` timeline, Native Vision precedence/fallback, and the PDF pipeline.
 
 
+
+
+## V0.30.4 Proxy-Owned Directed Visual Orchestration
+
+V0.30.4 corrects the orchestration direction introduced by the earlier V0.30.x Director-tool design. Real Claude Code use showed that prompt-level instructions were not a deterministic guarantee: Main could say that it intended to inspect a screenshot and still fail to call `proxy_visual_query`, then infer that the page looked correct from DOM checks, screenshot existence, or file size. V0.30.4 removes that responsibility from Main.
+
+For a fresh directed image in the current turn, the flow is now:
+
+```text
+Claude Code Read(image)
+  → Proxy detects the fresh directed source
+  → silent Main/Base visual planner decides WHAT must be inspected
+  → Proxy sends the planner request + image to Ollama Vision
+  → existing Directed Sensor returns visual-perception-v1
+  → Proxy validates/cache-manages the result
+  → Proxy injects synthetic proxy_visual_query tool_use/tool_result
+  → normal Main reasoning continues with real visual evidence
+```
+
+Key behavior:
+
+- `proxy_visual_query` is **no longer exposed as a callable Main tool**. It remains only as a Proxy-internal operation and as the synthetic tool name used to preserve correlated `tool_result` semantics.
+- A new internal planner contract, `VCC_PROXY_VISUAL_PLANNER_V1`, produces bounded `visual-query-plan-v1` JSON from task/conversation/tool context and directed source manifests. The planner does **not** receive image pixels.
+- The Directed contract advances to `VCC_PROXY_DIRECTED_VISUAL_V3` and tells Main that visual perception is Proxy-managed.
+- Directed manifests now advertise `visual_orchestration=proxy_managed`, `visual_content_visible=false`, and `visual_access=proxy_managed`.
+- Only sources associated with the **current/latest message** are eligible for automatic orchestration. Replayed historical `Read(image)` blocks remain available as internal context but do not re-run the planner or Vision.
+- Native Vision retains precedence. If a Native Vision capability preflight or runtime request rejects image input and directed fallback is selected, the same Proxy-owned planner → Vision → synthetic tool-result flow is used.
+- The existing `executeDirectedVisualQuery()` / `visual-perception-v1` Sensor schema, crop rounds, schema repair, cache behavior, and Vision transport are reused unchanged.
+- PDF routing and the existing PDF Vision pipeline are unchanged.
+
+The user-visible progress behavior is also simplified:
+
+```text
+managed_model_round_start
+  → internal telemetry/timeline state only
+  → no "正在請模型規劃下一步…" output
+
+request < 30 seconds
+  → no synthetic model progress
+
+request still active at 30 seconds
+  → existing "處理中 · HH:MM:SS ..." timeline becomes visible
+```
+
+`ProgressStream.setState()` keeps the round-start timestamp and timeline state without emitting an SSE progress message. Actual Vision work can still use the existing bounded visual processing progress path.
+
+The V0.30.3 section below is retained as historical release documentation; its Main-callable visual-tool contract is superseded by V0.30.4.
 
 
 ## V0.30.3 Directed Visual Intent and Tool Discoverability
+
+> Historical behavior: V0.30.4 supersedes the Main-callable `proxy_visual_query` design below with Proxy-owned automatic orchestration.
 
 V0.30.3 fixes a Director-side discoverability gap observed in real use: Main could correctly realize that a `Read(image)` result had become a `VCC_VISUAL_SOURCE`, say that it wanted to visually check the screenshot, and still avoid `proxy_visual_query` because the previous contract only required Vision when observable image facts were strictly necessary to finish the task. Main could then fall back to file size, screenshot existence, DOM/Playwright results, or other non-visual evidence and accidentally imply that the screenshot itself had been visually verified.
 

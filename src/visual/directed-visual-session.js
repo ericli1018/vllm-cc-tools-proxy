@@ -52,4 +52,19 @@ export class DirectedVisualSession {
   sourceIds() {
     return [...this.sources.keys()];
   }
+
+  sourceIdsForMessageIndex(messageIndex, { sourceKinds = null } = {}) {
+    if (!Number.isInteger(messageIndex) || messageIndex < 0) return [];
+    const allowed = Array.isArray(sourceKinds) ? new Set(sourceKinds.map((item) => String(item || ''))) : null;
+    const ids = [];
+    for (const [sourceId, record] of this.sources.entries()) {
+      const provenances = Array.isArray(record?.provenances) ? record.provenances : [];
+      const matched = provenances.some((provenance) => (
+        Number(provenance?.messageIndex) === messageIndex
+        && (!allowed || allowed.has(String(provenance?.sourceKind || record?.sourceKind || '')))
+      ));
+      if (matched) ids.push(sourceId);
+    }
+    return ids;
+  }
 }
