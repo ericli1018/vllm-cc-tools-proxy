@@ -34,6 +34,7 @@ import { requestBaseUpstream } from './base-upstream.js';
 import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
+import { injectRuntimeClockReminder } from '../proxy/runtime-clock.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { inspectAnthropicServerCapabilities, inspectAnthropicServerResponse } from '../proxy/server-capabilities.js';
@@ -92,7 +93,14 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
 } = {}) {
   const retryBusy = path === '/v1/messages';
   const selectedBaseModel = selectBaseModel(request?.model, config.vllmBaseModel);
-  const upstreamRequest = rewriteBaseRequest(request, config.vllmBaseModel);
+  const clockEligiblePath = path === '/v1/messages' || path === '/v1/messages/count_tokens';
+  const runtimeRequest = clockEligiblePath
+    ? injectRuntimeClockReminder(request, {
+        enabled: Boolean(config.runtimeClockEnabled),
+        timeZone: config.runtimeClockTimezone || 'Asia/Taipei',
+      })
+    : request;
+  const upstreamRequest = rewriteBaseRequest(runtimeRequest, config.vllmBaseModel);
   log(config, 'info', 'base_model_selected', {
     client_model: String(request?.model || ''),
     upstream_model: selectedBaseModel.model,

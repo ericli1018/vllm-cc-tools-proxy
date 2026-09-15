@@ -46,6 +46,13 @@ function booleanValue(value, fallback, name) {
   throw new Error(`${name} must be true or false`);
 }
 
+function timeZoneValue(value, fallback, name) {
+  const candidate = String(value ?? fallback).trim();
+  try { new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date(0)); }
+  catch { throw new Error(`${name} must be a valid IANA time zone`); }
+  return candidate;
+}
+
 
 function derivedChatCompletionsUrl(baseValue) {
   const url = new URL(baseValue);
@@ -231,6 +238,8 @@ export function loadConfig(env = process.env) {
     vllmBaseApiKey,
     vllmBaseVisionEnabled,
     visionNativePassthrough,
+    runtimeClockEnabled: booleanValue(env.PROXY_RUNTIME_TIME_ENABLED, true, 'PROXY_RUNTIME_TIME_ENABLED'),
+    runtimeClockTimezone: timeZoneValue(env.PROXY_RUNTIME_TIMEZONE, 'Asia/Taipei', 'PROXY_RUNTIME_TIMEZONE'),
     vllmBaseTimeouts: Object.freeze({
       connectTimeoutMs: intValue(env.VLLM_BASE_CONNECT_TIMEOUT_MS, 10000, 'VLLM_BASE_CONNECT_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),
       headersTimeoutMs: intValue(env.VLLM_BASE_HEADERS_TIMEOUT_MS, 900000, 'VLLM_BASE_HEADERS_TIMEOUT_MS', { min: 1000, max: 3_600_000 }),

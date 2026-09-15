@@ -479,3 +479,17 @@ test('V0.29.40 defaults visible progress delay to 30 seconds', () => {
   const config = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
   assert.equal(config.progressVisibleAfterMs, 30_000);
 });
+
+test('V0.29.43 runtime clock defaults to enabled Asia/Taipei and supports explicit override', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(defaults.runtimeClockEnabled, true);
+  assert.equal(defaults.runtimeClockTimezone, 'Asia/Taipei');
+
+  const custom = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    PROXY_RUNTIME_TIME_ENABLED: 'false',
+    PROXY_RUNTIME_TIMEZONE: 'Asia/Tokyo',
+  });
+  assert.equal(custom.runtimeClockEnabled, false);
+  assert.equal(custom.runtimeClockTimezone, 'Asia/Tokyo');
+});

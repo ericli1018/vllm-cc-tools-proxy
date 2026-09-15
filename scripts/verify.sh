@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.42'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.42'
+test "$(node -p "require('./package.json').version")" = '0.29.43'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.43'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.42'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.43'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1178,3 +1178,17 @@ grep -Fq '#runBeforeFirstVisible' src/proxy/progress.js
 node --test test/progress.test.js --test-name-pattern='V0.29.42 first-visible hook'
 node --test test/proxy-server.test.js --test-name-pattern='V0.29.42 plain auxiliary request'
 node --test test/deployment.test.js --test-name-pattern='V0.29.42 startup card prioritizes'
+
+
+# V0.29.43 Base-bound runtime clock contract
+test -f src/proxy/runtime-clock.js
+test -f change_log/V0.29.43-更新說明.md
+test -f change_log/V0.29.43-實作與驗證報告.md
+grep -Fq 'V0.29.43 Base-Bound Runtime Clock' README.md
+grep -q '^PROXY_RUNTIME_TIME_ENABLED=true$' .env.example
+grep -q '^PROXY_RUNTIME_TIMEZONE=Asia/Taipei$' .env.example
+grep -Fq 'PROXY_RUNTIME_TIME_ENABLED: ${PROXY_RUNTIME_TIME_ENABLED:-true}' compose.yaml
+grep -Fq 'PROXY_RUNTIME_TIMEZONE: ${PROXY_RUNTIME_TIMEZONE:-Asia/Taipei}' compose.yaml
+grep -Fq 'injectRuntimeClockReminder' src/services/proxy-server.js
+node --test test/config.test.js --test-name-pattern='V0.29.43 runtime clock'
+node --test test/proxy-server.test.js --test-name-pattern='V0.29.43 injects a second-precision'

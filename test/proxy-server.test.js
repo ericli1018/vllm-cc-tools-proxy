@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.42', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.43', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.42/);
+  assert.match(first, /VERSION\s+0\.29\.43/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.42');
+  assert.equal(payload.version, '0.29.43');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.42/);
+  assert.match(payload.display, /CCTP 0\.29\.43/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4236,4 +4236,48 @@ test('V0.29.39 malformed managed tool JSON logs bounded tail token budget and th
   assert.equal(requestFailed.stop_reason, 'max_tokens');
   assert.equal(requestFailed.output_tokens, 32768);
   assert.equal(requestFailed.max_tokens, 32768);
+});
+
+test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into the Base-bound request', async (t) => {
+  let observed;
+  const upstream = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'clock-response', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'CLOCK_OK' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 1 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    runtimeClockEnabled: true,
+    runtimeClockTimezone: 'Asia/Taipei',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+
+  const originalBody = {
+    model: 'm', stream: false,
+    messages: [{ role: 'user', content: 'what time is it?' }],
+  };
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(originalBody),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'CLOCK_OK');
+
+  assert.equal(observed.system, undefined);
+  assert.equal(observed.messages.length, 1);
+  assert.equal(observed.messages[0].role, 'user');
+  assert.ok(Array.isArray(observed.messages[0].content));
+  assert.deepEqual(observed.messages[0].content[0], { type: 'text', text: 'what time is it?' });
+  const reminder = observed.messages[0].content.at(-1);
+  assert.equal(reminder.type, 'text');
+  assert.match(reminder.text, /^<system-reminder>\n\[VCC_PROXY_RUNTIME_CLOCK_V1\]/);
+  assert.match(reminder.text, /Current local datetime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+08:00/);
+  assert.match(reminder.text, /Timezone: Asia\/Taipei/);
+  assert.match(reminder.text, /<\/system-reminder>$/);
 });

@@ -1,7 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.42 fixes startup-card ownership when Claude Code issues multiple same-session requests at once: a tool-bearing canonical Main request gets the CARD immediately, while a plain `tools=0` request cannot consume the session card and may only fall back at the first actually-visible progress boundary. V0.29.41 standalone CARD block delivery and reserve/send/commit safety remain intact, as does the V0.29.40 30-second buffered-progress gate. V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, compact `◆ CCTP <version>` statusLine branding, second-row semantic preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.43 adds a deterministic Proxy runtime clock: immediately before every Base `/v1/messages` generation call, the Proxy appends a bounded `<system-reminder>` to the last Base-bound user turn containing the current `Asia/Taipei` date and time down to seconds. The reminder is generated on a cloned upstream payload, never written back into Claude Code history, and Compact continues to bypass it. V0.29.42 canonical startup-card ownership, V0.29.41 standalone CARD block delivery, V0.29.40 30-second buffered progress, V0.29.39 malformed-tool diagnostics, V0.29.38 true single-line progress, statusLine/preview, Native/Proxy Vision, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
+
+
+## V0.29.43 Base-Bound Runtime Clock
+
+V0.29.43 gives the local Base model an authoritative current clock without changing Claude Code's transcript or the stable system-prefix cache. Immediately before a Base request is serialized, the Proxy clones the request and appends a small text block to the latest user-side message:
+
+```text
+<system-reminder>
+[VCC_PROXY_RUNTIME_CLOCK_V1]
+Current local datetime: 2026-09-15 09:01:31 +08:00
+Timezone: Asia/Taipei
+...
+</system-reminder>
+```
+
+The timestamp is regenerated for every real Base model round, including later Managed / Recovery rounds after long tool execution. `/v1/messages/count_tokens` receives the same bounded reminder so usage preflight accounts for its token cost. Claude Code Compact stays on its existing transparent/external bypass and does not receive this reminder. The original request object is not mutated, so the reminder is not persisted into Claude Code transcript/history and cannot accumulate across rounds.
+
+Defaults:
+
+```env
+PROXY_RUNTIME_TIME_ENABLED=true
+PROXY_RUNTIME_TIMEZONE=Asia/Taipei
+```
+
+The runtime clock is appended at the end of the latest Base-bound user turn rather than the leading `system` field, preserving the reusable long-context prefix as much as possible.
 
 
 ## V0.29.42 Canonical Startup Card Ownership
@@ -2390,6 +2415,13 @@ MANAGED_MAX_CONCURRENCY=
 MANAGED_MAX_QUEUE=
 MANAGED_QUEUE_TIMEOUT_MS=
 VISION_MAX_CONCURRENCY=
+```
+
+Runtime clock settings:
+
+```env
+PROXY_RUNTIME_TIME_ENABLED=true
+PROXY_RUNTIME_TIMEZONE=Asia/Taipei
 ```
 
 Streaming progress settings:
