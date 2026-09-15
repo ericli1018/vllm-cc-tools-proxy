@@ -695,6 +695,8 @@ test('V0.30.0 directed image registers a manifest and does not call Vision befor
   assert.match(output.text, /VCC_VISUAL_SOURCE/);
   assert.match(output.text, /"source_id":"img_01"/);
   assert.match(output.text, /"source_kind":"direct_image"/);
+  assert.match(output.text, /"visual_content_visible":false/);
+  assert.match(output.text, /"visual_access":"proxy_visual_query"/);
   assert.doesNotMatch(output.text, /GENERIC EVIDENCE/);
   assert.equal(output.text.includes(png.toString('base64')), false);
 });

@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.2', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.3', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.2/);
+  assert.match(first, /VERSION\s+0\.30\.3/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.2');
+  assert.equal(payload.version, '0.30.3');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.2/);
+  assert.match(payload.display, /CCTP 0\.30\.3/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4282,7 +4282,7 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.match(reminder.text, /<\/system-reminder>$/);
 });
 
-test('V0.30.0 directed image reaches first Base round as manifest plus proxy_visual_query without eager Vision', async (t) => {
+test('V0.30.3 directed image reaches first Base round with visual-access contract and no eager Vision', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   let observed;
   let visionCalls = 0;
@@ -4319,7 +4319,15 @@ test('V0.30.0 directed image reaches first Base round as manifest plus proxy_vis
   assert.equal(JSON.stringify(observed.messages).includes(png.toString('base64')), false);
   assert.ok(Array.isArray(observed.tools));
   assert.ok(observed.tools.some((tool) => tool?.name === 'proxy_visual_query'));
-  assert.match(String(observed.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V1/);
+  const visualManifestText = String(observed.messages?.[0]?.content?.[0]?.text || '');
+  assert.match(visualManifestText, /\"visual_content_visible\":false/);
+  assert.match(visualManifestText, /\"visual_access\":\"proxy_visual_query\"/);
+  const visualTool = observed.tools.find((tool) => tool?.name === 'proxy_visual_query');
+  assert.match(String(visualTool?.description || ''), /only tool.*observable image content/i);
+  assert.match(String(visualTool?.description || ''), /visually inspect/i);
+  assert.match(String(observed.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V2/);
+  assert.match(String(observed.system || ''), /need or intend to inspect/i);
+  assert.match(String(observed.system || ''), /do not claim that the image itself was visually inspected/i);
 });
 
 test('V0.30.0 directed visual query executes Sensor JSON internally and returns evidence to Main', async (t) => {

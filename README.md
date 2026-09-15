@@ -1,8 +1,38 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.2 fixes a Directed Visual progress regression: historical images carried in Claude Code conversation history are still registered internally for Main-model access, but they no longer create false file/image processing progress on a later text or tool-result continuation. The 30-second visible-progress gate, lazy Vision invocation, V0.30.1 structured-output compatibility, Native Vision precedence, and the existing PDF pipeline are unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.3 strengthens Directed Visual intent-to-tool mapping: a `VCC_VISUAL_SOURCE` is explicitly a non-visible image handle, and whenever Main needs or intends to visually inspect it, `proxy_visual_query` is the required pixel-access path. Lazy Vision remains intact: if non-visual evidence is sufficient, Main may skip Vision, but it must not claim that the image itself was visually inspected. V0.30.2 progress semantics, the 30-second visible-progress gate, Native Vision precedence, and the PDF pipeline are unchanged.
 
 
+
+
+## V0.30.3 Directed Visual Intent and Tool Discoverability
+
+V0.30.3 fixes a Director-side discoverability gap observed in real use: Main could correctly realize that a `Read(image)` result had become a `VCC_VISUAL_SOURCE`, say that it wanted to visually check the screenshot, and still avoid `proxy_visual_query` because the previous contract only required Vision when observable image facts were strictly necessary to finish the task. Main could then fall back to file size, screenshot existence, DOM/Playwright results, or other non-visual evidence and accidentally imply that the screenshot itself had been visually verified.
+
+The Directed Visual contract now makes the access boundary explicit. In contract terms: if Main **need or intend to inspect** directed image content, it must use the visual query tool.
+
+- A `VCC_VISUAL_SOURCE` is an **image handle**, not visible image content; its pixels are not directly visible to Main.
+- If Main **needs or intends to inspect, verify, compare, read, describe, judge, or make a claim about what is visually present**, it must call `proxy_visual_query`.
+- `proxy_visual_query` is described as the **only directed-image pixel inspection gateway** available to Main.
+- File existence, file size, filename, dimensions, successful screenshot generation, DOM correctness, browser automation results, conversation context, and prior assumptions are not substitutes for visual inspection.
+- Non-visual evidence may still be sufficient. Main may skip Vision, but then there is **no visual claim**: it must distinguish functional/DOM verification from actual screenshot inspection and must not claim that the image itself was visually inspected.
+- Directed manifests now carry `visual_content_visible=false` and `visual_access=proxy_visual_query` so the same access rule is visible directly beside each source handle.
+- The contract marker advances from `VCC_PROXY_DIRECTED_VISUAL_V1` to `VCC_PROXY_DIRECTED_VISUAL_V2`.
+
+The key invariant is:
+
+```text
+no visual intent
+  → Vision may remain idle
+
+visual intent / visual claim about VCC_VISUAL_SOURCE
+  → proxy_visual_query is required
+
+no proxy_visual_query
+  → no claim that the image itself was visually inspected
+```
+
+V0.30.3 does not change Sensor schema, Vision transport, crop/repair behavior, Managed Loop execution, the 30-second progress gate, Native Vision routing, or the PDF pipeline.
 
 
 ## V0.30.2 Directed Visual Progress Continuation Fix

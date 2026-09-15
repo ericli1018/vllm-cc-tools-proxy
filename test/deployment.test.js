@@ -843,3 +843,17 @@ test('V0.30.2 documents history-only directed progress suppression and preserves
   assert.ok(changeLogEntries.includes('V0.30.2-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.2-實作與驗證報告.md'));
 });
+
+
+test('V0.30.3 documents directed visual intent and pixel-access semantics without changing lazy Vision', async () => {
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(readme, /V0\.30\.3 Directed Visual Intent and Tool Discoverability/);
+  assert.match(readme, /need or intend to inspect/i);
+  assert.match(readme, /no visual claim|do not claim.*visually inspected/i);
+  assert.match(visualQueryToolSource, /VCC_PROXY_DIRECTED_VISUAL_V2/);
+  assert.match(visualQueryToolSource, /only tool.*observable image content/i);
+  assert.match(mediaAdaptersSource, /visual_content_visible/);
+  assert.match(mediaAdaptersSource, /visual_access/);
+  assert.ok(changeLogEntries.includes('V0.30.3-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.3-實作與驗證報告.md'));
+});

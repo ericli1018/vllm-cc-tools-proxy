@@ -328,6 +328,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           source_kind: provenance.sourceKind,
           filename,
           visual_query_available: true,
+          visual_content_visible: false,
+          visual_access: 'proxy_visual_query',
         };
         return {
           type: 'text',

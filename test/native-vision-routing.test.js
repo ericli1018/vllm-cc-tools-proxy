@@ -839,7 +839,7 @@ test('V0.30.0 directed mode Native Vision rejection falls back to manifest plus 
     }
     assert.match(serialized, /VCC_VISUAL_SOURCE/);
     assert.ok(payload.tools?.some((tool) => tool?.name === 'proxy_visual_query'));
-    assert.match(String(payload.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V1/);
+    assert.match(String(payload.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V2/);
     assert.equal(serialized.includes('VCC_PROXY_EVIDENCE_BEGIN'), false);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'directed-fallback-ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'directed fallback ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }));
