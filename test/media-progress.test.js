@@ -116,3 +116,21 @@ test('V0.29.4 media context preserves safe provenance for images returned by Rea
   assert.deepEqual(context.pageScope, { pages: [6], canonical: '6' });
   assert.doesNotMatch(JSON.stringify(context), /\/private\/board\.pdf/);
 });
+
+
+test('V0.30.1 directed progress counts repeated Read image history as one logical image', () => {
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-a', name: 'Read', input: { file_path: '/work/screen.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-a', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'same-a' } },
+    ] }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-b', name: 'Read', input: { file_path: '/work/screen.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-b', content: [
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'same-b' } },
+    ] }] },
+  ];
+  const tracker = createMediaProgressTracker(messages, { dedupeRepeatedImages: true });
+  const rendered = tracker.render('正在請模型規劃下一步…', { path: ['messages', 3, 'content', 0, 'content', 0] });
+  assert.match(rendered, /圖片 1\/1/);
+  assert.equal(tracker.renderMediaReady(), '檔案：screen.png｜處理進度 1/1（100%）｜狀態：文件與圖片內容已就緒；正在交給模型分析…');
+});

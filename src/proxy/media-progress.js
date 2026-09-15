@@ -58,7 +58,7 @@ function readToolContextMap(messages) {
   return result;
 }
 
-function collectDescriptors(messages, locale = 'zh-TW') {
+function collectDescriptors(messages, locale = 'zh-TW', { dedupeRepeatedImages = false } = {}) {
   const toolContexts = readToolContextMap(messages);
   const descriptors = [];
   let documentFallback = 0;
@@ -89,12 +89,19 @@ function collectDescriptors(messages, locale = 'zh-TW') {
         : origin === 'read'
           ? (String(toolContext?.filename || '').toLowerCase().endsWith('.pdf') ? 'read_pdf_image' : 'read_image')
           : origin === 'tool_result' ? 'tool_result_image' : 'direct_image';
+      const repeatedImageIdentity = dedupeRepeatedImages
+        && kind === 'image'
+        && sourceKind === 'read_image'
+        && toolContext?.readSourceRef
+        ? `read_image:${toolContext.readSourceRef}`
+        : '';
       descriptors.push({
         path: [...currentPath],
         pathKey: pathKey(currentPath),
         kind,
         filename: resolved,
         groupKey: resolved.toLocaleLowerCase(),
+        progressIdentity: repeatedImageIdentity,
         origin, originTool, sourceKind,
         ...(toolContext?.pageScope ? { pageScope: toolContext.pageScope } : {}),
         ...(kind === 'document' && toolContext?.pageScopeError ? { pageScopeError: toolContext.pageScopeError } : {}),
@@ -127,11 +134,17 @@ function collectDescriptors(messages, locale = 'zh-TW') {
   }
   const groupList = [...groups.values()];
   groupList.forEach((entries, groupIndex) => {
-    entries.forEach((entry, mediaIndex) => {
+    const logicalIndexByKey = new Map();
+    for (const entry of entries) {
+      const logicalKey = entry.progressIdentity || `path:${entry.pathKey}`;
+      if (!logicalIndexByKey.has(logicalKey)) logicalIndexByKey.set(logicalKey, logicalIndexByKey.size + 1);
+    }
+    entries.forEach((entry) => {
+      const logicalKey = entry.progressIdentity || `path:${entry.pathKey}`;
       entry.fileIndex = groupIndex + 1;
       entry.fileCount = groupList.length;
-      entry.mediaIndex = mediaIndex + 1;
-      entry.mediaCount = entries.length;
+      entry.mediaIndex = logicalIndexByKey.get(logicalKey);
+      entry.mediaCount = logicalIndexByKey.size;
     });
   });
   return descriptors;
@@ -143,12 +156,13 @@ function percent(completed, total) {
 }
 
 export class MediaProgressTracker {
-  constructor(messages, { now = () => Date.now(), locale = 'zh-TW' } = {}) {
+  constructor(messages, { now = () => Date.now(), locale = 'zh-TW', dedupeRepeatedImages = false } = {}) {
     this.now = now;
     this.locale = locale;
     this.profile = languageProfile(locale);
-    this.descriptors = collectDescriptors(messages, locale);
+    this.descriptors = collectDescriptors(messages, locale, { dedupeRepeatedImages });
     this.byPath = new Map(this.descriptors.map((entry) => [entry.pathKey, entry]));
+    this.logicalDescriptorCount = new Set(this.descriptors.map((entry) => entry.progressIdentity || `path:${entry.pathKey}`)).size;
     this.current = null;
     this.lastStatusAt = this.now();
     this.mediaReadyAt = null;
@@ -198,7 +212,7 @@ export class MediaProgressTracker {
     if (uniqueGroups.size === 1) {
       const entry = [...uniqueGroups.values()][0];
       this.current = entry;
-      return [this.#fileLabel(entry), mediaText(this.locale, 'progress', { done: this.descriptors.length, total: this.descriptors.length }), mediaText(this.locale, 'status', { message: statusText(this.locale, 'mediaReady') })].join(this.profile.media.separator);
+      return [this.#fileLabel(entry), mediaText(this.locale, 'progress', { done: this.logicalDescriptorCount, total: this.logicalDescriptorCount }), mediaText(this.locale, 'status', { message: statusText(this.locale, 'mediaReady') })].join(this.profile.media.separator);
     }
     if (uniqueGroups.size > 1) {
       return [mediaText(this.locale, 'filesProgress', { done: uniqueGroups.size, total: uniqueGroups.size }), mediaText(this.locale, 'status', { message: statusText(this.locale, 'mediaReady') })].join(this.profile.media.separator);

@@ -310,6 +310,14 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         if (!sourceId) {
           throw new HttpError(500, 'Directed visual session returned no source identifier.', { code: 'directed_visual_source_id_missing' });
         }
+        onVisionEvent('directed_visual_asset_registered', {
+          source_id: sourceId,
+          reused: Boolean(registered?.reused),
+          media_type: normalized.mediaType || block.source.media_type,
+          source_kind: provenance.sourceKind,
+          origin: provenance.origin,
+          read_source_ref: provenance.readSourceRef,
+        });
         const manifest = {
           source_id: sourceId,
           kind: 'image',

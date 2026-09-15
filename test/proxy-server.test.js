@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.0', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.1', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.0/);
+  assert.match(first, /VERSION\s+0\.30\.1/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.0');
+  assert.equal(payload.version, '0.30.1');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.0/);
+  assert.match(payload.display, /CCTP 0\.30\.1/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4403,4 +4403,87 @@ test('V0.30.0 identical directed perception requests reuse perception cache acro
     assert.equal((await response.json()).content[0].text,'done');
   }
   assert.equal(visionCalls,1);
+});
+
+
+test('V0.30.1 directed images bypass legacy media evidence cache accounting and emit directed asset diagnostics', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  const base = await startJsonServer(async (req, res) => {
+    await read(req);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'directed-cache-routing',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    visionOrchestrationMode: 'directed',
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision',
+    vllmVisionProvider: 'vllm',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'OK');
+  assert.equal(logs.some((entry) => entry.event === 'media_cache_miss' && entry.media_type === 'image/png'), false);
+  const registered = logs.find((entry) => entry.event === 'directed_visual_asset_registered');
+  assert.equal(registered?.source_id, 'img_01');
+  assert.equal(registered?.reused, false);
+});
+
+test('V0.30.1 repeated Read image history reuses the same manifest source and suppresses duplicate payload observation noise', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  let observed;
+  const base = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id:'directed-dedup',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    visionOrchestrationMode: 'directed',
+    vllmVisionUrl: 'http://vision.invalid',
+    vllmVisionModel: 'vision',
+    vllmVisionProvider: 'vllm',
+    logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const imageBlock = { type:'image', source:{ type:'base64', media_type:'image/png', data:png.toString('base64') } };
+  const messages = [
+    { role:'assistant', content:[{ type:'tool_use', id:'read-a', name:'Read', input:{ file_path:'/work/screen.png' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-a', content:[imageBlock] }] },
+    { role:'assistant', content:[{ type:'tool_use', id:'read-b', name:'Read', input:{ file_path:'/work/screen.png' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-b', content:[imageBlock] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:false,messages}) });
+  assert.equal(response.status, 200);
+  await response.json();
+  const serialized = JSON.stringify(observed.messages);
+  assert.match(serialized, /source_id.*img_01/);
+  assert.doesNotMatch(serialized, /img_02/);
+  assert.equal(logs.filter((entry) => entry.event === 'image_payload_observed').length, 1);
+  assert.ok(logs.some((entry) => entry.event === 'directed_visual_duplicate_history_observed'));
+  const registrations = logs.filter((entry) => entry.event === 'directed_visual_asset_registered');
+  assert.equal(registrations.length, 2);
+  assert.equal(registrations[1].reused, true);
 });

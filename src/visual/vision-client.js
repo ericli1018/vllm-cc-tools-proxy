@@ -698,23 +698,29 @@ export async function analyzeVisualAssets(assets, {
       messages.push(toolResultMessage(provider, call, result));
     }
 
-    if (!cropBudgetExhausted && cropRound >= cropRoundLimit) {
-      await exhaustCropBudget(recoveryContext === 'zoom_tile' ? 'zoom_tile_crop_round_limit' : 'visual_crop_round_limit');
-    }
+    const roundLimitReached = !cropBudgetExhausted && cropRound >= cropRoundLimit;
 
     if (cropAssets.length > 0) {
       await onProgress(`視覺模型要求檢視 ${cropAssets.length} 個局部區域…`, { phase: 'vision_crop', round: cropRound, count: cropAssets.length });
+      if (roundLimitReached) {
+        await exhaustCropBudget(recoveryContext === 'zoom_tile' ? 'zoom_tile_crop_round_limit' : 'visual_crop_round_limit');
+      }
       transmittedAssets.push(...cropAssets);
       messages.push(userMessageForAssets(provider, cropAssets, cropBudgetExhausted
         ? 'Here are the requested high-resolution crops. Crop tools are now exhausted for this visual attempt. Analyze these crops and the existing images, return reliable evidence, and state uncertainty instead of requesting another crop.'
         : 'Here are the requested high-resolution crops. Continue the analysis and return final Markdown, or request another precise crop only if still essential.'));
-    } else if (rejected > 0) {
-      messages.push({
-        role: 'user',
-        content: cropBudgetExhausted
-          ? 'Review the crop tool error results. Crop tools are exhausted. Finish from the existing images and successful crops; preserve reliable partial evidence and state uncertainty.'
-          : 'Review the crop tool error results. Correct the crop request only if a precise crop remains essential; otherwise finish the analysis from the existing evidence.',
-      });
+    } else {
+      if (roundLimitReached) {
+        await exhaustCropBudget(recoveryContext === 'zoom_tile' ? 'zoom_tile_crop_round_limit' : 'visual_crop_round_limit');
+      }
+      if (rejected > 0) {
+        messages.push({
+          role: 'user',
+          content: cropBudgetExhausted
+            ? 'Review the crop tool error results. Crop tools are exhausted. Finish from the existing images and successful crops; preserve reliable partial evidence and state uncertainty.'
+            : 'Review the crop tool error results. Correct the crop request only if a precise crop remains essential; otherwise finish the analysis from the existing evidence.',
+        });
+      }
     }
 
     if (batchTooLarge && !cropBudgetExhausted) {

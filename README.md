@@ -1,8 +1,27 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.0 adds opt-in External Visual Directed Perception for text-only Main models: eligible images become bounded `VCC_VISUAL_SOURCE` manifests, the Main model decides what visual facts it needs via internal `proxy_visual_query`, and the Vision model returns validated `visual-perception-v1` evidence as an internal `tool_result`. Legacy image analysis remains the default, Native Vision precedence is preserved, and the existing PDF pipeline is intentionally unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.1 hardens the V0.30.0 Directed Visual pipeline for real Ollama/Vision-model output: conservative schema normalization, safe validation diagnostics, text-only structured repair, request-scoped duplicate-image reuse, and corrected directed progress/cache accounting. Legacy image analysis remains the default, Native Vision precedence is preserved, and the existing PDF pipeline is intentionally unchanged.
 
 
+
+
+## V0.30.1 Directed Structured Output Compatibility
+
+V0.30.1 is a focused compatibility/hardening release for the V0.30.0 image-only Directed Visual pipeline. It addresses real `visual_perception_schema_invalid` failures observed with Ollama + Qwen-family Vision output without changing the Director/Sensor architecture.
+
+Key changes:
+
+- Sensor prompts now include an explicit canonical `visual-perception-v1` JSON shape and bounded field rules.
+- A conservative normalizer accepts safe structural variants before validation, including nested per-source answers, `id/type/value` evidence aliases, 0–100 confidence values, local support references, and finite bbox values that can be normalized to integer `normalized_1000` coordinates.
+- Schema failures emit safe diagnostics with `validation_stage`, `validation_path`, and `validation_reason`; prompt/image contents are not copied into normal logs.
+- The one bounded repair is now **text-only schema repair**: it receives the previous invalid Sensor output plus the safe validation error, performs serialization repair only, disables crop tools, and does not resend the image.
+- The perception cache key advances to `directed-visual-v2`, so V0.30.0 `directed-visual-v1` entries cannot be reused across the changed Sensor contract.
+- Within one request, the same image SHA reuses the same `source_id`; repeated `Read(image)` history therefore remains one logical visual source while provenance is merged.
+- Directed images no longer generate legacy generic-evidence `media_cache_miss` accounting; they use directed asset registration and the task-conditioned Perception Cache instead.
+- Repeated historical `Read(image)` payload observation is deduplicated for directed mode, preventing misleading `1/1 → 2/2 → 3/3` progress for one screenshot.
+- On the final allowed crop round, `vision_crop` progress is emitted before the crop budget is declared exhausted, so the UI no longer says the limit was reached and then appears to request another crop.
+
+The same image reuses one `source_id` inside a request. Native Vision precedence and explicit capability-rejection fallback remain unchanged. `VISION_ORCHESTRATION_MODE=legacy` remains the default. The PDF pipeline is unchanged in V0.30.1.
 
 ## V0.30.0 External Visual Directed Perception
 

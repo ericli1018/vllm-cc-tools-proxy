@@ -1125,3 +1125,30 @@ test('V0.29.26 root crop-count exhaustion disables further crop tools and comple
   assert.match(result.markdown, /reliable partial evidence/i);
   assert.equal(result.cacheable, false);
 });
+
+
+test('V0.30.1 last allowed crop progress is emitted before crop-budget exhaustion', async (t) => {
+  const requests = [];
+  const progress = [];
+  globalThis.fetch = async (_url, options) => {
+    const payload = JSON.parse(options.body); requests.push(payload);
+    const message = requests.length === 1
+      ? { content: '', tool_calls: [{ id: 'last-crop', type: 'function', function: { name: 'request_image_crop', arguments: JSON.stringify({ source_id: 'asset-1', bbox: [100,100,900,900], purpose: 'final allowed crop' }) } }] }
+      : { content: 'final raw answer', tool_calls: [] };
+    return new Response(JSON.stringify({ choices: [{ message }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  t.after(() => { delete globalThis.fetch; });
+  const registry = new VisualAssetRegistry();
+  const asset = registry.add({ buffer: Buffer.from('root'), mediaType: 'image/png', width: 1000, height: 1000 });
+  const result = await analyzeVisualAssets([asset], {
+    baseUrl: 'http://vision.local', model: 'vision-model', provider: 'vllm', registry,
+    maxCropRounds: 1,
+    outputContract: 'raw',
+    onProgress: async (_message, details) => progress.push(details.phase),
+    cropImage: async () => ({ buffer: Buffer.from('crop'), mediaType: 'image/png', width: 800, height: 800 }),
+  });
+  assert.equal(result.markdown, 'final raw answer');
+  assert.ok(progress.indexOf('vision_crop') >= 0);
+  assert.ok(progress.indexOf('vision_crop_budget_exhausted') >= 0);
+  assert.ok(progress.indexOf('vision_crop') < progress.indexOf('vision_crop_budget_exhausted'));
+});

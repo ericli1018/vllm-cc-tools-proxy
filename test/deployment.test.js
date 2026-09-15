@@ -819,3 +819,15 @@ test('V0.30.0 documents directed visual orchestration as an opt-in image-only mo
   assert.ok(changeLogEntries.includes('V0.30.0-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.0-實作與驗證報告.md'));
 });
+
+
+test('V0.30.1 documents directed structured-output compatibility and keeps PDF scope unchanged', async () => {
+  assert.match(readme, /V0\.30\.1 Directed Structured Output Compatibility/);
+  assert.match(readme, /text-only schema repair/i);
+  assert.match(readme, /validation_stage/);
+  assert.match(readme, /same image.*source_id/i);
+  assert.match(readme, /PDF pipeline.*unchanged/i);
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.ok(changeLogEntries.includes('V0.30.1-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.1-實作與驗證報告.md'));
+});

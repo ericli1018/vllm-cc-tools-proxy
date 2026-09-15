@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.30.0'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.0'
+test "$(node -p "require('./package.json').version")" = '0.30.1'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.1'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.30.0'
+test "$(node -p "require('./package-lock.json').version")" = '0.30.1'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1192,6 +1192,21 @@ grep -Fq 'PROXY_RUNTIME_TIMEZONE: ${PROXY_RUNTIME_TIMEZONE:-Asia/Taipei}' compos
 grep -Fq 'injectRuntimeClockReminder' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.43 runtime clock' test/config.test.js
 node --test --test-name-pattern='V0.29.43 injects a second-precision' test/proxy-server.test.js
+
+
+# V0.30.1 Directed Structured Output Compatibility contract
+test -f change_log/V0.30.1-更新說明.md
+test -f change_log/V0.30.1-實作與驗證報告.md
+grep -Fq 'V0.30.1 Directed Structured Output Compatibility' README.md
+grep -Fq 'directed-visual-v2' src/cache/perception-cache.js
+grep -Fq 'validation_stage' src/visual/directed-perception.js
+grep -Fq 'directed_visual_duplicate_history_observed' src/services/proxy-server.js
+node --test --test-name-pattern='V0.30.1' test/directed-perception.test.js
+node --test --test-name-pattern='V0.30.1' test/media-progress.test.js
+node --test --test-name-pattern='V0.30.1' test/vision-client.test.js
+node --test --test-name-pattern='V0.30.1' test/proxy-server.test.js
+node --test --test-name-pattern='V0.30.1' test/perception-cache.test.js
+node --test --test-name-pattern='V0.30.1 documents directed structured-output' test/deployment.test.js
 
 # V0.30.0 External Visual Directed Perception contract
 test -f src/visual/directed-visual-session.js

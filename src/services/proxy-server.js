@@ -1860,7 +1860,10 @@ export function createProxyServer(config, dependencies = {}) {
         requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
-        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
+        mediaProgress = createMediaProgressTracker(request.messages, {
+          locale: config.responseLanguage,
+          dedupeRepeatedImages: config.visionOrchestrationMode === 'directed',
+        });
         const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
           ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
           : [];
@@ -1908,10 +1911,28 @@ export function createProxyServer(config, dependencies = {}) {
         request.messages = preparedMedia.messages;
         requestStage = 'media_progress';
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
+        const observedDirectedHistory = new Set();
         for (const occurrence of mediaOccurrences) {
           if (!String(occurrence.mediaType || '').startsWith('image/')) continue;
           const observed = imageObservationByPath.get(JSON.stringify(occurrence.path));
           if (!observed) continue;
+          const tracked = mediaProgress.contextForPath(occurrence.path);
+          const directedHistoryIdentity = directedVisualSession
+            && tracked?.sourceKind === 'read_image'
+            && tracked?.readSourceRef
+            ? `read_image:${tracked.readSourceRef}`
+            : '';
+          if (directedHistoryIdentity && observedDirectedHistory.has(directedHistoryIdentity)) {
+            log(config, 'info', 'directed_visual_duplicate_history_observed', {
+              requestId,
+              source_kind: tracked.sourceKind,
+              read_source_ref: tracked.readSourceRef,
+              media_type: observed.mediaType,
+              filename: observed.filename,
+            });
+            continue;
+          }
+          if (directedHistoryIdentity) observedDirectedHistory.add(directedHistoryIdentity);
           log(config, 'info', 'image_payload_observed', {
             requestId,
             origin: observed.origin,
@@ -1930,8 +1951,17 @@ export function createProxyServer(config, dependencies = {}) {
           });
         }
         let cachedOccurrences = 0;
+        let cacheRelevantOccurrences = 0;
         for (const occurrence of mediaOccurrences) {
           const tracked = mediaProgress.contextForPath(occurrence.path);
+          const directedImageOccurrence = Boolean(
+            directedVisualSession
+            && String(occurrence.mediaType || '').startsWith('image/')
+            && ['direct_image', 'read_image', 'tool_result_image'].includes(tracked?.sourceKind)
+            && !nativeVisionPassthroughPaths.has(tracked?.pathKey),
+          );
+          if (directedImageOccurrence) continue;
+          cacheRelevantOccurrences += 1;
           const pageScope = occurrence.mediaType === 'application/pdf' ? tracked?.pageScope : null;
           const effectiveKey = occurrence.mediaType === 'application/pdf'
             ? scopePdfDocumentCacheKey(occurrence.key, pageScope)
@@ -1975,7 +2005,9 @@ export function createProxyServer(config, dependencies = {}) {
             });
           }
         }
-        allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
+        allMediaCached = cacheRelevantOccurrences === 0
+          ? (directedVisualEligibleCount > 0 && nativeVisionEligibleCount === 0)
+          : cachedOccurrences === cacheRelevantOccurrences;
       }
 
       const needsManagedWork = hasManagedLoop || (hasMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
