@@ -848,9 +848,9 @@ test('V0.30.4 directed mode Native Vision rejection falls back into Proxy planne
     assert.match(String(payload.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V3/);
     if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id:'fallback-planner', type:'message', role:'assistant', model:'m', content:[{type:'text',text:JSON.stringify({
+      res.end(JSON.stringify({ id:'fallback-planner', type:'message', role:'assistant', model:'m', content:[{type:'tool_use',id:'fallback-plan',name:'submit_visual_plan',input:{
         schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect the screenshot after Native Vision fallback.',questions:[{id:'q1',question:'Is the screenshot visually intact?'}],requested_evidence:['layout'],detail_level:'high'
-      })}], stop_reason:'end_turn', usage:{} }));
+      }}], stop_reason:'end_turn', usage:{} }));
       return;
     }
     assert.match(serialized, /visual-perception-v1/);

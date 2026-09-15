@@ -874,3 +874,22 @@ test('V0.30.4 documents Proxy-owned directed visual orchestration and silent rou
   assert.ok(changeLogEntries.includes('V0.30.4-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.4-實作與驗證報告.md'));
 });
+
+
+test('V0.30.5 documents full-context structured visual planning and directed progress cleanup', async () => {
+  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
+  const proxyServerSource305 = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const progressSource305 = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+
+  assert.match(readme, /V0\.30\.5 Structured Full-Context Visual Planner/);
+  assert.match(readme, /complete existing Main context/i);
+  assert.match(readme, /submit_visual_plan/);
+  assert.match(readme, /simple perception prompt/i);
+  assert.match(plannerSource, /submit_visual_plan/);
+  assert.match(plannerSource, /tool_choice/);
+  assert.match(proxyServerSource305, /freshDirectedVisualExpected/);
+  assert.match(progressSource305, /#clearPending\(\)/);
+  assert.ok(changeLogEntries.includes('V0.30.5-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.5-實作與驗證報告.md'));
+});

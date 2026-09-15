@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.4', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.5', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.4/);
+  assert.match(first, /VERSION\s+0\.30\.5/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.4');
+  assert.equal(payload.version, '0.30.5');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.4/);
+  assert.match(payload.display, /CCTP 0\.30\.5/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4306,7 +4306,7 @@ test('V0.30.4 Proxy planner drives Directed Sensor JSON internally and returns e
     if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
       assert.match(JSON.stringify(payload.messages), /VCC_VISUAL_SOURCE/);
       assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool)=>tool?.name==='proxy_visual_query'), false);
-      res.end(JSON.stringify({ id:'planner-reset',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine the reset signal.',questions:[{id:'q1',question:'What reset signal is visible?'}],requested_evidence:['net labels'],detail_level:'high'})}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+      res.end(JSON.stringify({ id:'planner-reset',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-reset',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine the reset signal.',questions:[{id:'q1',question:'What reset signal is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
       return;
     }
     assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool)=>tool?.name==='proxy_visual_query'), false);
@@ -4348,7 +4348,7 @@ test('V0.30.4 automatic directed perception requests reuse perception cache acro
     const body = JSON.parse((await read(req)).toString());
     res.writeHead(200,{'content-type':'application/json'});
     if (String(body.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      res.end(JSON.stringify({id:`p-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine reset net.',questions:[{id:'q1',question:'What reset net is visible?'}],requested_evidence:['net labels'],detail_level:'high'})}],stop_reason:'end_turn',usage:{}}));
+      res.end(JSON.stringify({id:`p-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:`plan-${baseCalls}`,name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine reset net.',questions:[{id:'q1',question:'What reset net is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'end_turn',usage:{}}));
       return;
     }
     assert.equal(body.messages.at(-1)?.content?.[0]?.type, 'tool_result');
@@ -4558,7 +4558,7 @@ test('V0.30.2 history-only directed images stay silent when the current user tur
   assert.doesNotMatch(stream,/檔案處理進度|文件與圖片內容已就緒/);
 });
 
-test('V0.30.2 a newly supplied directed image still emits media ready progress', async (t) => {
+test('V0.30.5 a fresh directed image does not emit generic media_ready while Proxy-owned visual orchestration handles it', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const logs = [];
   const base = await startJsonServer(async (req,res)=>{
@@ -4591,7 +4591,7 @@ test('V0.30.2 a newly supplied directed image still emits media ready progress',
   })});
   assert.equal(response.status,200);
   await response.text();
-  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='media_ready'),true);
+  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='media_ready'),false);
 });
 
 test('V0.30.4 Proxy automatically plans and inspects a fresh directed image before the normal Main round', async (t) => {
@@ -4608,7 +4608,9 @@ test('V0.30.4 Proxy automatically plans and inspects a fresh directed image befo
   const vision = await startJsonServer(async (req, res) => {
     visionCalls += 1;
     const payload = JSON.parse((await read(req)).toString());
-    assert.match(JSON.stringify(payload), /layout|overlap|clipping/i);
+    const visionSerialized = JSON.stringify(payload);
+    assert.match(visionSerialized, /layout|overlap|clipping/i);
+    assert.doesNotMatch(visionSerialized, /MAIN_CONTEXT_ONLY_305/);
     res.writeHead(200, {'content-type':'application/json'});
     res.end(JSON.stringify({ choices:[{ message:{ role:'assistant', content:JSON.stringify(perception), tool_calls:[] } }] }));
   });
@@ -4617,12 +4619,15 @@ test('V0.30.4 Proxy automatically plans and inspects a fresh directed image befo
     res.writeHead(200, {'content-type':'application/json'});
     if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
       plannerCalls += 1;
-      assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool) => tool?.name === 'proxy_visual_query'), false);
-      res.end(JSON.stringify({ id:'planner',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({
+      assert.match(JSON.stringify(payload.messages), /MAIN_CONTEXT_ONLY_305/);
+      assert.equal(payload.tools?.length, 1);
+      assert.equal(payload.tools?.[0]?.name, 'submit_visual_plan');
+      assert.deepEqual(payload.tool_choice, { type:'tool', name:'submit_visual_plan' });
+      res.end(JSON.stringify({ id:'planner',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-layout',name:'submit_visual_plan',input:{
         schema_version:'visual-query-plan-v1', source_ids:['img_01'], objective:'Check the rendered page visually.',
         questions:[{id:'layout',question:'Is the layout intact without overlap or clipping?'}],
         requested_evidence:['layout','ui_state'], detail_level:'high',
-      })}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+      }}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
       return;
     }
     mainCalls += 1;
@@ -4644,7 +4649,10 @@ test('V0.30.4 Proxy automatically plans and inspects a fresh directed image befo
   t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
 
   const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({
-    model:'m', stream:false, messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}],
+    model:'m', stream:false, messages:[{role:'user',content:[
+      {type:'text',text:'MAIN_CONTEXT_ONLY_305: verify the page against the current task context.'},
+      {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
+    ]}],
   }) });
   assert.equal(response.status,200);
   assert.equal((await response.json()).content[0].text,'VISUAL_OK');
@@ -4704,11 +4712,11 @@ test('V0.30.4 Claude Code Read(image) automatically becomes planner -> Vision ->
       plannerCalls += 1;
       assert.match(serialized,/source_kind.*read_image/);
       assert.match(serialized,/screenshot-entertainment-0915\.png/);
-      res.end(JSON.stringify({id:'read-plan',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({
+      res.end(JSON.stringify({id:'read-plan',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-read',name:'submit_visual_plan',input:{
         schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Visually verify the rendered screenshot.',
         questions:[{id:'appearance',question:'Are there visible layout, overlap, clipping, spacing, or rendering anomalies?'}],
         requested_evidence:['layout','ui_state'],detail_level:'high'
-      })}],stop_reason:'end_turn',usage:{}}));
+      }}],stop_reason:'end_turn',usage:{}}));
       return;
     }
     mainCalls += 1;

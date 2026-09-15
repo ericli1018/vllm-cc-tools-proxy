@@ -1,9 +1,47 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.4 moves Directed Visual orchestration back into the Proxy: when a fresh directed image arrives from the current Claude Code turn (for example `Read(screenshot.png)`), the Proxy silently asks the Main/Base model what visual facts are needed, sends that plan plus the image to Ollama Vision, validates the existing `visual-perception-v1` result, and injects a synthetic `proxy_visual_query` tool result back into the Main flow before normal reasoning continues. Main no longer receives `proxy_visual_query` as a callable tool. V0.30.4 also removes the redundant user-visible `正在請模型規劃下一步…` round-start message while preserving the existing 30-second `處理中…` timeline, Native Vision precedence/fallback, and the PDF pipeline.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.5 keeps the V0.30.4 Proxy-owned Directed Visual architecture, but hardens the internal visual planner: the planner receives the complete existing Main context and must return its perception plan through one forced internal `submit_visual_plan` tool call instead of free-form JSON text. The Proxy then sends only a simple perception prompt (objective/questions) plus the image to Ollama Vision and injects the resulting `visual-perception-v1` evidence back into the original Main flow. Fresh directed images no longer emit generic `media_ready` progress, and a silent model-round start supersedes any stale pre-30-second media progress while preserving the existing `處理中…` timeline.
 
 
 
+
+
+## V0.30.5 Structured Full-Context Visual Planner
+
+V0.30.5 preserves the V0.30.4 Proxy-owned orchestration direction while fixing the internal planner failure observed in real Claude Code screenshot checks. The visual planner continues to receive the **complete existing Main context**: original system prompt, conversation history, current user task, prior Main tool calls/results, filenames, and directed visual manifests. Raw image pixels are still not exposed to the planner.
+
+The planner output channel is now deterministic:
+
+```text
+complete existing Main context
+→ internal visual planner
+→ forced submit_visual_plan tool call
+→ structured visual-query-plan-v1
+→ Proxy
+```
+
+The internal planner request replaces ordinary callable tools with exactly one Proxy-private tool, `submit_visual_plan`, and forces `tool_choice` to that tool. Free-form JSON text is not accepted as a valid plan. This removes the V0.30.4 failure mode where the planner returned prose, invalid JSON, or a schema-incomplete JSON object.
+
+Ollama Vision still receives a deliberately small sensor request rather than the full Claude Code conversation:
+
+```text
+visual-query-plan-v1 objective/questions
++ image pixels
+→ Ollama Vision
+→ visual-perception-v1
+```
+
+In other words, Main keeps the task context and decides **what to look for**; Ollama Vision only receives a **simple perception prompt** plus the image and reports **what is actually visible**. The validated result is injected back into the original Main context as the existing synthetic `proxy_visual_query` tool result before normal task reasoning resumes.
+
+Progress cleanup in V0.30.5:
+
+- fresh directed images handled by Proxy-owned visual orchestration do not emit generic `media_ready` / `檔案處理進度：N/N` progress;
+- history-only directed images remain silent as in V0.30.2;
+- `managed_model_round_start` remains telemetry-only;
+- when a model round silently starts before the 30-second visibility gate, any pending stale media-ready state is discarded instead of replayed later;
+- the normal 30-second `處理中 · HH:MM:SS ...` model timeline is preserved.
+
+V0.30.5 does not redesign the Sensor, crop/repair logic, Perception Cache, Native Vision precedence/fallback, or PDF pipeline.
 
 ## V0.30.4 Proxy-Owned Directed Visual Orchestration
 

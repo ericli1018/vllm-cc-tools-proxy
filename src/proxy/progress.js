@@ -511,6 +511,10 @@ export class ProgressStream {
 
   async setState(details = {}) {
     if (!this.visibleProgressEnabled || this.closed || this.progressClosed) return;
+    const phase = String(details?.phase || '');
+    if (!this.visible && ['managed_model_round_start', 'base_request_start'].includes(phase) && this.pendingUpdates.length > 0) {
+      this.#clearPending();
+    }
     const changedAt = Date.now();
     const stateKey = this.#stateKey('', details);
     if (stateKey === this.lastStateKey) return;

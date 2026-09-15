@@ -2361,7 +2361,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        if (!nativeVisionRawOnly && !historyOnlyDirectedMedia) {
+        if (!nativeVisionRawOnly && !historyOnlyDirectedMedia && !freshDirectedVisualExpected) {
           const readyMessage = mediaProgress?.renderMediaReady()
             || statusText(config.responseLanguage, 'mediaReady');
           log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
@@ -2412,7 +2412,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (hasMedia && !nativeVisionRawOnly && !historyOnlyDirectedMedia) {
+      if (hasMedia && !nativeVisionRawOnly && !historyOnlyDirectedMedia && !freshDirectedVisualExpected) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });

@@ -7,19 +7,45 @@ import {
   createSyntheticVisualExchange,
 } from '../src/visual/visual-query-planner.js';
 
-test('V0.30.4 planner request is silent, tool-free, and scoped to fresh source ids', () => {
-  const request = buildVisualQueryPlannerRequest({ model:'m', stream:true, tools:[{name:'Bash'}], messages:[{role:'user',content:'inspect'}] }, { sourceIds:['img_01'] });
+test('V0.30.5 planner preserves the full Main context and forces one internal submit_visual_plan tool', () => {
+  const original = {
+    model:'m', stream:true,
+    system:'ORIGINAL_SYSTEM',
+    tools:[{name:'Bash',description:'shell',input_schema:{type:'object'}}],
+    messages:[
+      {role:'user',content:'build the page'},
+      {role:'assistant',content:[{type:'tool_use',id:'r1',name:'Read',input:{file_path:'/tmp/s.png'}}]},
+      {role:'user',content:[{type:'tool_result',tool_use_id:'r1',content:'image result'}]},
+    ],
+  };
+  const request = buildVisualQueryPlannerRequest(original, { sourceIds:['img_01'] });
   assert.equal(request.stream,false);
-  assert.equal(request.tools.length,0);
+  assert.match(String(request.system), /ORIGINAL_SYSTEM/);
   assert.match(String(request.system), new RegExp(VISUAL_QUERY_PLANNER_MARKER));
+  assert.deepEqual(request.messages.slice(0, original.messages.length), original.messages);
   assert.match(JSON.stringify(request.messages.at(-1)), /img_01/);
+  assert.equal(request.tools.length,1);
+  assert.equal(request.tools[0].name,'submit_visual_plan');
+  assert.deepEqual(request.tool_choice,{type:'tool',name:'submit_visual_plan'});
 });
 
-test('V0.30.4 planner parses bounded visual-query-plan-v1', () => {
-  const plan = parseVisualQueryPlan({content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect layout',questions:[{id:'q1',question:'Is layout intact?'}],requested_evidence:['layout'],detail_level:'high'})}]}, ['img_01']);
+test('V0.30.5 planner parses submit_visual_plan tool input even when thinking or prose blocks are present', () => {
+  const plan = parseVisualQueryPlan({content:[
+    {type:'thinking',thinking:'I need to inspect layout.'},
+    {type:'text',text:'Planning complete.'},
+    {type:'tool_use',id:'vp1',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect layout',questions:[{id:'q1',question:'Is layout intact?'}],requested_evidence:['layout'],detail_level:'high'}},
+  ]}, ['img_01']);
   assert.equal(plan.objective,'Inspect layout');
   assert.equal(plan.questions[0].id,'q1');
   assert.equal(plan.detail_level,'high');
+});
+
+
+test('V0.30.5 planner rejects free-form JSON text when submit_visual_plan was not called', () => {
+  assert.throws(() => parseVisualQueryPlan({content:[{type:'text',text:JSON.stringify({
+    schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect layout',
+    questions:[{id:'q1',question:'Is layout intact?'}],requested_evidence:['layout'],detail_level:'high',
+  })}]}, ['img_01']), (error) => error?.code === 'visual_query_planner_tool_missing');
 });
 
 test('V0.30.4 synthetic visual exchange preserves tool_result semantics without exposing a callable tool', () => {

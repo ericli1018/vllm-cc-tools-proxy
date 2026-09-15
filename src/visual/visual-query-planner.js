@@ -2,18 +2,15 @@ import { HttpError } from '../lib/http.js';
 
 export const VISUAL_QUERY_PLANNER_MARKER = 'VCC_PROXY_VISUAL_PLANNER_V1';
 export const VISUAL_QUERY_PLAN_SCHEMA = 'visual-query-plan-v1';
+export const VISUAL_QUERY_PLAN_TOOL = 'submit_visual_plan';
 
 const PLANNER_INSTRUCTION = `[${VISUAL_QUERY_PLANNER_MARKER}]
 You are the Proxy's internal visual perception planner.
 A fresh image source has been detected for the current task, but you do not receive image pixels.
-Decide only WHAT observable facts should be inspected in the listed VCC_VISUAL_SOURCE handles.
-Do not answer the user's final task. Do not claim to see image content. Do not call tools.
-Return exactly one JSON object and no prose using schema_version="${VISUAL_QUERY_PLAN_SCHEMA}" with:
-- source_ids: the supplied source ids
-- objective: concise task-relevant visual objective
-- questions: 1..8 objects {id, question}
-- requested_evidence: optional short evidence categories
-- detail_level: low|normal|high
+Use the ENTIRE existing Main context to decide only WHAT observable facts should be inspected in the listed VCC_VISUAL_SOURCE handles.
+Do not answer the user's final task. Do not claim to see image content.
+You MUST call the internal ${VISUAL_QUERY_PLAN_TOOL} tool exactly once with the perception plan.
+Do not emit the plan as prose or JSON text.
 Questions must ask for observable visual facts, not final-task reasoning.`;
 
 function appendSystem(system, text) {
@@ -26,9 +23,45 @@ function plannerRequestText(sourceIds) {
   return [
     '[VCC_PROXY_VISUAL_PLANNER_REQUEST]',
     `Fresh source_ids: ${JSON.stringify(sourceIds)}`,
-    'Use the existing user request, conversation, recent tool calls, filenames, and source metadata to decide what the Vision sensor should inspect.',
-    'Return JSON only.',
+    'Use the complete existing Main request context, conversation, recent tool calls, filenames, and source metadata to decide what the Vision sensor should inspect.',
+    `Call ${VISUAL_QUERY_PLAN_TOOL} exactly once.`,
   ].join('\n');
+}
+
+function visualPlanTool(sourceIds) {
+  return {
+    name: VISUAL_QUERY_PLAN_TOOL,
+    description: 'Submit the task-specific visual perception plan for the fresh VCC visual sources. This is an internal Proxy planner tool.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        schema_version: { type: 'string', enum: [VISUAL_QUERY_PLAN_SCHEMA] },
+        source_ids: {
+          type: 'array', minItems: sourceIds.length, maxItems: sourceIds.length, uniqueItems: true,
+          items: { type: 'string', enum: sourceIds },
+        },
+        objective: { type: 'string', minLength: 1, maxLength: 1500 },
+        questions: {
+          type: 'array', minItems: 1, maxItems: 8,
+          items: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: 64 },
+              question: { type: 'string', minLength: 1, maxLength: 1000 },
+            },
+            required: ['id', 'question'],
+          },
+        },
+        requested_evidence: {
+          type: 'array', maxItems: 16,
+          items: { type: 'string', minLength: 1, maxLength: 128 },
+        },
+        detail_level: { type: 'string', enum: ['low', 'normal', 'high'] },
+      },
+      required: ['schema_version', 'source_ids', 'objective', 'questions', 'requested_evidence', 'detail_level'],
+    },
+  };
 }
 
 export function buildVisualQueryPlannerRequest(request, { sourceIds = [] } = {}) {
@@ -37,8 +70,8 @@ export function buildVisualQueryPlannerRequest(request, { sourceIds = [] } = {})
   const clone = structuredClone(request || {});
   clone.stream = false;
   clone.system = appendSystem(clone.system, PLANNER_INSTRUCTION);
-  clone.tools = [];
-  delete clone.tool_choice;
+  clone.tools = [visualPlanTool(ids)];
+  clone.tool_choice = { type: 'tool', name: VISUAL_QUERY_PLAN_TOOL };
   clone.max_tokens = Math.min(Math.max(Number(clone.max_tokens) || 2048, 512), 4096);
   const messages = Array.isArray(clone.messages) ? clone.messages : [];
   messages.push({ role:'user', content:[{ type:'text', text:plannerRequestText(ids) }] });
@@ -74,7 +107,15 @@ function sameSet(actual, expected) {
 
 export function parseVisualQueryPlan(response, expectedSourceIds = []) {
   const expected = [...new Set(expectedSourceIds.map((id) => String(id || '').trim()).filter(Boolean))];
-  const value = parseJsonObject(extractText(response));
+  const blocks = Array.isArray(response?.content) ? response.content : [];
+  const toolBlocks = blocks.filter((block) => block?.type === 'tool_use' && block?.name === VISUAL_QUERY_PLAN_TOOL);
+  if (toolBlocks.length > 1) {
+    throw new HttpError(502, 'Visual planner returned multiple plan tool calls.', { code:'visual_query_planner_multiple_tool_calls', retryable:true });
+  }
+  if (toolBlocks.length !== 1) {
+    throw new HttpError(502, 'Visual planner did not call submit_visual_plan.', { code:'visual_query_planner_tool_missing', retryable:true });
+  }
+  const value = structuredClone(toolBlocks[0].input || {});
   if (value?.schema_version !== VISUAL_QUERY_PLAN_SCHEMA) {
     throw new HttpError(502, 'Visual planner schema_version is invalid.', { code:'visual_query_planner_schema_invalid', retryable:true });
   }
