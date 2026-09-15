@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.1', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.2', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.1/);
+  assert.match(first, /VERSION\s+0\.30\.2/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.1');
+  assert.equal(payload.version, '0.30.2');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.1/);
+  assert.match(payload.display, /CCTP 0\.30\.2/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4486,4 +4486,147 @@ test('V0.30.1 repeated Read image history reuses the same manifest source and su
   const registrations = logs.filter((entry) => entry.event === 'directed_visual_asset_registered');
   assert.equal(registrations.length, 2);
   assert.equal(registrations[1].reused, true);
+});
+
+test('V0.30.2 history-only directed images never emit media progress on tool continuation', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const logs = [];
+  const upstream = await startJsonServer(async (req, res) => {
+    const body = JSON.parse((await read(req)).toString());
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 100 }));
+      return;
+    }
+    assert.match(JSON.stringify(body), /VCC_VISUAL_SOURCE/);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-history-only","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":100,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"continue"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: upstream.url,
+    visionOrchestrationMode: 'directed',
+    responseLanguage: 'zh-TW',
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }), {
+    mediaAdapterDependencies: {
+      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
+    },
+  });
+  const proxyUrl = await listen(proxy);
+  t.after(() => upstream.server.close());
+  t.after(() => proxy.close());
+
+  const historicalImage = { type:'image', source:{ type:'base64', media_type:'image/png', data:base64 } };
+  const messages = [
+    { role:'assistant', content:[{ type:'tool_use', id:'read-old', name:'Read', input:{ file_path:'/work/old.png' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-old', content:[historicalImage] }] },
+    { role:'assistant', content:[{ type:'tool_use', id:'bash-now', name:'Bash', input:{ command:'true' } }] },
+    { role:'user', content:[{ type:'tool_result', tool_use_id:'bash-now', content:'ok' }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({
+      model:'m', stream:true,
+      tools:[{ name:'WebSearch', description:'search', input_schema:{ type:'object', properties:{ query:{ type:'string' } } } }],
+      messages,
+    }),
+  });
+  assert.equal(response.status, 200);
+  const stream = await response.text();
+  assert.match(stream, /OK/);
+  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && entry.phase === 'media_ready'), false);
+  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && entry.phase === 'media_cache_miss'), false);
+  assert.doesNotMatch(stream, /檔案處理進度/);
+  assert.doesNotMatch(stream, /文件與圖片內容已就緒/);
+});
+
+test('V0.30.2 history-only directed images stay silent when the current user turn is text', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  const base = await startJsonServer(async (req, res) => {
+    await read(req);
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200, { 'content-type':'application/json' });
+      res.end(JSON.stringify({ input_tokens: 50 }));
+      return;
+    }
+    res.writeHead(200, { 'content-type':'text/event-stream' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-text-turn","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":50,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', responseLanguage:'zh-TW',
+    progressVisibleAfterMs:0, logLevel:'info', logSink:(entry)=>logs.push(entry),
+  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
+  const proxyUrl = await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const image = {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
+  const messages = [
+    {role:'assistant',content:[{type:'tool_use',id:'read-old-text',name:'Read',input:{file_path:'/work/old.png'}}]},
+    {role:'user',content:[{type:'tool_result',tool_use_id:'read-old-text',content:[image]}]},
+    {role:'assistant',content:[{type:'text',text:'earlier response'}]},
+    {role:'user',content:'check the popup again'},
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+    model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages,
+  })});
+  assert.equal(response.status,200);
+  const stream = await response.text();
+  assert.match(stream,/OK/);
+  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && ['media_ready','media_cache_miss'].includes(entry.phase)),false);
+  assert.doesNotMatch(stream,/檔案處理進度|文件與圖片內容已就緒/);
+});
+
+test('V0.30.2 a newly supplied directed image still emits media ready progress', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  const base = await startJsonServer(async (req,res)=>{
+    await read(req);
+    if (req.url === '/v1/messages/count_tokens') {
+      res.writeHead(200,{'content-type':'application/json'});
+      res.end(JSON.stringify({input_tokens:50}));
+      return;
+    }
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-new-image","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":50,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', responseLanguage:'zh-TW',
+    progressVisibleAfterMs:0, logLevel:'info', logSink:(entry)=>logs.push(entry),
+  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
+  const proxyUrl = await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
+    model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:[
+      {type:'text',text:'inspect this image'},
+      {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
+    ]}],
+  })});
+  assert.equal(response.status,200);
+  await response.text();
+  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='media_ready'),true);
 });

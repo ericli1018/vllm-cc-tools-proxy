@@ -1,9 +1,29 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.1 hardens the V0.30.0 Directed Visual pipeline for real Ollama/Vision-model output: conservative schema normalization, safe validation diagnostics, text-only structured repair, request-scoped duplicate-image reuse, and corrected directed progress/cache accounting. Legacy image analysis remains the default, Native Vision precedence is preserved, and the existing PDF pipeline is intentionally unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.2 fixes a Directed Visual progress regression: historical images carried in Claude Code conversation history are still registered internally for Main-model access, but they no longer create false file/image processing progress on a later text or tool-result continuation. The 30-second visible-progress gate, lazy Vision invocation, V0.30.1 structured-output compatibility, Native Vision precedence, and the existing PDF pipeline are unchanged.
 
 
 
+
+## V0.30.2 Directed Visual Progress Continuation Fix
+
+V0.30.2 is a narrow regression fix for Directed Visual progress semantics. Claude Code sends the full conversation history on later `/v1/messages` requests, so historical `Read(image)` blocks are rediscovered and re-registered internally. V0.30.1 correctly deduplicated those images by visual source identity, but the generic media-ready path still treated the mere presence of historical images as current media work and queued a false `media_ready` state. When a request lasted beyond the existing 30-second visibility gate, that stale state became visible as misleading `檔案處理進度：N/N` output even though no image processing or Vision call occurred.
+
+V0.30.2 separates internal historical visual registration from visible media processing progress:
+
+- **history-only directed media is silent**: historical image manifests remain available to the Main model, but do not emit `media_cache_miss` or `media_ready` visible progress on a later text turn or non-image tool-result continuation.
+- **new media remains visible**: if the current/latest user message actually supplies a new directed image, the normal media-ready progress path is preserved.
+- **real Vision work remains visible**: if Main later calls `proxy_visual_query`, perception/crop/repair progress remains unchanged.
+- The **30-second visible-progress gate is unchanged**. This release removes the incorrect media state that was being buffered; it does not shorten, bypass, or otherwise modify the gate.
+- Directed source discovery, same-image `source_id` reuse, Perception Cache generation `directed-visual-v2`, Native Vision precedence/fallback, legacy mode default, and the PDF pipeline are unchanged.
+
+The key invariant is now:
+
+```text
+historical visual discovery / manifest registration
+    = internal context preparation only
+    = no visible media-processing progress
+```
 
 ## V0.30.1 Directed Structured Output Compatibility
 

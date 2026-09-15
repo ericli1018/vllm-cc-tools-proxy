@@ -831,3 +831,15 @@ test('V0.30.1 documents directed structured-output compatibility and keeps PDF s
   assert.ok(changeLogEntries.includes('V0.30.1-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.1-實作與驗證報告.md'));
 });
+
+
+test('V0.30.2 documents history-only directed progress suppression and preserves the 30-second gate', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(readme, /V0\.30\.2 Directed Visual Progress Continuation Fix/);
+  assert.match(readme, /history-only directed/i);
+  assert.match(readme, /30-second|30 秒/i);
+  assert.match(serverSource, /historyOnlyDirectedMedia/);
+  assert.ok(changeLogEntries.includes('V0.30.2-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.2-實作與驗證報告.md'));
+});

@@ -1848,6 +1848,7 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionRawOnly = false;
       const directedVisualSession = config.visionOrchestrationMode === 'directed' ? new DirectedVisualSession() : null;
       let directedVisualEligibleCount = 0;
+      let historyOnlyDirectedMedia = false;
       const ensureDirectedVisualCapability = (body) => {
         if (!directedVisualSession?.hasSources()) return body;
         let next = body;
@@ -1869,12 +1870,23 @@ export function createProxyServer(config, dependencies = {}) {
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
+        historyOnlyDirectedMedia = false;
         if (directedVisualSession) {
-          directedVisualEligibleCount = mediaProgress.descriptors.filter((entry) => (
+          const directedVisualDescriptors = mediaProgress.descriptors.filter((entry) => (
             entry.kind === 'image'
             && ['direct_image', 'read_image', 'tool_result_image'].includes(entry.sourceKind)
             && !nativeVisionPassthroughPaths.has(entry.pathKey)
+          ));
+          directedVisualEligibleCount = directedVisualDescriptors.length;
+          const currentMessageIndex = request.messages.length - 1;
+          const currentDirectedVisualCount = directedVisualDescriptors.filter((entry) => (
+            Array.isArray(entry.path)
+            && entry.path[0] === 'messages'
+            && entry.path[1] === currentMessageIndex
           )).length;
+          historyOnlyDirectedMedia = directedVisualEligibleCount > 0
+            && directedVisualEligibleCount === mediaProgress.descriptors.length
+            && currentDirectedVisualCount === 0;
           if (directedVisualEligibleCount > 0) hasManagedLoop = true;
         }
         nativeVisionRawOnly = nativeVisionEligibleCount > 0
@@ -2273,7 +2285,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        if (!nativeVisionRawOnly) {
+        if (!nativeVisionRawOnly && !historyOnlyDirectedMedia) {
           const readyMessage = mediaProgress?.renderMediaReady()
             || statusText(config.responseLanguage, 'mediaReady');
           log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
@@ -2324,7 +2336,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (hasMedia && !nativeVisionRawOnly) {
+      if (hasMedia && !nativeVisionRawOnly && !historyOnlyDirectedMedia) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
