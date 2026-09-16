@@ -1310,88 +1310,54 @@ test('V0.29.31 a second empty end_turn fails with a dedicated bounded-regenerati
   assert.equal(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'), false);
 });
 
-test('V0.30.0 runManagedLoop intercepts proxy_visual_query internally and continues with correlated tool_result', async () => {
+test('V0.29.44 Managed Loop executes VisualInspect internally and returns JSON evidence to the Main Model', async () => {
   const requests = [];
-  const visualCalls = [];
-  const upstream = async (request) => {
-    requests.push(structuredClone(request));
-    if (requests.length === 1) {
-      return response([{ type:'tool_use', id:'vis-1', name:'proxy_visual_query', input:{
-        source_ids:['img_01'], objective:'read reset net', questions:[{id:'q1',question:'What reset net is visible?'}], detail_level:'high',
-      } }], 'tool_use');
-    }
-    const last = request.messages.at(-1);
-    assert.equal(last.role, 'user');
-    assert.equal(last.content[0].tool_use_id, 'vis-1');
-    const result = JSON.parse(last.content[0].content);
-    assert.equal(result.schema_version, 'visual-perception-v1');
-    assert.equal(result.answers[0].answer, 'RESET_N');
-    return response([{ type:'text', text:'final from evidence' }]);
-  };
-
+  const executions = [];
   const result = await runManagedLoop({
-    model:'m',
-    tools:[{ name:'proxy_visual_query', input_schema:{ type:'object' } }],
-    messages:[{ role:'user', content:'inspect image' }],
+    model: 'm',
+    tools: [
+      { name: 'VisualInspect', input_schema: { type: 'object' } },
+      { name: 'Read', input_schema: { type: 'object' } },
+    ],
+    messages: [{ role: 'user', content: 'inspect image and continue' }],
   }, {
-    upstream,
-    executeTool: async () => assert.fail('visual query must not use web executor'),
-    executeVisualTool: async (toolUse) => {
-      visualCalls.push(structuredClone(toolUse));
-      return {
-        schema_version:'visual-perception-v1', status:'complete',
-        answers:[{ question_id:'q1', answer:'RESET_N', confidence:0.99, source_ids:['img_01'], support_refs:['img_01:e1'] }],
-        source_results:[{ source_id:'img_01', evidence:[{ evidence_id:'e1', kind:'text', observation:'RESET_N', verbatim:'RESET_N', bbox:[1,2,3,4], coordinate_space:'normalized_1000', confidence:0.99 }], relationships:[], unresolved:[] }],
-        needs_followup:false,
-      };
-    },
-  });
-
-  assert.equal(result.content[0].text, 'final from evidence');
-  assert.equal(visualCalls.length, 1);
-  assert.equal(requests.length, 2);
-});
-
-test('V0.30.0 proxy_visual_query is hard-bounded to two Director rounds', async () => {
-  let baseCalls = 0;
-  let visualCalls = 0;
-  const upstream = async (request) => {
-    baseCalls += 1;
-    if (baseCalls <= 3) {
-      if (baseCalls === 3) {
-        const previous = request.messages.at(-1).content[0];
-        assert.equal(previous.is_error, undefined);
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) {
+        return response([
+          { type: 'tool_use', id: 'vision-1', name: 'VisualInspect', input: {
+            asset_id: 'visual-1', objective: 'Read error', questions: [{ id: 'q1', question: 'What error?' }],
+          } },
+          { type: 'tool_use', id: 'read-1', name: 'Read', input: { file_path: '/workspace/source.png' } },
+        ], 'tool_use');
       }
-      return response([{ type:'tool_use', id:`vis-${baseCalls}`, name:'proxy_visual_query', input:{ source_ids:['img_01'], objective:`objective ${baseCalls}`, questions:[{id:`q${baseCalls}`,question:`question ${baseCalls}`}]} }], 'tool_use');
-    }
-    const errorBlock = request.messages.at(-1).content[0];
-    assert.equal(errorBlock.is_error, true);
-    assert.equal(JSON.parse(errorBlock.content).error.code, 'visual_query_round_limit');
-    assert.equal(request.tools.some((tool) => tool?.name === 'proxy_visual_query'), false);
-    return response([{ type:'text', text:'bounded final' }]);
-  };
-  const result = await runManagedLoop({ model:'m', tools:[{name:'proxy_visual_query',input_schema:{type:'object'}}], messages:[{role:'user',content:'go'}] }, {
-    upstream,
-    executeTool: async () => assert.fail('not web'),
-    executeVisualTool: async () => {
-      visualCalls += 1;
-      return { schema_version:'visual-perception-v1', status:'complete', answers:[], source_results:[], needs_followup:false };
+      const assistant = request.messages.at(-2);
+      const user = request.messages.at(-1);
+      assert.equal(assistant.role, 'assistant');
+      assert.equal(assistant.content.some((block) => block?.type === 'tool_use' && block?.name === 'VisualInspect'), true);
+      assert.equal(assistant.content.some((block) => block?.type === 'tool_use' && block?.name === 'Read'), false);
+      assert.equal(user.role, 'user');
+      assert.equal(user.content[0].tool_use_id, 'vision-1');
+      const parsed = JSON.parse(user.content[0].content);
+      assert.equal(parsed.schema, 'visual_perception_v1');
+      assert.equal(parsed.answers[0].answer, 'Connection refused');
+      assert.equal(JSON.stringify(request.system || '').includes('Managed Web Results'), false);
+      return response([{ type: 'tool_use', id: 'read-2', name: 'Read', input: { file_path: '/workspace/source.png' } }], 'tool_use');
+    },
+    executeTool: async (toolUse) => {
+      executions.push(structuredClone(toolUse));
+      assert.equal(toolUse.name, 'VisualInspect');
+      return {
+        schema: 'visual_perception_v1', asset_id: 'visual-1', status: 'complete',
+        answers: [{ question_id: 'q1', status: 'answered', answer: 'Connection refused', evidence: [], uncertainty: '' }],
+        follow_up_regions: [],
+      };
     },
     maxRounds: 6,
   });
-  assert.equal(result.content[0].text, 'bounded final');
-  assert.equal(visualCalls, 2);
-});
 
-test('V0.30.4 managed model round start is telemetry-only and emits no planning progress', async () => {
-  const progress = [];
-  const result = await runManagedLoop({ model:'m', messages:[{role:'user',content:'go'}] }, {
-    upstream: async () => response([{type:'text',text:'done'}], 'end_turn'),
-    executeTool: async () => ({}),
-    showInitialModelProgress: true,
-    onProgress: async (message, details) => progress.push({message, details}),
-  });
-  assert.equal(result.content[0].text,'done');
-  assert.equal(progress.some((entry)=>entry.details?.phase==='managed_model_round_start'),false);
-  assert.equal(progress.some((entry)=>String(entry.message).includes('正在請模型規劃下一步')),false);
+  assert.equal(executions.length, 1);
+  assert.equal(requests.length, 2);
+  assert.equal(result.stop_reason, 'tool_use');
+  assert.equal(result.content[0].name, 'Read');
 });

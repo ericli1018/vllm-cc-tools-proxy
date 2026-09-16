@@ -10,7 +10,6 @@ import {
 } from './managed-final.js';
 import { inventoryProtocolTags, neutralizeProtocolValue } from './protocol-sanitizer.js';
 import { isManagedToolName, normalizeManagedToolName, normalizeManagedToolUseBlock } from './web-tools.js';
-import { isProxyVisualToolName } from '../visual/visual-query-tool.js';
 import {
   normalizeNativeWebToolResponse,
   canonicalWebToolName,
@@ -21,6 +20,7 @@ import {
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 import { prepareContinuationState } from './continuation-state.js';
+import { isDirectedVisualToolName } from '../visual/directed-vision.js';
 import {
   isToolSearchToolName,
   executeLocalToolSearch,
@@ -42,17 +42,9 @@ function stableValue(value) {
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
 }
 
-function internalManagedToolName(name) {
-  return isProxyVisualToolName(name) ? 'proxy_visual_query' : normalizeManagedToolName(name);
-}
-
-function isInternalManagedToolName(name) {
-  return isProxyVisualToolName(name) || isManagedToolName(name);
-}
-
 function managedActionSignature(toolUses) {
   return JSON.stringify(toolUses.map((toolUse) => ({
-    name: internalManagedToolName(toolUse?.name),
+    name: normalizeManagedToolName(toolUse?.name),
     input: stableValue(toolUse?.input ?? {}),
   })));
 }
@@ -712,7 +704,6 @@ function deferMixedServerTools(response) {
 export async function runManagedLoop(initialRequest, {
   upstream,
   executeTool,
-  executeVisualTool = null,
   maxRounds = 6,
   onProgress = () => {},
   onDiagnostic = () => {},
@@ -745,7 +736,6 @@ export async function runManagedLoop(initialRequest, {
   const taskStartedAt = Date.now();
   let activeRound = 0;
   let previousManagedActionSignature = null;
-  let visualQueryCount = 0;
   const externalServerPrefix = [];
   const serverUsageCounts = { WebSearch: 0, WebFetch: 0 };
   const liveServerEvents = typeof onServerToolEvent === 'function';
@@ -946,6 +936,12 @@ export async function runManagedLoop(initialRequest, {
 
   for (let round = 0; round < maxRounds; round += 1) {
     activeRound = round + 1;
+    if (round > 0 || showInitialModelProgress) {
+      await onProgress(
+        round === 0 ? statusText(locale, 'modelPlanning') : statusText(locale, 'modelToolResults'),
+        { phase: 'managed_model_round_start', round: round + 1 },
+      );
+    }
     let response = await containedUpstream(request, signal);
     let recovery = null;
     const recovered = await recoverInvalidResponse(request, response, {
@@ -1011,6 +1007,70 @@ export async function runManagedLoop(initialRequest, {
       }
       continue;
     }
+    const directedVisualUses = toolUses.filter((block) => isDirectedVisualToolName(block?.name));
+    if (directedVisualUses.length > 0) {
+      const actionSignature = managedActionSignature(directedVisualUses);
+      if (previousManagedActionSignature === actionSignature) {
+        await onDiagnostic('managed_no_progress_detected', {
+          round: round + 1,
+          tool_names: directedVisualUses.map((block) => String(block?.name || '')),
+        });
+        throw new HttpError(422, 'Managed tool loop repeated the exact same action without progress.', {
+          code: 'managed_no_progress',
+          retryable: false,
+        });
+      }
+      previousManagedActionSignature = actionSignature;
+      const results = await Promise.all(directedVisualUses.map(async (toolUse) => {
+        await onProgress(progressMessage(toolUse.name, toolUse.input, 'start', locale), {
+          phase: 'managed_tool_start', name: String(toolUse.name || ''), round: round + 1, force: true,
+        });
+        try {
+          const remaining = remainingTaskMs();
+          if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
+          const output = taskDeadlineEnabled
+            ? await runWithBoundedTime(
+              (boundedSignal) => executeTool(toolUse, boundedSignal),
+              { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
+            )
+            : await executeTool(toolUse, signal);
+          const neutralOutput = neutralizeProtocolValue(output);
+          await onProgress(progressMessage(toolUse.name, toolUse.input, 'done', locale), {
+            phase: 'managed_tool_done', name: String(toolUse.name || ''), round: round + 1,
+          });
+          await onDiagnostic('directed_visual_tool_executed', {
+            round: round + 1,
+            tool_name: String(toolUse.name || ''),
+            tool_use_id: String(toolUse.id || ''),
+          });
+          return {
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify(neutralOutput),
+          };
+        } catch (error) {
+          if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
+          if (!(error instanceof HttpError)) throw error;
+          await onProgress(progressMessage(toolUse.name, toolUse.input, 'error', locale), {
+            phase: 'managed_tool_error', name: String(toolUse.name || ''), round: round + 1, code: error.code,
+          });
+          return {
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            is_error: true,
+            content: JSON.stringify(neutralizeProtocolValue(safeToolError(error))),
+          };
+        }
+      }));
+      request.messages.push({
+        role: 'assistant',
+        content: (Array.isArray(response?.content) ? response.content : [])
+          .filter((block) => block?.type !== 'tool_use' || isDirectedVisualToolName(block?.name))
+          .map((block) => structuredClone(block)),
+      });
+      request.messages.push({ role: 'user', content: results });
+      continue;
+    }
     if (typeof diagnosticPassthroughWebTools === 'function' && toolUses.some((block) => isManagedToolName(block.name))) {
       const decision = await diagnosticPassthroughWebTools({
         round: round + 1,
@@ -1044,14 +1104,14 @@ export async function runManagedLoop(initialRequest, {
       });
       return response;
     }
-    if (toolUses.some((block) => !isInternalManagedToolName(block.name))) {
-      const managedToolNames = toolUses.filter((block) => isInternalManagedToolName(block.name)).map((block) => internalManagedToolName(block.name));
+    if (toolUses.some((block) => !isManagedToolName(block.name))) {
+      const managedToolNames = toolUses.filter((block) => isManagedToolName(block.name)).map((block) => normalizeManagedToolName(block.name));
       if (managedToolNames.length > 0) {
         const deferred = deferMixedServerTools(response);
         await onDiagnostic('server_web_mixed_tool_deferred', {
           round: round + 1,
           server_tool_names: managedToolNames,
-          client_tool_names: toolUses.filter((block) => !isInternalManagedToolName(block.name)).map((block) => String(block?.name || '')),
+          client_tool_names: toolUses.filter((block) => !isManagedToolName(block.name)).map((block) => String(block?.name || '')),
         });
         return withExternalServerPrefix(deferred, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
       }
@@ -1069,7 +1129,7 @@ export async function runManagedLoop(initialRequest, {
     if (previousManagedActionSignature === actionSignature) {
       await onDiagnostic('managed_no_progress_detected', {
         round: round + 1,
-        tool_names: toolUses.map((block) => internalManagedToolName(block.name)),
+        tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
       });
       throw new HttpError(422, 'Managed tool loop repeated the exact same action without progress.', {
         code: 'managed_no_progress',
@@ -1083,11 +1143,11 @@ export async function runManagedLoop(initialRequest, {
         round: round + 1,
         recovery_route: recovery.route,
         disposition: 'managed',
-        tool_names: toolUses.map((block) => internalManagedToolName(block.name)),
+        tool_names: toolUses.map((block) => normalizeManagedToolName(block.name)),
       });
     }
 
-    const serverCalls = toolUses.map((toolUse) => isManagedToolName(toolUse?.name) ? createServerWebToolUse(toolUse) : null);
+    const serverCalls = toolUses.map((toolUse) => createServerWebToolUse(toolUse));
     for (const serverCall of serverCalls) {
       if (serverCall) await publishServerBlock('use', serverCall.block);
     }
@@ -1099,22 +1159,12 @@ export async function runManagedLoop(initialRequest, {
       try {
         const remaining = remainingTaskMs();
         if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
-        if (isProxyVisualToolName(toolUse?.name)) {
-          if (visualQueryCount >= 2) {
-            throw new HttpError(422, 'Directed visual query round limit reached.', { code: 'visual_query_round_limit', retryable: false });
-          }
-          visualQueryCount += 1;
-        }
-        const selectedExecutor = isProxyVisualToolName(toolUse?.name) ? executeVisualTool : executeTool;
-        if (typeof selectedExecutor !== 'function') {
-          throw new HttpError(500, 'Proxy visual tool executor is unavailable.', { code: 'visual_query_unavailable', retryable: false });
-        }
         const output = taskDeadlineEnabled
           ? await runWithBoundedTime(
-            (boundedSignal) => selectedExecutor(toolUse, boundedSignal),
+            (boundedSignal) => executeTool(toolUse, boundedSignal),
             { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
           )
-          : await selectedExecutor(toolUse, signal);
+          : await executeTool(toolUse, signal);
         const inventory = inventoryProtocolTags(output);
         if (inventory.total > 0) {
           await onDiagnostic('managed_tool_result_protocol_inventory', {
@@ -1125,7 +1175,7 @@ export async function runManagedLoop(initialRequest, {
           });
         }
         const neutralOutput = neutralizeProtocolValue(output);
-        const canonical = internalManagedToolName(toolUse.name);
+        const canonical = normalizeManagedToolName(toolUse.name);
         const serverCall = serverCalls[toolIndex];
         if (serverCall) {
           const serverResult = createServerWebToolResult(canonical, serverCall.id, neutralOutput);
@@ -1138,12 +1188,12 @@ export async function runManagedLoop(initialRequest, {
         return {
           type: 'tool_result',
           tool_use_id: toolUse.id,
-          content: isProxyVisualToolName(toolUse.name) ? JSON.stringify(neutralOutput) : renderManagedToolResult(toolUse.name, neutralOutput),
+          content: renderManagedToolResult(toolUse.name, neutralOutput),
         };
       } catch (error) {
         if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
         if (!(error instanceof HttpError)) throw error;
-        const canonical = internalManagedToolName(toolUse.name);
+        const canonical = normalizeManagedToolName(toolUse.name);
         const serverCall = serverCalls[toolIndex];
         if (serverCall) {
           const serverResult = createServerWebToolResult(canonical, serverCall.id, null, error);
@@ -1164,16 +1214,11 @@ export async function runManagedLoop(initialRequest, {
 
     request.messages.push({ role: 'assistant', content: structuredClone(response.content) });
     request.messages.push({ role: 'user', content: results });
-    if (toolUses.some((block) => isManagedToolName(block.name))) injectManagedWebResultInstruction(request);
-    if (visualQueryCount >= 2 && Array.isArray(request.tools)) {
-      request.tools = request.tools.filter((tool) => !isProxyVisualToolName(tool?.name));
-      if (request.tool_choice?.type === 'tool' && isProxyVisualToolName(request.tool_choice?.name)) request.tool_choice = { type: 'auto' };
-      await onDiagnostic('visual_query_budget_exhausted', { round: round + 1, used_queries: visualQueryCount, max_queries: 2 });
-    }
+    injectManagedWebResultInstruction(request);
 
     if (releaseForcedManagedToolChoiceAfterUse
       && request.tool_choice?.type === 'tool'
-      && isInternalManagedToolName(request.tool_choice?.name)) {
+      && isManagedToolName(request.tool_choice?.name)) {
       request.tool_choice = { type: 'auto' };
       await onDiagnostic('managed_forced_tool_choice_satisfied', {
         round: round + 1,
@@ -1183,10 +1228,10 @@ export async function runManagedLoop(initialRequest, {
 
     if (taskDeadlineEnabled && remainingTaskMs() <= modelRoundTimeoutMs && Array.isArray(request.tools)) {
       const before = request.tools.length;
-      request.tools = request.tools.filter((tool) => !isInternalManagedToolName(tool?.name));
+      request.tools = request.tools.filter((tool) => !isManagedToolName(tool?.name));
       const removed = before - request.tools.length;
       if (removed > 0) {
-        if (request.tool_choice?.type === 'tool' && isInternalManagedToolName(request.tool_choice?.name)) {
+        if (request.tool_choice?.type === 'tool' && isManagedToolName(request.tool_choice?.name)) {
           request.tool_choice = { type: 'auto' };
         }
         await onDiagnostic('managed_final_round_reserved', {

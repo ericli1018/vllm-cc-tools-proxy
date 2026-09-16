@@ -647,57 +647,69 @@ test('V0.29.9 terminal unavailable image evidence is continuation-reusable but n
   assert.equal(continuationWrites[0].value.cacheable, false);
 });
 
-test('V0.30.4 directed image adapter registers a proxy-managed manifest without invoking Vision itself', async () => {
+test('V0.29.44 directed image mode registers request-local asset without eager Vision or semantic cache', async () => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   let visionCalls = 0;
+  let cacheReads = 0;
+  let cacheWrites = 0;
   const registered = [];
-  const directedVisualSession = {
-    register(entry) {
-      registered.push(entry);
-      return { sourceId: 'img_01' };
+  const directedVisualStore = {
+    register(asset) {
+      registered.push(asset);
+      return {
+        assetId: 'visual-1',
+        mediaType: asset.mediaType,
+        width: asset.width,
+        height: asset.height,
+        receivedWidth: asset.receivedWidth,
+        receivedHeight: asset.receivedHeight,
+        filename: asset.filename,
+        sourceRef: asset.sourceRef,
+        sourceKind: asset.sourceKind,
+      };
     },
   };
   const adapters = createMediaAdapters({
+    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 1000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
     visionOrchestrationMode: 'directed',
-    limits: { maxDecodedBytes: 5_000_000, maxOutputChars: 5000, maxImagePixels: 5_000_000, processTimeoutMs: 10000 },
     vllmBaseVisionEnabled: false,
     visionNativePassthrough: false,
     vllmVisionUrl: 'http://vision:8000', vllmVisionModel: 'vision', vllmVisionApiKey: '',
     vllmVisionProvider: 'vllm', vllmVisionThink: false,
   }, undefined, undefined, {
+    directedVisualStore,
+    normalizeImage: async () => ({
+      buffer: Buffer.from('normalized-image'), mediaType: 'image/png', width: 1200, height: 675,
+      originalWidth: 1568, originalHeight: 882,
+    }),
+    analyzeVisualAssets: async () => { visionCalls += 1; throw new Error('directed mode must not eagerly call Vision'); },
+    mediaCache: {
+      get: async () => { cacheReads += 1; return null; },
+      set: async () => { cacheWrites += 1; return true; },
+    },
     mediaProgress: {
       contextForPath: () => ({
-        filename: 'schematic.png', origin: 'direct', originTool: '', sourceKind: 'direct_image', readSourceRef: '',
+        filename: 'screen.png', origin: 'read', originTool: 'Read', sourceKind: 'read_image', readSourceRef: '/workspace/screen.png',
       }),
-    },
-    directedVisualSession,
-    normalizeImage: async () => ({
-      buffer: Buffer.from('overview'), mediaType: 'image/png', width: 600, height: 180,
-      originalWidth: 600, originalHeight: 180,
-    }),
-    analyzeVisualAssets: async () => {
-      visionCalls += 1;
-      return { markdown: 'GENERIC EVIDENCE', warnings: [], cropCount: 0 };
     },
   });
 
   const output = await adapters.adaptImage({
     type: 'image',
-    source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') },
+    source: { type: 'base64', media_type: 'image/png', data: png.toString('base64'), cache_key: 'f'.repeat(64) },
   }, { path: ['messages', 0, 'content', 0] });
 
   assert.equal(visionCalls, 0);
+  assert.equal(cacheReads, 0);
+  assert.equal(cacheWrites, 0);
   assert.equal(registered.length, 1);
-  assert.equal(registered[0].sourceKind, 'direct_image');
-  assert.equal(registered[0].filename, 'schematic.png');
-  assert.equal(registered[0].normalized.width, 600);
+  assert.deepEqual(registered[0].buffer, Buffer.from('normalized-image'));
+  assert.equal(registered[0].sourceRef, '/workspace/screen.png');
   assert.equal(output.type, 'text');
-  assert.match(output.text, /VCC_VISUAL_SOURCE/);
-  assert.match(output.text, /"source_id":"img_01"/);
-  assert.match(output.text, /"source_kind":"direct_image"/);
-  assert.match(output.text, /"visual_content_visible":false/);
-  assert.match(output.text, /"visual_orchestration":"proxy_managed"/);
-  assert.match(output.text, /"visual_access":"proxy_managed"/);
-  assert.doesNotMatch(output.text, /GENERIC EVIDENCE/);
+  assert.match(output.text, /PROXY_VISUAL_ASSET/);
+  assert.match(output.text, /"asset_id":"visual-1"/);
+  assert.match(output.text, /"received_width":1568/);
+  assert.match(output.text, /"normalized_width":1200/);
+  assert.match(output.text, /VisualInspect/);
   assert.equal(output.text.includes(png.toString('base64')), false);
 });

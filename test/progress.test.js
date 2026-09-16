@@ -856,23 +856,3 @@ test('V0.29.42 first-visible hook can emit startup card before delayed buffered 
   );
 });
 
-
-
-test('V0.30.5 silent model round start supersedes pending stale media_ready before the visibility gate', async () => {
-  const response = new FakeResponse();
-  const progress = new ProgressStream(response, { visibleAfterMs: 30, pingIntervalMs: 60_000, locale: 'zh-TW' });
-  await progress.open();
-  await progress.update('檔案處理進度：2/2（100%）｜狀態：文件與圖片內容已就緒；正在交給模型分析…', {
-    details: { phase: 'media_ready' },
-  });
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  const startedAt = Date.now();
-  await progress.setState({ phase:'managed_model_round_start', model_timeline:true, round:1, model_started_at:startedAt });
-  await new Promise((resolve) => setTimeout(resolve, 25));
-  await progress.update('thinking', { force:true, details:{ phase:'model_stream_phase', model_timeline:true, model_phase:'thinking', timeline_elapsed_ms:1_000 } });
-  await progress.stop();
-
-  const stream = response.chunks.join('');
-  assert.doesNotMatch(stream, /檔案處理進度：2\/2/);
-  assert.match(stream, /處理中 · \d{2}:\d{2}:\d{2}/);
-});

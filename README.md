@@ -1,264 +1,46 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.7 adds durable image recovery through real frontend tools while preserving the complete existing Main context for task-specific visual planning.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.44 adds opt-in Main-directed external image perception with `VISION_ORCHESTRATION_MODE=directed`: ordinary images become request-local visual assets, the text-only Main model decides what it needs to inspect through the Proxy-internal `VisualInspect` tool, and the external Vision model returns bounded structured JSON evidence. The Proxy does not auto-crop, auto-zoom, semantically retry, or cache directed Vision results. PDF and Native Vision routing remain unchanged. V0.29.43 runtime clock, V0.29.42 startup-card ownership, V0.29.40 30-second buffered progress, statusLine/preview, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
 
-## V0.30.7 Durable Visual Recovery
 
-Text Main decides which observable facts are needed. Vision receives the resulting questions and image pixels; the Proxy returns structured observations to Main through a paired synthetic tool exchange. `proxy_visual_query` remains private to the Proxy.
 
-For a new human question about historical images, an internal full-context Main resolver selects relevant sources and chooses `skip`, `reuse`, or `inspect`. Only complete evidence covering the current question can be reused; a previous layout answer does not automatically answer a new OCR question. Up to four images can be inspected together. Multi-source snapshots are not reused as a single-source answer.
+## V0.29.44 Main-Directed External Image Vision
 
-When required pixels are missing from the incoming history and all available source caches, the Proxy supplies saved source locators and the original visual questions to Main. Main must issue a real declared frontend Read, screenshot, or attachment tool call. The Proxy validates its schema and target, persists the correlation, and ends the HTTP response with `stop_reason=tool_use`. It resumes on the next request carrying the matching image tool result. A screenshot path is followed by Read; a path or an error result is never treated as image evidence. Deferred tools continue to use the existing local tool-search path.
-
-Original bytes, source metadata, evidence, and pending tool calls are stored separately under `visual-recovery-v1` inside the media cache directory. Evicted or corrupt bytes leave their source locator available. Session-scoped recovery survives restart; replays return the same pending tool call. A changed hash creates a new image version. An explicit request for the original cannot be answered using its replacement; a request for the current screen reacquires pixels even if old pixels are cached.
-
-Acquisition is limited to two attempts (a screenshot followed by Read counts as one) and four frontend tool steps. Exact repeated failed calls are rejected. One correction is allowed if Main does not emit a valid source tool call. Missing answers and unresolved observations remain partial, with at most one targeted follow-up; its reservation is persisted before the follow-up call. Exhaustion or an unavailable frontend source is reported to Main so it can ask for the specific missing image.
-
-Enable this flow with your existing Vision endpoint settings:
-
-```dotenv
-VISION_ORCHESTRATION_MODE=directed
-VLLM_BASE_VISION_ENABLED=false
-VISION_NATIVE_PASSTHROUGH=false
-MEDIA_CACHE_MAX_MB=64
-```
-
-Keep the existing `proxy-data` volume for restart continuity. Frontends must provide a stable `x-claude-code-session-id` or JSON `metadata.user_id.session_id`; requests without either use isolated, request-local recovery state. `MEDIA_CACHE_MAX_MB=0` disables original-byte retention but preserves bounded source/recovery metadata. Each cache uses its own byte budget; this is not an aggregate process-memory limit. Source/recovery records share a 256-entry cap and the configured cache retention period; each metadata record is limited to 256 KiB. One process owns a cache directory.
-
-No usable source locator/tool means Main asks for that specific image. Tool names and inputs come from actual frontend declarations and saved history; filenames and screenshots are not invented. The default orchestration mode remains `legacy` for existing deployments. Native vision retains precedence when explicitly enabled and falls back to directed perception on image capability rejection. PDF routing, language handling, the 30-second progress gate and quiet subagent behavior retain their existing contracts. Internal planner output budgets no longer inherit an incompatible extended-thinking budget from Main.
-
-The V0.30.6 section below describes the historical behavior superseded by V0.30.7. See `change_log/V0.30.7-更新說明.md` for the release scope and validation procedure.
-
-## V0.30.6 Visual Planner Resilience and Evidence State
-
-V0.30.6 preserves the complete V0.30.5 data flow:
-
-```text
-complete existing Main context
-→ Proxy internal visual planner
-→ visual-query-plan-v1
-→ simple perception prompt + image pixels
-→ Ollama Vision
-→ visual-perception-v1
-→ synthetic tool_result
-→ original Main flow
-```
-
-The Main planner continues to receive the **complete existing Main context**. V0.30.6 does not compact or replace that context. The Vision sensor still does **not** receive the full Claude Code conversation.
-
-Planner resilience now has two bounded stages:
-
-```text
-primary: forced submit_visual_plan tool call
-  ↓ tool/schema miss
-fallback: same complete Main context + bounded JSON-only plan recovery
-  ↓
-validated visual-query-plan-v1
-```
-
-The fallback is used only after a retryable planner-structure failure. It does not receive image pixels and does not answer the user's final task. Primary planner output is capped more tightly, and fallback output is capped to 1024 tokens.
-
-V0.30.6 also replaces the old fresh/history-only visual decision with a bounded **visual evidence state** for single logical images inside the same Claude Code session:
-
-- `UNSEEN`: no persisted visual result exists yet.
-- `RESOLVED`: usable `visual-perception-v1` evidence exists and can be reinjected on a later history-only continuation without rerunning Planner/Vision.
-- `RETRYABLE_FAILED`: the prior planner/perception attempt was unavailable; a later history-only continuation may retry visual orchestration instead of leaving Main with only `visual_content_visible=false` metadata.
-
-Fresh current-turn images are still replanned for the current task even if the exact pixels were resolved earlier, so old task-specific evidence is not silently substituted for a new visual question. Persistent reuse/retry is intentionally limited to one logical directed image at a time; multi-image fresh orchestration remains on the V0.30.5 path.
-
-This supersedes the V0.30.4 historical rule that replayed historical images never re-enter orchestration. The current rule is evidence-state driven: **resolved history reuses evidence; retryable failed history retries; unseen history remains passive unless it becomes fresh.**
-
-V0.30.6 does not redesign Directed Sensor output, crop/zoom, schema repair, Perception Cache, Native Vision precedence/fallback, PDF Vision, the 30-second progress gate, or Managed Loop execution.
-
-## V0.30.5 Structured Full-Context Visual Planner
-
-V0.30.5 preserves the V0.30.4 Proxy-owned orchestration direction while fixing the internal planner failure observed in real Claude Code screenshot checks. The visual planner continues to receive the **complete existing Main context**: original system prompt, conversation history, current user task, prior Main tool calls/results, filenames, and directed visual manifests. Raw image pixels are still not exposed to the planner.
-
-The planner output channel is now deterministic:
-
-```text
-complete existing Main context
-→ internal visual planner
-→ forced submit_visual_plan tool call
-→ structured visual-query-plan-v1
-→ Proxy
-```
-
-The internal planner request replaces ordinary callable tools with exactly one Proxy-private tool, `submit_visual_plan`, and forces `tool_choice` to that tool. Free-form JSON text is not accepted as a valid plan. This removes the V0.30.4 failure mode where the planner returned prose, invalid JSON, or a schema-incomplete JSON object.
-
-Ollama Vision still receives a deliberately small sensor request rather than the full Claude Code conversation:
-
-```text
-visual-query-plan-v1 objective/questions
-+ image pixels
-→ Ollama Vision
-→ visual-perception-v1
-```
-
-In other words, Main keeps the task context and decides **what to look for**; Ollama Vision only receives a **simple perception prompt** plus the image and reports **what is actually visible**. The validated result is injected back into the original Main context as the existing synthetic `proxy_visual_query` tool result before normal task reasoning resumes.
-
-Progress cleanup in V0.30.5:
-
-- fresh directed images handled by Proxy-owned visual orchestration do not emit generic `media_ready` / `檔案處理進度：N/N` progress;
-- history-only directed images remain silent as in V0.30.2;
-- `managed_model_round_start` remains telemetry-only;
-- when a model round silently starts before the 30-second visibility gate, any pending stale media-ready state is discarded instead of replayed later;
-- the normal 30-second `處理中 · HH:MM:SS ...` model timeline is preserved.
-
-V0.30.5 does not redesign the Sensor, crop/repair logic, Perception Cache, Native Vision precedence/fallback, or PDF pipeline.
-
-## V0.30.4 Proxy-Owned Directed Visual Orchestration
-
-V0.30.4 corrects the orchestration direction introduced by the earlier V0.30.x Director-tool design. Real Claude Code use showed that prompt-level instructions were not a deterministic guarantee: Main could say that it intended to inspect a screenshot and still fail to call `proxy_visual_query`, then infer that the page looked correct from DOM checks, screenshot existence, or file size. V0.30.4 removes that responsibility from Main.
-
-For a fresh directed image in the current turn, the flow is now:
-
-```text
-Claude Code Read(image)
-  → Proxy detects the fresh directed source
-  → silent Main/Base visual planner decides WHAT must be inspected
-  → Proxy sends the planner request + image to Ollama Vision
-  → existing Directed Sensor returns visual-perception-v1
-  → Proxy validates/cache-manages the result
-  → Proxy injects synthetic proxy_visual_query tool_use/tool_result
-  → normal Main reasoning continues with real visual evidence
-```
-
-Key behavior:
-
-- `proxy_visual_query` is **no longer exposed as a callable Main tool**. It remains only as a Proxy-internal operation and as the synthetic tool name used to preserve correlated `tool_result` semantics.
-- A new internal planner contract, `VCC_PROXY_VISUAL_PLANNER_V1`, produces bounded `visual-query-plan-v1` JSON from task/conversation/tool context and directed source manifests. The planner does **not** receive image pixels.
-- The Directed contract advances to `VCC_PROXY_DIRECTED_VISUAL_V3` and tells Main that visual perception is Proxy-managed.
-- Directed manifests now advertise `visual_orchestration=proxy_managed`, `visual_content_visible=false`, and `visual_access=proxy_managed`.
-- Only sources associated with the **current/latest message** are eligible for automatic orchestration. Replayed historical `Read(image)` blocks remain available as internal context but do not re-run the planner or Vision.
-- Native Vision retains precedence. If a Native Vision capability preflight or runtime request rejects image input and directed fallback is selected, the same Proxy-owned planner → Vision → synthetic tool-result flow is used.
-- The existing `executeDirectedVisualQuery()` / `visual-perception-v1` Sensor schema, crop rounds, schema repair, cache behavior, and Vision transport are reused unchanged.
-- PDF routing and the existing PDF Vision pipeline are unchanged.
-
-The user-visible progress behavior is also simplified:
-
-```text
-managed_model_round_start
-  → internal telemetry/timeline state only
-  → no "正在請模型規劃下一步…" output
-
-request < 30 seconds
-  → no synthetic model progress
-
-request still active at 30 seconds
-  → existing "處理中 · HH:MM:SS ..." timeline becomes visible
-```
-
-`ProgressStream.setState()` keeps the round-start timestamp and timeline state without emitting an SSE progress message. Actual Vision work can still use the existing bounded visual processing progress path.
-
-The V0.30.3 section below is retained as historical release documentation; its Main-callable visual-tool contract is superseded by V0.30.4.
-
-
-## V0.30.3 Directed Visual Intent and Tool Discoverability
-
-> Historical behavior: V0.30.4 supersedes the Main-callable `proxy_visual_query` design below with Proxy-owned automatic orchestration.
-
-V0.30.3 fixes a Director-side discoverability gap observed in real use: Main could correctly realize that a `Read(image)` result had become a `VCC_VISUAL_SOURCE`, say that it wanted to visually check the screenshot, and still avoid `proxy_visual_query` because the previous contract only required Vision when observable image facts were strictly necessary to finish the task. Main could then fall back to file size, screenshot existence, DOM/Playwright results, or other non-visual evidence and accidentally imply that the screenshot itself had been visually verified.
-
-The Directed Visual contract now makes the access boundary explicit. In contract terms: if Main **need or intend to inspect** directed image content, it must use the visual query tool.
-
-- A `VCC_VISUAL_SOURCE` is an **image handle**, not visible image content; its pixels are not directly visible to Main.
-- If Main **needs or intends to inspect, verify, compare, read, describe, judge, or make a claim about what is visually present**, it must call `proxy_visual_query`.
-- `proxy_visual_query` is described as the **only directed-image pixel inspection gateway** available to Main.
-- File existence, file size, filename, dimensions, successful screenshot generation, DOM correctness, browser automation results, conversation context, and prior assumptions are not substitutes for visual inspection.
-- Non-visual evidence may still be sufficient. Main may skip Vision, but then there is **no visual claim**: it must distinguish functional/DOM verification from actual screenshot inspection and must not claim that the image itself was visually inspected.
-- Directed manifests now carry `visual_content_visible=false` and `visual_access=proxy_visual_query` so the same access rule is visible directly beside each source handle.
-- The contract marker advances from `VCC_PROXY_DIRECTED_VISUAL_V1` to `VCC_PROXY_DIRECTED_VISUAL_V2`.
-
-The key invariant is:
-
-```text
-no visual intent
-  → Vision may remain idle
-
-visual intent / visual claim about VCC_VISUAL_SOURCE
-  → proxy_visual_query is required
-
-no proxy_visual_query
-  → no claim that the image itself was visually inspected
-```
-
-V0.30.3 does not change Sensor schema, Vision transport, crop/repair behavior, Managed Loop execution, the 30-second progress gate, Native Vision routing, or the PDF pipeline.
-
-
-## V0.30.2 Directed Visual Progress Continuation Fix
-
-V0.30.2 is a narrow regression fix for Directed Visual progress semantics. Claude Code sends the full conversation history on later `/v1/messages` requests, so historical `Read(image)` blocks are rediscovered and re-registered internally. V0.30.1 correctly deduplicated those images by visual source identity, but the generic media-ready path still treated the mere presence of historical images as current media work and queued a false `media_ready` state. When a request lasted beyond the existing 30-second visibility gate, that stale state became visible as misleading `檔案處理進度：N/N` output even though no image processing or Vision call occurred.
-
-V0.30.2 separates internal historical visual registration from visible media processing progress:
-
-- **history-only directed media is silent**: historical image manifests remain available to the Main model, but do not emit `media_cache_miss` or `media_ready` visible progress on a later text turn or non-image tool-result continuation.
-- **new media remains visible**: if the current/latest user message actually supplies a new directed image, the normal media-ready progress path is preserved.
-- **real Vision work remains visible**: if Main later calls `proxy_visual_query`, perception/crop/repair progress remains unchanged.
-- The **30-second visible-progress gate is unchanged**. This release removes the incorrect media state that was being buffered; it does not shorten, bypass, or otherwise modify the gate.
-- Directed source discovery, same-image `source_id` reuse, Perception Cache generation `directed-visual-v2`, Native Vision precedence/fallback, legacy mode default, and the PDF pipeline are unchanged.
-
-The key invariant is now:
-
-```text
-historical visual discovery / manifest registration
-    = internal context preparation only
-    = no visible media-processing progress
-```
-
-## V0.30.1 Directed Structured Output Compatibility
-
-V0.30.1 is a focused compatibility/hardening release for the V0.30.0 image-only Directed Visual pipeline. It addresses real `visual_perception_schema_invalid` failures observed with Ollama + Qwen-family Vision output without changing the Director/Sensor architecture.
-
-Key changes:
-
-- Sensor prompts now include an explicit canonical `visual-perception-v1` JSON shape and bounded field rules.
-- A conservative normalizer accepts safe structural variants before validation, including nested per-source answers, `id/type/value` evidence aliases, 0–100 confidence values, local support references, and finite bbox values that can be normalized to integer `normalized_1000` coordinates.
-- Schema failures emit safe diagnostics with `validation_stage`, `validation_path`, and `validation_reason`; prompt/image contents are not copied into normal logs.
-- The one bounded repair is now **text-only schema repair**: it receives the previous invalid Sensor output plus the safe validation error, performs serialization repair only, disables crop tools, and does not resend the image.
-- The perception cache key advances to `directed-visual-v2`, so V0.30.0 `directed-visual-v1` entries cannot be reused across the changed Sensor contract.
-- Within one request, the same image SHA reuses the same `source_id`; repeated `Read(image)` history therefore remains one logical visual source while provenance is merged.
-- Directed images no longer generate legacy generic-evidence `media_cache_miss` accounting; they use directed asset registration and the task-conditioned Perception Cache instead.
-- Repeated historical `Read(image)` payload observation is deduplicated for directed mode, preventing misleading `1/1 → 2/2 → 3/3` progress for one screenshot.
-- On the final allowed crop round, `vision_crop` progress is emitted before the crop budget is declared exhausted, so the UI no longer says the limit was reached and then appears to request another crop.
-
-The same image reuses one `source_id` inside a request. Native Vision precedence and explicit capability-rejection fallback remain unchanged. `VISION_ORCHESTRATION_MODE=legacy` remains the default. The PDF pipeline is unchanged in V0.30.1.
-
-## V0.30.0 External Visual Directed Perception
-
-V0.30.0 introduces an opt-in image-only orchestration mode for text-only Main models. It changes external Vision from eager generic evidence extraction to task-conditioned perception directed by the Main model.
-
-```text
-User / Tool Image
-  → Proxy registers request-scoped visual source
-  → Main receives VCC_VISUAL_SOURCE manifest
-  → Main calls proxy_visual_query with the facts it actually needs
-  → Vision Sensor observes only those requested facts
-  → Proxy validates visual-perception-v1 JSON
-  → correlated tool_result returns to Main
-  → Main completes the original task
-```
-
-Enable it explicitly:
+V0.29.44 adds an opt-in orchestration mode for **ordinary external images only**:
 
 ```env
 VISION_ORCHESTRATION_MODE=directed
 ```
 
-The default remains `VISION_ORCHESTRATION_MODE=legacy` for controlled A/B comparison. Phase 1 applies directed perception only to `direct_image`, `read_image`, and generic `tool_result_image`. `read_pdf_image` and the existing PDF parse/map/page-selection/tiling/merge pipeline remain on the V0.29.43 behavior. If Base Native Vision is explicitly enabled, `direct_image` / `read_image` still prefer Native Vision; an explicit Base image-capability rejection falls back to the directed manifest/tool route rather than generic evidence.
+The default is `legacy`, so upgrading without this ENV preserves the V0.29.43 eager Proxy Vision pipeline byte-for-byte at the routing level. `directed` does not change PDF processing and does not override Native Vision raw passthrough.
 
-Directed mode invariants:
+Directed flow:
 
-- No external Vision request occurs before the Main model's first reasoning round for directed external images.
-- `proxy_visual_query` is a Proxy-internal Managed Loop tool and is never handed to Claude Code for execution.
-- Main Director visual-query rounds are hard-bounded to 2.
-- Sensor crop rounds are bounded to 3 per directed query.
-- Sensor output uses `visual-perception-v1` with source/question attribution, confidence, evidence, relationships, and unresolved uncertainty.
-- One strict JSON repair is allowed; repair disables further crops. Persistent Sensor/service failure returns structured `status=unavailable` evidence.
-- Complete perception results use a separate cache keyed by image hash + canonical perception request + Vision/schema/prompt/runtime versions. Legacy generic evidence cache entries are not reused.
-- Image text is always untrusted observed data. It is returned as `tool_result`, never promoted to system/runtime instruction.
+```text
+Claude Code / user image
+  -> Proxy validates + normalizes image and registers request-local asset metadata
+  -> text-only Main model receives [PROXY_VISUAL_ASSET] descriptor + VisualInspect tool
+  -> Main model chooses objective/questions and calls VisualInspect
+  -> Proxy sends that one task-specific perception request to the external Vision model
+  -> Vision returns visual_perception_v1 JSON
+  -> Proxy validates/neutralizes JSON and returns it as tool_result
+  -> Main model decides whether evidence is sufficient or whether Claude Code should re-read/crop/reacquire the image
+```
 
-The directed path reuses existing image normalization, `VisualAssetRegistry` crop safety, Vision transport, media cache storage mechanics, Managed Loop recovery/liveness, and Native Vision routing while leaving Compact, WebSearch/WebFetch, ToolSearch, PDF Vision, statusLine/preview, startup CARD, runtime clock, and Main/Sub Agent behavior intact.
+`VisualInspect` deliberately has **no crop/region actuator**. If the current image resolution is insufficient, Vision may return normalized `follow_up_regions` (`0..1000`) explaining what area requires higher-resolution reacquisition. The Main model decides how to use normal Claude Code `Read`/`Bash` tooling to obtain a better image; the Proxy never chooses or performs a crop.
+
+Directed images do not use the persistent Media Cache or same-session semantic continuation cache. Only request-local normalized image bytes/metadata are retained until the request finishes. Each `VisualInspect` call performs exactly one Vision upstream request: there is no directed auto-zoom, generic tiling, crop loop, quality retry, structured-extraction retry, or last-chance semantic salvage. Existing resource boundaries remain authoritative: image byte/pixel limits, Vision request timeout/concurrency, Managed Loop max rounds/deadline, cancellation, and exact-repeat no-progress detection.
+
+Vision is constrained to perception rather than task reasoning. Its JSON contains requested answers, observable evidence, uncertainty, and optional normalized follow-up regions; it must not decide the user's final task, issue shell commands, or recommend code changes. Malformed/invalid Vision JSON becomes a bounded `VisualInspect` tool error so the Main model—not the Proxy—decides the next action.
+
+Routing precedence remains explicit:
+
+```text
+Native Vision eligible image + both native flags -> existing raw passthrough
+otherwise ordinary image + directed           -> VisualInspect path
+PDF / PDF-derived document pipeline            -> existing V0.29.43 PDF path
+VISION_ORCHESTRATION_MODE=legacy or unset       -> existing eager Proxy Vision path
+```
 
 
 ## V0.29.43 Base-Bound Runtime Clock

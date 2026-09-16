@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.7', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.44', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.7/);
+  assert.match(first, /VERSION\s+0\.29\.44/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.7');
+  assert.equal(payload.version, '0.29.44');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.7/);
+  assert.match(payload.display, /CCTP 0\.29\.44/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4282,625 +4282,164 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.match(reminder.text, /<\/system-reminder>$/);
 });
 
-test('V0.30.4 Proxy planner drives Directed Sensor JSON internally and returns evidence to Main', async (t) => {
+test('V0.29.44 directed image waits for Main VisualInspect and returns structured Vision JSON internally', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  let baseCalls = 0;
-  let visionCalls = 0;
-  const perception = {
-    schema_version:'visual-perception-v1', status:'complete',
-    answers:[{ question_id:'q1', answer:'RESET_N', confidence:0.98, source_ids:['img_01'], support_refs:['img_01:e1'] }],
-    source_results:[{ source_id:'img_01', evidence:[{ evidence_id:'e1', kind:'text', observation:'RESET_N', verbatim:'RESET_N', bbox:[100,100,200,140], coordinate_space:'normalized_1000', confidence:0.99 }], relationships:[], unresolved:[] }],
-    needs_followup:false,
-  };
+  const sequence = [];
+  const baseBodies = [];
+  const visionBodies = [];
+
   const vision = await startJsonServer(async (req, res) => {
-    visionCalls += 1;
+    sequence.push('vision');
     const payload = JSON.parse((await read(req)).toString());
-    assert.match(JSON.stringify(payload.messages), /reset signal/i);
-    res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ choices:[{ message:{ role:'assistant', content:JSON.stringify(perception), tool_calls:[] } }] }));
-  });
-  const base = await startJsonServer(async (req, res) => {
-    baseCalls += 1;
-    const payload = JSON.parse((await read(req)).toString());
-    res.writeHead(200, {'content-type':'application/json'});
-    if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      assert.match(JSON.stringify(payload.messages), /VCC_VISUAL_SOURCE/);
-      assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool)=>tool?.name==='proxy_visual_query'), false);
-      res.end(JSON.stringify({ id:'planner-reset',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-reset',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine the reset signal.',questions:[{id:'q1',question:'What reset signal is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
-      return;
-    }
-    assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool)=>tool?.name==='proxy_visual_query'), false);
-    const resultBlock = payload.messages.at(-1).content[0];
-    assert.equal(resultBlock.type, 'tool_result');
-    const observed = JSON.parse(resultBlock.content);
-    assert.equal(observed.schema_version, 'visual-perception-v1');
-    assert.equal(observed.answers[0].answer, 'RESET_N');
-    res.end(JSON.stringify({ id:'d2',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'RESET_N is visible.'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:2} }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    visionOrchestrationMode:'directed',
-    vllmVisionUrl: vision.url,
-    vllmVisionModel:'vision',
-    vllmVisionProvider:'vllm',
-    vllmVisionThink:false,
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
-  const proxyUrl = await listen(proxy);
-  t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-
-  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}] }) });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'RESET_N is visible.');
-  assert.equal(baseCalls, 2);
-  assert.equal(visionCalls, 1);
-});
-
-test('V0.30.4 automatic directed perception requests reuse perception cache across requests', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const cacheRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'v0300-perception-cache-'));
-  t.after(() => fs.rm(cacheRoot, { recursive:true, force:true }));
-  let visionCalls = 0;
-  let baseCalls = 0;
-  const perception = { schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'q1',answer:'RESET_N',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'text',observation:'RESET_N',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false };
-  const vision = await startJsonServer(async (req,res)=>{ visionCalls += 1; await read(req); res.writeHead(200,{'content-type':'application/json'}); res.end(JSON.stringify({choices:[{message:{role:'assistant',content:JSON.stringify(perception),tool_calls:[]}}]})); });
-  const base = await startJsonServer(async (req,res)=>{
-    baseCalls += 1;
-    const body = JSON.parse((await read(req)).toString());
-    res.writeHead(200,{'content-type':'application/json'});
-    if (String(body.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      res.end(JSON.stringify({id:`p-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:`plan-${baseCalls}`,name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Determine reset net.',questions:[{id:'q1',question:'What reset net is visible?'}],requested_evidence:['net labels'],detail_level:'high'}}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    assert.equal(body.messages.at(-1)?.content?.[0]?.type, 'tool_result');
-    res.end(JSON.stringify({id:`f-${baseCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:'done'}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', vllmVisionUrl:vision.url, vllmVisionModel:'vision', vllmVisionProvider:'vllm',
-    cache:{ rootDir:cacheRoot, maxBytes:0, retentionMs:60_000, pipelineVersion:'media-v8', visualPromptVersion:'visual-v18', evidenceContractVersion:'evidence-v14' },
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
-  const proxyUrl = await listen(proxy); t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const body = {model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}]};
-  for (let i=0;i<2;i+=1) {
-    const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-    assert.equal(response.status,200);
-    assert.equal((await response.json()).content[0].text,'done');
-  }
-  assert.equal(visionCalls,1);
-});
-
-
-test('V0.30.1 directed images bypass legacy media evidence cache accounting and emit directed asset diagnostics', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const logs = [];
-  const base = await startJsonServer(async (req, res) => {
-    await read(req);
+    visionBodies.push(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id:'directed-cache-routing',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+    res.end(JSON.stringify({
+      choices: [{ message: { role: 'assistant', content: JSON.stringify({
+        schema: 'visual_perception_v1',
+        asset_id: 'visual-1',
+        status: 'complete',
+        answers: [{
+          question_id: 'q1', status: 'answered', answer: 'HELLO',
+          evidence: [{ kind: 'text', value: 'HELLO', region: [100, 100, 900, 300] }], uncertainty: '',
+        }],
+        follow_up_regions: [],
+      }) } }],
+    }));
   });
+
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    baseBodies.push(payload);
+    const toolResult = payload.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
+      .find((block) => block?.type === 'tool_result' && block?.tool_use_id === 'visual-call-1');
+    sequence.push(toolResult ? 'base2' : 'base1');
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (!toolResult) {
+      res.end(JSON.stringify({
+        id: 'inspect', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'tool_use', id: 'visual-call-1', name: 'VisualInspect', input: {
+          asset_id: 'visual-1', objective: 'Read the visible word.',
+          questions: [{ id: 'q1', question: 'What exact word is visible?' }],
+        } }],
+        stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+      return;
+    }
+    const parsed = JSON.parse(toolResult.content);
+    assert.equal(parsed.schema, 'visual_perception_v1');
+    assert.equal(parsed.answers[0].answer, 'HELLO');
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'DIRECTED_DONE' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    }));
+  });
+
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
-    visionOrchestrationMode: 'directed',
-    vllmVisionUrl: 'http://vision.invalid',
-    vllmVisionModel: 'vision',
+    vllmVisionUrl: vision.url,
+    vllmVisionModel: 'vision-model',
     vllmVisionProvider: 'vllm',
-    logLevel: 'info',
-    logSink: (entry) => logs.push(entry),
-  }), {
-    mediaAdapterDependencies: {
-      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
-    },
-  });
+    vllmVisionThink: false,
+    visionOrchestrationMode: 'directed',
+  }));
   const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close());
   t.after(() => base.server.close());
   t.after(() => proxy.close());
 
+  const base64 = png.toString('base64');
   const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({ model:'m',stream:false,messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}] }),
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }],
+    }),
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'OK');
-  assert.equal(logs.some((entry) => entry.event === 'media_cache_miss' && entry.media_type === 'image/png'), false);
-  const registered = logs.find((entry) => entry.event === 'directed_visual_asset_registered');
-  assert.equal(registered?.source_id, 'img_01');
-  assert.equal(registered?.reused, false);
+  assert.equal((await response.json()).content[0].text, 'DIRECTED_DONE');
+  assert.deepEqual(sequence, ['base1', 'vision', 'base2']);
+  assert.equal(visionBodies.length, 1);
+  assert.equal(baseBodies.length, 2);
+
+  const firstSerialized = JSON.stringify(baseBodies[0]);
+  assert.match(firstSerialized, /\[PROXY_VISUAL_ASSET\]/);
+  assert.match(firstSerialized, /visual-1/);
+  assert.equal(firstSerialized.includes(base64), false);
+  assert.ok(baseBodies[0].tools.some((tool) => tool.name === 'VisualInspect'));
+  assert.doesNotMatch(String(baseBodies[0].system || ''), /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
 });
 
-test('V0.30.1 repeated Read image history reuses the same manifest source and suppresses duplicate payload observation noise', async (t) => {
+test('V0.29.44 directed count_tokens exposes descriptor and VisualInspect schema without executing Vision', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const logs = [];
+  let visionCalls = 0;
+  const vision = await startJsonServer(async (_req, res) => {
+    visionCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  let observed;
+  const base = await startJsonServer(async (req, res) => {
+    assert.equal(req.url, '/v1/messages/count_tokens');
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ input_tokens: 321 }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: vision.url,
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm',
+    visionOrchestrationMode: 'directed',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages/count_tokens`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') },
+    }] }] }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).input_tokens, 321);
+  assert.equal(visionCalls, 0);
+  assert.match(JSON.stringify(observed.messages), /\[PROXY_VISUAL_ASSET\]/);
+  assert.ok(observed.tools.some((tool) => tool.name === 'VisualInspect'));
+});
+
+test('V0.29.44 directed mode leaves PDF on the legacy PDF evidence pipeline', async (t) => {
+  const pdf = await fs.readFile(new URL('./fixtures/text.pdf', import.meta.url));
   let observed;
   const base = await startJsonServer(async (req, res) => {
     observed = JSON.parse((await read(req)).toString());
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id:'directed-dedup',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'OK'}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'PDF_OK'}],stop_reason:'end_turn',usage:{} }));
   });
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url,
     visionOrchestrationMode: 'directed',
-    vllmVisionUrl: 'http://vision.invalid',
-    vllmVisionModel: 'vision',
-    vllmVisionProvider: 'vllm',
-    logLevel: 'info', logSink: (entry) => logs.push(entry),
   }), {
     mediaAdapterDependencies: {
-      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
+      parsePdf: async () => ({
+        parser: 'test', page_count: 1, processed_pages: 1, visual_batch_count: 0,
+        visual_used: false, markdown: 'DIRECTED_MODE_LEGACY_PDF_EVIDENCE', warnings: [], truncated: false,
+      }),
     },
   });
   const proxyUrl = await listen(proxy);
-  t.after(() => base.server.close());
-  t.after(() => proxy.close());
+  t.after(() => base.server.close()); t.after(() => proxy.close());
 
-  const imageBlock = { type:'image', source:{ type:'base64', media_type:'image/png', data:png.toString('base64') } };
-  const messages = [
-    { role:'assistant', content:[{ type:'tool_use', id:'read-a', name:'Read', input:{ file_path:'/work/screen.png' } }] },
-    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-a', content:[imageBlock] }] },
-    { role:'assistant', content:[{ type:'tool_use', id:'read-b', name:'Read', input:{ file_path:'/work/screen.png' } }] },
-    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-b', content:[imageBlock] }] },
-  ];
-  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:false,messages}) });
-  assert.equal(response.status, 200);
-  await response.json();
-  const serialized = JSON.stringify(observed.messages);
-  assert.match(serialized, /source_id.*img_01/);
-  assert.doesNotMatch(serialized, /img_02/);
-  assert.equal(logs.filter((entry) => entry.event === 'image_payload_observed').length, 1);
-  assert.ok(logs.some((entry) => entry.event === 'directed_visual_duplicate_history_observed'));
-  const registrations = logs.filter((entry) => entry.event === 'directed_visual_asset_registered');
-  assert.equal(registrations.length, 2);
-  assert.equal(registrations[1].reused, true);
-});
-
-test('V0.30.2 history-only directed images never emit media progress on tool continuation', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const base64 = png.toString('base64');
-  const logs = [];
-  const upstream = await startJsonServer(async (req, res) => {
-    const body = JSON.parse((await read(req)).toString());
-    if (req.url === '/v1/messages/count_tokens') {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ input_tokens: 100 }));
-      return;
-    }
-    assert.match(JSON.stringify(body), /VCC_VISUAL_SOURCE/);
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
-    res.end([
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-history-only","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":100,"output_tokens":0}}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"continue"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"OK"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-    ].join(''));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: upstream.url,
-    visionOrchestrationMode: 'directed',
-    responseLanguage: 'zh-TW',
-    progressVisibleAfterMs: 0,
-    logLevel: 'info',
-    logSink: (entry) => logs.push(entry),
-  }), {
-    mediaAdapterDependencies: {
-      normalizeImage: async () => ({ buffer: png, mediaType:'image/png', width:600, height:180, originalWidth:600, originalHeight:180 }),
-    },
-  });
-  const proxyUrl = await listen(proxy);
-  t.after(() => upstream.server.close());
-  t.after(() => proxy.close());
-
-  const historicalImage = { type:'image', source:{ type:'base64', media_type:'image/png', data:base64 } };
-  const messages = [
-    { role:'assistant', content:[{ type:'tool_use', id:'read-old', name:'Read', input:{ file_path:'/work/old.png' } }] },
-    { role:'user', content:[{ type:'tool_result', tool_use_id:'read-old', content:[historicalImage] }] },
-    { role:'assistant', content:[{ type:'tool_use', id:'bash-now', name:'Bash', input:{ command:'true' } }] },
-    { role:'user', content:[{ type:'tool_result', tool_use_id:'bash-now', content:'ok' }] },
-  ];
   const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({
-      model:'m', stream:true,
-      tools:[{ name:'WebSearch', description:'search', input_schema:{ type:'object', properties:{ query:{ type:'string' } } } }],
-      messages,
-    }),
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'user', content: [{
+      type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') },
+    }] }] }),
   });
   assert.equal(response.status, 200);
-  const stream = await response.text();
-  assert.match(stream, /OK/);
-  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && entry.phase === 'media_ready'), false);
-  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress' && entry.phase === 'media_cache_miss'), false);
-  assert.doesNotMatch(stream, /檔案處理進度/);
-  assert.doesNotMatch(stream, /文件與圖片內容已就緒/);
-});
-
-test('V0.30.2 history-only directed images stay silent when the current user turn is text', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const logs = [];
-  const base = await startJsonServer(async (req, res) => {
-    await read(req);
-    if (req.url === '/v1/messages/count_tokens') {
-      res.writeHead(200, { 'content-type':'application/json' });
-      res.end(JSON.stringify({ input_tokens: 50 }));
-      return;
-    }
-    res.writeHead(200, { 'content-type':'text/event-stream' });
-    res.end([
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-text-turn","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":50,"output_tokens":0}}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-    ].join(''));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', responseLanguage:'zh-TW',
-    progressVisibleAfterMs:0, logLevel:'info', logSink:(entry)=>logs.push(entry),
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
-  const proxyUrl = await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const image = {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
-  const messages = [
-    {role:'assistant',content:[{type:'tool_use',id:'read-old-text',name:'Read',input:{file_path:'/work/old.png'}}]},
-    {role:'user',content:[{type:'tool_result',tool_use_id:'read-old-text',content:[image]}]},
-    {role:'assistant',content:[{type:'text',text:'earlier response'}]},
-    {role:'user',content:'check the popup again'},
-  ];
-  const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
-    model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages,
-  })});
-  assert.equal(response.status,200);
-  const stream = await response.text();
-  assert.match(stream,/OK/);
-  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && ['media_ready','media_cache_miss'].includes(entry.phase)),false);
-  assert.doesNotMatch(stream,/檔案處理進度|文件與圖片內容已就緒/);
-});
-
-test('V0.30.5 a fresh directed image does not emit generic media_ready while Proxy-owned visual orchestration handles it', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const logs = [];
-  const base = await startJsonServer(async (req,res)=>{
-    await read(req);
-    if (req.url === '/v1/messages/count_tokens') {
-      res.writeHead(200,{'content-type':'application/json'});
-      res.end(JSON.stringify({input_tokens:50}));
-      return;
-    }
-    res.writeHead(200,{'content-type':'text/event-stream'});
-    res.end([
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"v0302-new-image","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":50,"output_tokens":0}}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-    ].join(''));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', responseLanguage:'zh-TW',
-    progressVisibleAfterMs:0, logLevel:'info', logSink:(entry)=>logs.push(entry),
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
-  const proxyUrl = await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
-    model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:[
-      {type:'text',text:'inspect this image'},
-      {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
-    ]}],
-  })});
-  assert.equal(response.status,200);
-  await response.text();
-  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='media_ready'),false);
-});
-
-test('V0.30.4 Proxy automatically plans and inspects a fresh directed image before the normal Main round', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  let plannerCalls = 0;
-  let mainCalls = 0;
-  let visionCalls = 0;
-  const perception = {
-    schema_version:'visual-perception-v1', status:'complete',
-    answers:[{ question_id:'layout', answer:'The page layout is intact.', confidence:0.96, source_ids:['img_01'], support_refs:['img_01:e1'] }],
-    source_results:[{ source_id:'img_01', evidence:[{ evidence_id:'e1', kind:'layout', observation:'No overlap or clipping is visible.', confidence:0.96 }], relationships:[], unresolved:[] }],
-    needs_followup:false,
-  };
-  const vision = await startJsonServer(async (req, res) => {
-    visionCalls += 1;
-    const payload = JSON.parse((await read(req)).toString());
-    const visionSerialized = JSON.stringify(payload);
-    assert.match(visionSerialized, /layout|overlap|clipping/i);
-    assert.doesNotMatch(visionSerialized, /MAIN_CONTEXT_ONLY_305/);
-    res.writeHead(200, {'content-type':'application/json'});
-    res.end(JSON.stringify({ choices:[{ message:{ role:'assistant', content:JSON.stringify(perception), tool_calls:[] } }] }));
-  });
-  const base = await startJsonServer(async (req, res) => {
-    const payload = JSON.parse((await read(req)).toString());
-    res.writeHead(200, {'content-type':'application/json'});
-    if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      plannerCalls += 1;
-      assert.match(JSON.stringify(payload.messages), /MAIN_CONTEXT_ONLY_305/);
-      assert.equal(payload.tools?.length, 1);
-      assert.equal(payload.tools?.[0]?.name, 'submit_visual_plan');
-      assert.deepEqual(payload.tool_choice, { type:'tool', name:'submit_visual_plan' });
-      res.end(JSON.stringify({ id:'planner',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-layout',name:'submit_visual_plan',input:{
-        schema_version:'visual-query-plan-v1', source_ids:['img_01'], objective:'Check the rendered page visually.',
-        questions:[{id:'layout',question:'Is the layout intact without overlap or clipping?'}],
-        requested_evidence:['layout','ui_state'], detail_level:'high',
-      }}],stop_reason:'end_turn',usage:{input_tokens:1,output_tokens:1} }));
-      return;
-    }
-    mainCalls += 1;
-    assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool) => tool?.name === 'proxy_visual_query'), false);
-    const serialized = JSON.stringify(payload.messages);
-    assert.match(serialized, /visual-perception-v1/);
-    assert.match(serialized, /The page layout is intact/);
-    res.end(JSON.stringify({ id:'main',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'VISUAL_OK'}],stop_reason:'end_turn',usage:{input_tokens:2,output_tokens:2} }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    visionOrchestrationMode:'directed',
-    vllmVisionUrl: vision.url,
-    vllmVisionModel:'vision',
-    vllmVisionProvider:'vllm',
-    vllmVisionThink:false,
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) } });
-  const proxyUrl = await listen(proxy);
-  t.after(()=>vision.server.close()); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-
-  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({
-    model:'m', stream:false, messages:[{role:'user',content:[
-      {type:'text',text:'MAIN_CONTEXT_ONLY_305: verify the page against the current task context.'},
-      {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
-    ]}],
-  }) });
-  assert.equal(response.status,200);
-  assert.equal((await response.json()).content[0].text,'VISUAL_OK');
-  assert.equal(plannerCalls,1);
-  assert.equal(visionCalls,1);
-  assert.equal(mainCalls,1);
-});
-
-test('V0.30.4 history-only directed image replay does not re-run planner or Vision and does not expose proxy_visual_query', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  let plannerCalls = 0;
-  let visionCalls = 0;
-  let observed;
-  const base = await startJsonServer(async (req,res)=>{
-    const payload = JSON.parse((await read(req)).toString());
-    if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) plannerCalls += 1;
-    observed = payload;
-    res.writeHead(200,{'content-type':'application/json'});
-    res.end(JSON.stringify({id:'h',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'HISTORY_OK'}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', vllmVisionUrl:'http://vision.invalid', vllmVisionModel:'vision', vllmVisionProvider:'vllm',
-  }), { mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}), analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:'bad',warnings:[],cropCount:0};} } });
-  const proxyUrl = await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const response = await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
-    model:'m',stream:false,messages:[
-      {role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]},
-      {role:'assistant',content:[{type:'text',text:'noted'}]},
-      {role:'user',content:[{type:'text',text:'continue without looking again'}]},
-    ],
-  })});
-  assert.equal(response.status,200);
-  assert.equal((await response.json()).content[0].text,'HISTORY_OK');
-  assert.equal(plannerCalls,0);
-  assert.equal(visionCalls,0);
-  assert.equal(Array.isArray(observed.tools) && observed.tools.some((tool)=>tool?.name==='proxy_visual_query'),false);
-});
-
-test('V0.30.4 Claude Code Read(image) automatically becomes planner -> Vision -> synthetic tool_result -> Main', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const base64 = png.toString('base64');
-  let plannerCalls = 0;
-  let mainCalls = 0;
-  let directedVisionCalls = 0;
-  const perception = {
-    schema_version:'visual-perception-v1', status:'complete',
-    answers:[{question_id:'appearance',answer:'The screenshot has no visible layout anomaly.',confidence:0.94,source_ids:['img_01'],support_refs:['img_01:e1']}],
-    source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'Cards and controls are aligned without visible overlap.',confidence:0.94}],relationships:[],unresolved:[]}],
-    needs_followup:false,
-  };
-  const base = await startJsonServer(async (req,res)=>{
-    const payload = JSON.parse((await read(req)).toString());
-    const serialized = JSON.stringify(payload);
-    assert.equal(serialized.includes(base64), false, 'Base planner/Main must never receive raw directed screenshot bytes');
-    res.writeHead(200,{'content-type':'application/json'});
-    if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      plannerCalls += 1;
-      assert.match(serialized,/source_kind.*read_image/);
-      assert.match(serialized,/screenshot-entertainment-0915\.png/);
-      res.end(JSON.stringify({id:'read-plan',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-read',name:'submit_visual_plan',input:{
-        schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Visually verify the rendered screenshot.',
-        questions:[{id:'appearance',question:'Are there visible layout, overlap, clipping, spacing, or rendering anomalies?'}],
-        requested_evidence:['layout','ui_state'],detail_level:'high'
-      }}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    mainCalls += 1;
-    assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool)=>tool?.name==='proxy_visual_query'), false);
-    assert.match(serialized,/visual-perception-v1/);
-    assert.match(serialized,/no visible layout anomaly/i);
-    res.end(JSON.stringify({id:'read-main',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'SCREENSHOT_VISUALLY_CHECKED'}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl:base.url, visionOrchestrationMode:'directed', vllmVisionUrl:'http://vision.invalid', vllmVisionModel:'vision', vllmVisionProvider:'vllm',
-  }), {
-    mediaAdapterDependencies:{ normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180}) },
-    directedPerceptionDependencies:{ analyzeVisualAssets:async()=>{ directedVisionCalls += 1; return {markdown:JSON.stringify(perception)}; } },
-  });
-  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const messages=[
-    {role:'user',content:'Please take a screenshot and check whether the page has visual problems.'},
-    {role:'assistant',content:[{type:'tool_use',id:'read-screen',name:'Read',input:{file_path:'/home/master/workspace/screenshot-entertainment-0915.png'}}]},
-    {role:'user',content:[{type:'tool_result',tool_use_id:'read-screen',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:base64}}]}]},
-  ];
-  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:false,messages})});
-  assert.equal(response.status,200);
-  assert.equal((await response.json()).content[0].text,'SCREENSHOT_VISUALLY_CHECKED');
-  assert.equal(plannerCalls,1);
-  assert.equal(directedVisionCalls,1);
-  assert.equal(mainCalls,1);
-});
-
-test('V0.30.4 managed round start remains telemetry-only and never emits model-planning copy to SSE', async (t) => {
-  const logs=[];
-  const base=await startJsonServer(async (req,res)=>{
-    await read(req);
-    if (req.url === '/v1/messages/count_tokens') {
-      res.writeHead(200,{'content-type':'application/json'});
-      res.end(JSON.stringify({input_tokens:12}));
-      return;
-    }
-    res.writeHead(200,{'content-type':'text/event-stream'});
-    res.end([
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"silent-start","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":12,"output_tokens":0}}}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"working"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
-      'event: content_block_start\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"DONE"}}\n\n',
-      'event: content_block_stop\ndata: {"type":"content_block_stop","index":1}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}\n\n',
-      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
-    ].join(''));
-  });
-  const proxy=createProxyServer(config({
-    vllmBaseUrl:base.url,responseLanguage:'zh-TW',progressVisibleAfterMs:0,logLevel:'info',logSink:(entry)=>logs.push(entry),
-  }));
-  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
-    model:'m',stream:true,tools:[{name:'WebSearch',description:'search',input_schema:{type:'object'}}],messages:[{role:'user',content:'work'}],
-  })});
-  assert.equal(response.status,200);
-  const stream=await response.text();
-  assert.match(stream,/DONE/);
-  assert.doesNotMatch(stream,/正在請模型規劃下一步/);
-  assert.ok(logs.some((entry)=>entry.event==='progress_state_changed' && entry.phase==='managed_model_round_start'));
-  assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='managed_model_round_start'),false);
-});
-
-test('V0.30.6 planner tool_missing falls back with the same Main context and still reaches Vision before Main', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  let primaryPlannerCalls=0, fallbackPlannerCalls=0, visionCalls=0, mainCalls=0;
-  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'Layout is visually intact.',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'No clipping.',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false};
-  const base=await startJsonServer(async (req,res)=>{
-    const payload=JSON.parse((await read(req)).toString());
-    res.writeHead(200,{'content-type':'application/json'});
-    const system=String(payload.system || '');
-    if (system.includes('VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1')) {
-      fallbackPlannerCalls += 1;
-      assert.match(JSON.stringify(payload.messages),/FULL_CONTEXT_FALLBACK_306/);
-      res.end(JSON.stringify({id:'fallback',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect rendered screenshot',questions:[{id:'layout',question:'Is the page clipped or overlapping?'}],requested_evidence:['layout'],detail_level:'high'})}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    if (system.includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      primaryPlannerCalls += 1;
-      assert.match(JSON.stringify(payload.messages),/FULL_CONTEXT_FALLBACK_306/);
-      res.end(JSON.stringify({id:'primary-miss',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'I should inspect layout and clipping.'}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    mainCalls += 1;
-    assert.match(JSON.stringify(payload.messages),/Layout is visually intact/);
-    res.end(JSON.stringify({id:'main',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FALLBACK_VISUAL_OK'}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
-    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
-    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
-  });
-  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'sess-fallback-306'},body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'FULL_CONTEXT_FALLBACK_306 inspect it'},{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}]})});
-  assert.equal(response.status,200);
-  assert.equal((await response.json()).content[0].text,'FALLBACK_VISUAL_OK');
-  assert.equal(primaryPlannerCalls,1);
-  assert.equal(fallbackPlannerCalls,1);
-  assert.equal(visionCalls,1);
-  assert.equal(mainCalls,1);
-});
-
-test('V0.30.7 resolver-approved historical image reuses visual evidence without rerunning Planner or Vision', async (t) => {
-  const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
-  const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
-  let plannerCalls=0, visionCalls=0, mainCalls=0;
-  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'RESOLVED_EVIDENCE_306',confidence:0.95,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'Resolved evidence',confidence:0.95}],relationships:[],unresolved:[]}],needs_followup:false};
-  const base=await startJsonServer(async (req,res)=>{
-    const payload=JSON.parse((await read(req)).toString());
-    res.writeHead(200,{'content-type':'application/json'});
-    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_RESOLVER_V1')) {
-      res.end(JSON.stringify({id:'resolve',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'r',name:'resolve_visual_intent',input:{action:'reuse',source_ids:['img_01'],reason:'Current question assessed against stored evidence.'}}],stop_reason:'tool_use',usage:{}}));
-      return;
-    }
-    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      plannerCalls += 1;
-      res.end(JSON.stringify({id:'plan',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'p',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect screenshot',questions:[{id:'layout',question:'Any visual issue?'}],requested_evidence:['layout'],detail_level:'normal'}}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    mainCalls += 1;
-    const serialized=JSON.stringify(payload.messages);
-    assert.match(serialized,/RESOLVED_EVIDENCE_306/);
-    res.end(JSON.stringify({id:`main-${mainCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:`MAIN_${mainCalls}`}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
-    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
-    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
-  });
-  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const headers={'content-type':'application/json','x-claude-code-session-id':'sess-resolved-306'};
-  const first=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot' },image]}]})});
-  assert.equal(first.status,200); await first.json();
-  const second=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]},{role:'assistant',content:[{type:'text',text:'previous'}]},{role:'user',content:'look at the screenshot again'}]})});
-  assert.equal(second.status,200); await second.json();
-  assert.equal(plannerCalls,1,'resolved history must not rerun planner');
-  assert.equal(visionCalls,1,'resolved history must not rerun Vision');
-  assert.equal(mainCalls,2);
-});
-
-test('V0.30.7 resolver-approved failed historical image retries visual orchestration on the next continuation', async (t) => {
-  const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
-  const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
-  let primaryPlannerCalls=0, fallbackPlannerCalls=0, visionCalls=0, mainCalls=0;
-  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'RETRY_RECOVERED_306',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'Recovered',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false};
-  const base=await startJsonServer(async (req,res)=>{
-    const payload=JSON.parse((await read(req)).toString());
-    res.writeHead(200,{'content-type':'application/json'});
-    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_RESOLVER_V1')) {
-      res.end(JSON.stringify({id:'resolve',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'r',name:'resolve_visual_intent',input:{action:'inspect',source_ids:['img_01'],reason:'Current question assessed against stored evidence.'}}],stop_reason:'tool_use',usage:{}}));
-      return;
-    }
-    const system=String(payload.system||'');
-    if (system.includes('VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1')) {
-      fallbackPlannerCalls += 1;
-      if (fallbackPlannerCalls === 1) {
-        res.end(JSON.stringify({id:'fb-bad',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'not json'}],stop_reason:'end_turn',usage:{}}));
-      } else {
-        res.end(JSON.stringify({id:'fb-good',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Retry screenshot inspection',questions:[{id:'layout',question:'Any issue?'}],requested_evidence:['layout'],detail_level:'normal'})}],stop_reason:'end_turn',usage:{}}));
-      }
-      return;
-    }
-    if (system.includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      primaryPlannerCalls += 1;
-      res.end(JSON.stringify({id:'primary-miss',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'tool call missed'}],stop_reason:'end_turn',usage:{}}));
-      return;
-    }
-    mainCalls += 1;
-    const serialized=JSON.stringify(payload.messages);
-    if (mainCalls === 2) assert.match(serialized,/RETRY_RECOVERED_306/);
-    res.end(JSON.stringify({id:`main-${mainCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:`MAIN_${mainCalls}`}],stop_reason:'end_turn',usage:{}}));
-  });
-  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
-    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
-    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
-  });
-  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
-  const headers={'content-type':'application/json','x-claude-code-session-id':'sess-retry-306'};
-  const first=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]}]})});
-  assert.equal(first.status,200); await first.json();
-  const second=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]},{role:'assistant',content:[{type:'text',text:'could not see it'}]},{role:'user',content:'look at the screenshot again'}]})});
-  assert.equal(second.status,200); await second.json();
-  assert.equal(primaryPlannerCalls,2,'retryable historical image must retry planner');
-  assert.equal(fallbackPlannerCalls,2,'each tool miss receives one fallback attempt');
-  assert.equal(visionCalls,1,'Vision runs only after the retry planner recovers');
-  assert.equal(mainCalls,2);
+  assert.equal((await response.json()).content[0].text, 'PDF_OK');
+  const serialized = JSON.stringify(observed);
+  assert.match(serialized, /DIRECTED_MODE_LEGACY_PDF_EVIDENCE/);
+  assert.match(String(observed.system || ''), /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
+  assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
 });

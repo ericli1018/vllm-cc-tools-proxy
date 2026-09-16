@@ -7,6 +7,7 @@ import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage 
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
 import { analyzeGenericZoomFallback } from '../visual/generic-zoom.js';
+import { formatDirectedVisualDescriptor } from '../visual/directed-vision.js';
 import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
@@ -29,7 +30,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const onDiagnostic = dependencies.onDiagnostic || (() => {});
   const onVisionEvent = dependencies.onVisionEvent || (() => {});
   const mediaProgress = dependencies.mediaProgress || null;
-  const directedVisualSession = dependencies.directedVisualSession || null;
+  const directedVisualStore = dependencies.directedVisualStore || null;
   const { maxDecodedBytes, maxOutputChars } = config.limits;
 
   const diagnoseSourceControlTags = (value) => {
@@ -245,19 +246,13 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const provenance = {
         origin: tracked?.origin || 'direct',
         originTool: tracked?.originTool || '',
-        toolUseId: context.toolUseId || '',
         sourceKind: tracked?.sourceKind || 'direct_image',
         readSourceRef: tracked?.readSourceRef || '',
         requestedPages: Array.isArray(tracked?.pageScope?.pages) ? tracked.pageScope.pages : null,
-        messageIndex: Number.isInteger(context.messageIndex) ? context.messageIndex : -1,
-        path: Array.isArray(context.path) ? [...context.path] : [],
       };
       const nativeVisionPassthrough = config.vllmBaseVisionEnabled === true
         && config.visionNativePassthrough === true
         && ['direct_image', 'read_image'].includes(provenance.sourceKind);
-      const directedVisionEligible = config.visionOrchestrationMode === 'directed'
-        && ['direct_image', 'read_image', 'tool_result_image'].includes(provenance.sourceKind)
-        && !nativeVisionPassthrough;
       if (nativeVisionPassthrough) {
         if (block.source?.type === 'base64') {
           onVisionEvent('native_vision_raw_passthrough_selected', {
@@ -295,49 +290,40 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           },
         };
       }
-      if (directedVisionEligible) {
-        if (!directedVisualSession || typeof directedVisualSession.register !== 'function') {
-          throw new HttpError(500, 'Directed visual session is unavailable.', { code: 'directed_visual_session_unavailable' });
+      if (config.visionOrchestrationMode === 'directed') {
+        if (!directedVisualStore || typeof directedVisualStore.register !== 'function') {
+          throw new HttpError(500, 'Directed visual store is unavailable for this request.', { code: 'directed_visual_store_unavailable' });
         }
+        const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
+        await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const sourceBuffer = await readSource(block.source, block.source.media_type);
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal });
-        const registered = directedVisualSession.register({
+        const receivedWidth = normalized.originalWidth || normalized.width;
+        const receivedHeight = normalized.originalHeight || normalized.height;
+        const asset = directedVisualStore.register({
+          buffer: normalized.buffer,
+          mediaType: normalized.mediaType || block.source.media_type,
+          width: normalized.width,
+          height: normalized.height,
+          receivedWidth,
+          receivedHeight,
           filename,
+          sourceRef: provenance.readSourceRef,
           sourceKind: provenance.sourceKind,
-          provenance,
-          mediaType: block.source.media_type,
-          sourceBuffer,
-          normalized,
-        });
-        const sourceId = String(registered?.sourceId || registered?.source_id || '');
-        if (!sourceId) {
-          throw new HttpError(500, 'Directed visual session returned no source identifier.', { code: 'directed_visual_source_id_missing' });
-        }
-        onVisionEvent('directed_visual_asset_registered', {
-          source_id: sourceId,
-          reused: Boolean(registered?.reused),
-          media_type: normalized.mediaType || block.source.media_type,
-          source_kind: provenance.sourceKind,
           origin: provenance.origin,
-          read_source_ref: provenance.readSourceRef,
+          originTool: provenance.originTool,
         });
-        const manifest = {
-          source_id: sourceId,
-          kind: 'image',
-          media_type: normalized.mediaType || block.source.media_type,
-          width: normalized.originalWidth || normalized.width || null,
-          height: normalized.originalHeight || normalized.height || null,
-          origin: provenance.origin || 'direct',
-          source_kind: provenance.sourceKind,
-          filename,
-          visual_orchestration: 'proxy_managed',
-          visual_content_visible: false,
-          visual_access: 'proxy_managed',
-        };
-        return {
-          type: 'text',
-          text: `[VCC_VISUAL_SOURCE version=1]\n${JSON.stringify(manifest)}\n[VCC_VISUAL_SOURCE_END]`,
-        };
+        onDiagnostic('directed_visual_asset_registered', {
+          asset_id: asset.assetId,
+          media_type: asset.mediaType,
+          received_width: asset.receivedWidth,
+          received_height: asset.receivedHeight,
+          normalized_width: asset.width,
+          normalized_height: asset.height,
+          source_kind: asset.sourceKind,
+          has_source_ref: Boolean(asset.sourceRef),
+        });
+        return { type: 'text', text: formatDirectedVisualDescriptor(asset) };
       }
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       const fallback = {

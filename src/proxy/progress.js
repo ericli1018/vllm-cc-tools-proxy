@@ -509,21 +509,6 @@ export class ProgressStream {
     }), { kind: 'usage_delta', phase });
   }
 
-  async setState(details = {}) {
-    if (!this.visibleProgressEnabled || this.closed || this.progressClosed) return;
-    const phase = String(details?.phase || '');
-    if (!this.visible && ['managed_model_round_start', 'base_request_start'].includes(phase) && this.pendingUpdates.length > 0) {
-      this.#clearPending();
-    }
-    const changedAt = Date.now();
-    const stateKey = this.#stateKey('', details);
-    if (stateKey === this.lastStateKey) return;
-    this.lastStateKey = stateKey;
-    const revision = ++this.revision;
-    try { await this.onStateChange({ revision, phase: details.phase, changedAt, message: '' }); } catch {}
-    this.#prepareModelTimeline('state', details, changedAt, '');
-  }
-
   async update(message, { force = false, kind = 'progress_delta', details = {}, renderMode = 'auto' } = {}) {
     if (!this.visibleProgressEnabled || this.closed || this.progressClosed || !message) return;
     const changedAt = Date.now();

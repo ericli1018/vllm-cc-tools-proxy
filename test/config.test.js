@@ -494,8 +494,18 @@ test('V0.29.43 runtime clock defaults to enabled Asia/Taipei and supports explic
   assert.equal(custom.runtimeClockTimezone, 'Asia/Tokyo');
 });
 
-test('V0.30.0 visual orchestration defaults to legacy and accepts directed', () => {
-  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' }).visionOrchestrationMode, 'legacy');
-  assert.equal(loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VISION_ORCHESTRATION_MODE: 'directed' }).visionOrchestrationMode, 'directed');
-  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', VISION_ORCHESTRATION_MODE: 'auto' }), /VISION_ORCHESTRATION_MODE/);
+test('V0.29.44 vision orchestration mode defaults to legacy and accepts directed only', () => {
+  const legacy = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(legacy.visionOrchestrationMode, 'legacy');
+
+  const directed = loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VISION_ORCHESTRATION_MODE: 'directed',
+  });
+  assert.equal(directed.visionOrchestrationMode, 'directed');
+
+  assert.throws(() => loadConfig({
+    VLLM_BASE_URL: 'http://vllm:8000',
+    VISION_ORCHESTRATION_MODE: 'auto',
+  }), /VISION_ORCHESTRATION_MODE/);
 });

@@ -8,7 +8,7 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE"
 (
   cd "$ROOT"
-  tar --exclude=.git --exclude=dist --exclude=node_modules --exclude='*.log' --exclude='*.zip' --exclude='*.zip.sha256' --exclude='V0.30.0_External_Visual_Directed_Perception_架構設計.md' --exclude='V0.*_LOG_*.md' --exclude='V0.*_TDD_*.md' --exclude='貼上的 Markdown*' --exclude='CLAUDE.md.txt' --exclude='SOUL.md.txt' --exclude='chat-template.jinja-片段.txt' --exclude=docs/superpowers -cf - .
+  tar --exclude=.git --exclude=dist --exclude=node_modules --exclude='*.log' --exclude=docs/superpowers -cf - .
 ) | (cd "$STAGE" && tar -xf -)
 (cd "$STAGE" && ./scripts/verify.sh)
 mkdir -p "$OUT"

@@ -18,12 +18,6 @@ import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } fro
 import { forwardTransparent } from '../proxy/bypass.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
-import { DirectedVisualSession } from '../visual/directed-visual-session.js';
-import { VisualRecoveryStore } from '../visual/visual-recovery-store.js';
-import { VisualRecoveryCoordinator } from '../visual/visual-recovery-coordinator.js';
-import { imageFreePlanningBody, hasImagePayload, collectVisualContext } from '../visual/visual-recovery-context.js';
-import { injectDirectedVisualContract, isProxyVisualToolName } from '../visual/visual-query-tool.js';
-import { executeDirectedVisualQuery } from '../visual/directed-perception.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
 import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '../i18n/response-language.js';
@@ -41,6 +35,12 @@ import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
 import { injectRuntimeClockReminder } from '../proxy/runtime-clock.js';
+import {
+  DirectedVisualStore,
+  directedVisualToolDefinition,
+  executeDirectedVisualInspect,
+  isDirectedVisualToolName,
+} from '../visual/directed-vision.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { inspectAnthropicServerCapabilities, inspectAnthropicServerResponse } from '../proxy/server-capabilities.js';
@@ -610,8 +610,6 @@ export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
-  const perceptionCacheRoot = config.cache?.rootDir ? `${config.cache.rootDir}/perception-v1` : '';
-  const perceptionCache = dependencies.perceptionCache || new MediaCache({ ...(config.cache || { rootDir: '', maxBytes: 0 }), rootDir: perceptionCacheRoot });
   const mediaContinuationCache = dependencies.mediaContinuationCache || new MediaContinuationCache();
   const progressStreamFactory = dependencies.progressStreamFactory || ((response, options) => new ProgressStream(response, options));
   const documentSourceCache = dependencies.documentSourceCache || new DocumentSourceCache({
@@ -619,14 +617,8 @@ export function createProxyServer(config, dependencies = {}) {
     retentionMs: config.cache?.retentionMs,
   });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
-  const visualRecoveryStore = dependencies.visualRecoveryStore || new VisualRecoveryStore({
-    rootDir: config.cache?.rootDir || '', retentionMs: config.cache?.retentionMs ?? 3600000,
-    maxBytes: config.cache?.maxBytes ?? 67108864, maxEntries: 256,
-  });
   const cacheReady = Promise.all([
     mediaCache.initialize(),
-    config.visionOrchestrationMode === 'directed' ? visualRecoveryStore.initialize() : Promise.resolve(),
-    perceptionCache.initialize(),
     typeof documentSourceCache.initialize === 'function' ? documentSourceCache.initialize() : Promise.resolve(documentSourceCache),
   ]);
   const protocolDiagnosticStore = config.logProtocolSnippets
@@ -737,6 +729,7 @@ export function createProxyServer(config, dependencies = {}) {
     let completed = false;
     let preparedMedia = null;
     let mediaProgress = null;
+    let directedVisualStore = null;
     let releaseRuntimeRequest = null;
     let requestStage = 'request_start';
     let initialStreamUsage = usageFromTokenCount({});
@@ -1665,15 +1658,10 @@ export function createProxyServer(config, dependencies = {}) {
 
       requestStage = 'request_classification';
       const classification = classifyMessagesRequest(original);
-      const visualContext = config.visionOrchestrationMode === 'directed' && messagesPath === '/v1/messages'
-        ? collectVisualContext(original.messages || []) : null;
-      const hasDirectedReferences = Boolean(visualContext && (visualContext.references.length
-        || (clientSessionId && ((await visualRecoveryStore.listSources(clientSessionId)).length
-          || (await visualRecoveryStore.listRecoveries(clientSessionId)).some(r => ['required','waiting_client','needs_read','retry'].includes(r.status))))));
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
           || classification.reasons.includes('native_web_tool')
-        : classification.managed || hasDirectedReferences;
+        : classification.managed;
 
       if (initiallyManaged) {
         log(config, 'info', 'incoming_protocol_inventory', {
@@ -1812,7 +1800,7 @@ export function createProxyServer(config, dependencies = {}) {
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
       const hasLocalToolSearch = Boolean(localToolSearchPrepared.state?.enabled) && messagesPath === '/v1/messages';
-      let hasManagedLoop = hasManagedTools || hasLocalToolSearch || hasDirectedReferences;
+      let hasManagedLoop = hasManagedTools || hasLocalToolSearch;
       const passthroughClientWebTools = hasManagedTools
         && serverWebUiDeclaration.native_count === 0
         && serverWebUiDeclaration.alias_count > 0;
@@ -1859,54 +1847,38 @@ export function createProxyServer(config, dependencies = {}) {
       let mediaBootstrapUsage = null;
       let nativeVisionRuntimeFallbackUsed = false;
       let nativeVisionRawOnly = false;
-      const directedVisualSession = config.visionOrchestrationMode === 'directed' ? new DirectedVisualSession() : null;
-      const directedOriginalMessages = request.messages;
-      let directedVisualEligibleCount = 0;
-      let historyOnlyDirectedMedia = false;
-      let freshDirectedVisualExpected = false;
-      const ensureDirectedVisualCapability = (body) => {
-        if (!directedVisualSession?.hasSources()) return body;
-        const next = structuredClone(body);
-        if (Array.isArray(next.tools)) next.tools = next.tools.filter((tool) => !isProxyVisualToolName(tool?.name));
-        return injectDirectedVisualContract(next);
-      };
+      let directedVisionEligibleCount = 0;
+      let directedVisionPaths = new Set();
 
       if (hasMedia) {
         requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
-        mediaProgress = createMediaProgressTracker(request.messages, {
-          locale: config.responseLanguage,
-          dedupeRepeatedImages: config.visionOrchestrationMode === 'directed',
-        });
+        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
         const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
           ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
-        historyOnlyDirectedMedia = false;
-        if (directedVisualSession) {
-          const directedVisualDescriptors = mediaProgress.descriptors.filter((entry) => (
-            entry.kind === 'image'
-            && ['direct_image', 'read_image', 'tool_result_image'].includes(entry.sourceKind)
-            && !nativeVisionPassthroughPaths.has(entry.pathKey)
-          ));
-          directedVisualEligibleCount = directedVisualDescriptors.length;
-          const currentMessageIndex = request.messages.length - 1;
-          const currentDirectedVisualCount = directedVisualDescriptors.filter((entry) => (
-            Array.isArray(entry.path)
-            && entry.path[0] === 'messages'
-            && entry.path[1] === currentMessageIndex
-          )).length;
-          freshDirectedVisualExpected = currentDirectedVisualCount > 0;
-          historyOnlyDirectedMedia = directedVisualEligibleCount > 0
-            && directedVisualEligibleCount === mediaProgress.descriptors.length
-            && currentDirectedVisualCount === 0;
-          if (directedVisualEligibleCount > 0) hasManagedLoop = true;
-        }
         nativeVisionRawOnly = nativeVisionEligibleCount > 0
           && nativeVisionEligibleCount === mediaProgress.descriptors.length;
-        if (directedVisualSession && nativeVisionEligibleCount > 0) hasManagedLoop = true;
+        const directedVisionEligible = config.visionOrchestrationMode === 'directed'
+          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && !nativeVisionPassthroughPaths.has(entry.pathKey))
+          : [];
+        directedVisionEligibleCount = directedVisionEligible.length;
+        directedVisionPaths = new Set(directedVisionEligible.map((entry) => entry.pathKey));
+        if (directedVisionEligibleCount > 0) {
+          directedVisualStore = new DirectedVisualStore();
+          if (messagesPath === '/v1/messages') hasManagedLoop = true;
+          log(config, 'info', 'directed_vision_route_selected', {
+            requestId,
+            eligible_image_count: directedVisionEligibleCount,
+            source_kinds: [...new Set(directedVisionEligible.map((entry) => entry.sourceKind))].sort(),
+            orchestration_mode: 'directed',
+            proxy_crop_enabled: false,
+            semantic_cache_enabled: false,
+          });
+        }
         if (nativeVisionEligibleCount > 0) {
           nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
           log(config, 'info', 'native_vision_route_selected', {
@@ -1938,28 +1910,10 @@ export function createProxyServer(config, dependencies = {}) {
         request.messages = preparedMedia.messages;
         requestStage = 'media_progress';
         const mediaOccurrences = preparedMedia.mediaOccurrences || preparedMedia.mediaEntries.map((entry) => ({ ...entry, path: [] }));
-        const observedDirectedHistory = new Set();
         for (const occurrence of mediaOccurrences) {
           if (!String(occurrence.mediaType || '').startsWith('image/')) continue;
           const observed = imageObservationByPath.get(JSON.stringify(occurrence.path));
           if (!observed) continue;
-          const tracked = mediaProgress.contextForPath(occurrence.path);
-          const directedHistoryIdentity = directedVisualSession
-            && tracked?.sourceKind === 'read_image'
-            && tracked?.readSourceRef
-            ? `read_image:${tracked.readSourceRef}`
-            : '';
-          if (directedHistoryIdentity && observedDirectedHistory.has(directedHistoryIdentity)) {
-            log(config, 'info', 'directed_visual_duplicate_history_observed', {
-              requestId,
-              source_kind: tracked.sourceKind,
-              read_source_ref: tracked.readSourceRef,
-              media_type: observed.mediaType,
-              filename: observed.filename,
-            });
-            continue;
-          }
-          if (directedHistoryIdentity) observedDirectedHistory.add(directedHistoryIdentity);
           log(config, 'info', 'image_payload_observed', {
             requestId,
             origin: observed.origin,
@@ -1978,17 +1932,17 @@ export function createProxyServer(config, dependencies = {}) {
           });
         }
         let cachedOccurrences = 0;
-        let cacheRelevantOccurrences = 0;
         for (const occurrence of mediaOccurrences) {
+          const occurrencePathKey = JSON.stringify(occurrence.path || []);
+          if (directedVisionPaths.has(occurrencePathKey)) {
+            log(config, 'info', 'directed_visual_cache_bypassed', {
+              requestId,
+              media_type: occurrence.mediaType,
+              reason: 'task_specific_perception',
+            });
+            continue;
+          }
           const tracked = mediaProgress.contextForPath(occurrence.path);
-          const directedImageOccurrence = Boolean(
-            directedVisualSession
-            && String(occurrence.mediaType || '').startsWith('image/')
-            && ['direct_image', 'read_image', 'tool_result_image'].includes(tracked?.sourceKind)
-            && !nativeVisionPassthroughPaths.has(tracked?.pathKey),
-          );
-          if (directedImageOccurrence) continue;
-          cacheRelevantOccurrences += 1;
           const pageScope = occurrence.mediaType === 'application/pdf' ? tracked?.pageScope : null;
           const effectiveKey = occurrence.mediaType === 'application/pdf'
             ? scopePdfDocumentCacheKey(occurrence.key, pageScope)
@@ -2032,9 +1986,7 @@ export function createProxyServer(config, dependencies = {}) {
             });
           }
         }
-        allMediaCached = cacheRelevantOccurrences === 0
-          ? (directedVisualEligibleCount > 0 && nativeVisionEligibleCount === 0)
-          : cachedOccurrences === cacheRelevantOccurrences;
+        allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
       }
 
       const needsManagedWork = hasManagedLoop || (hasMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
@@ -2045,6 +1997,7 @@ export function createProxyServer(config, dependencies = {}) {
         documentSourceCache,
         analysisRegistry,
         preloadedCache,
+        directedVisualStore,
         ...(dependencies.mediaAdapterDependencies || {}),
         continuationFreshMessageIndex: toolResultContinuation ? request.messages.length - 1 : -1,
         continuationCacheWriter: (key, value) => {
@@ -2061,7 +2014,7 @@ export function createProxyServer(config, dependencies = {}) {
           return stored;
         },
         onCacheEvent: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
-        onDiagnostic: (event, fields) => log(config, 'warn', event, { requestId, ...fields }),
+        onDiagnostic: (event, fields) => log(config, event.startsWith('directed_') ? 'info' : 'warn', event, { requestId, ...fields }),
         onVisionEvent: (event, fields) => {
           if (event === 'vision_upstream_request') {
             runtimeTelemetry.updateRequest(requestId, {
@@ -2077,13 +2030,11 @@ export function createProxyServer(config, dependencies = {}) {
           );
         },
         mediaProgress,
-        directedVisualSession,
       };
 
       if (!needsManagedWork) {
         const adapters = createMediaAdapters(config, abortController.signal, () => {}, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
-        if (directedVisualSession?.hasSources()) request = ensureDirectedVisualCapability(request);
         request = injectEvidenceContract(request);
         await preparedMedia?.cleanup(); preparedMedia = null;
         rawBody = null;
@@ -2221,34 +2172,8 @@ export function createProxyServer(config, dependencies = {}) {
         return progress;
       };
 
-      const visualCoordinator = directedVisualSession && messagesPath === '/v1/messages'
-        ? new VisualRecoveryCoordinator({
-          session: directedVisualSession,
-          store: clientSessionId ? visualRecoveryStore : new VisualRecoveryStore(),
-          sessionId: clientSessionId, requestId, messages: directedOriginalMessages, config,
-          signal: abortController.signal,
-          ...(dependencies.mediaAdapterDependencies?.normalizeImage ? { normalizeImage: dependencies.mediaAdapterDependencies.normalizeImage } : {}),
-          callMain: body => callUpstreamJson(imageFreePlanningBody(body), config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent }),
-          perceive: visualPlan => executeDirectedVisualQuery({
-            name: 'proxy_visual_query', input: visualPlan,
-          }, {
-            session: directedVisualSession, config, signal: abortController.signal,
-            acquireVision: options => admission.acquireVision(options), perceptionCache, analysisRegistry,
-            ...(dependencies.directedPerceptionDependencies || {}), onProgress,
-            onDiagnostic: (event, fields) => log(config, event.includes('invalid') || event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
-            onEvent: (event, fields) => log(config, 'info', event, { requestId, ...fields }),
-          }),
-          onDiagnostic: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
-        }) : null;
-      const orchestrateFreshDirectedVisuals = body => {
-        // Pure native images wait for Main or a real capability fallback. Mixed requests
-        // inspect directed sources now; the internal Main adapter removes native pixels.
-        if (!visualCoordinator || (nativeVisionEligibleCount > 0 && hasImagePayload(body.messages) && !directedVisualSession.hasSources())) return Promise.resolve(body);
-        return visualCoordinator.prepare(body);
-      };
-
       let mediaProgressOpenedEarly = false;
-      if (request.stream === true && hasMedia && (!allMediaCached || freshDirectedVisualExpected)) {
+      if (request.stream === true && hasMedia && !allMediaCached) {
         const bootstrapRequest = buildMediaUsageBootstrapRequest(request);
         const bootstrapUsage = await preflightManagedUsage(
           bootstrapRequest,
@@ -2275,11 +2200,11 @@ export function createProxyServer(config, dependencies = {}) {
         if (!allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
-        if (directedVisualSession?.hasSources()) request = ensureDirectedVisualCapability(request);
-
-        request = await orchestrateFreshDirectedVisuals(request);
-
-        const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisualEligibleCount);
+        if (directedVisualStore?.size > 0) {
+          const tools = Array.isArray(request.tools) ? request.tools.filter((tool) => tool?.name !== 'VisualInspect') : [];
+          request = { ...request, tools: [...tools, directedVisualToolDefinition()] };
+        }
+        const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisionEligibleCount);
         if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
 
         if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages/count_tokens' && config.usagePreflightEnabled !== false) {
@@ -2306,12 +2231,10 @@ export function createProxyServer(config, dependencies = {}) {
                 code: error.code,
                 eligible_image_count: nativeVisionEligibleCount,
               });
-              const fallbackConfig = { ...config, visionNativePassthrough: false };
+              const fallbackConfig = { ...config, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
               const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
               request = { ...nativeVisionFallbackRequest, messages: await adaptMessages(nativeVisionFallbackRequest.messages, fallbackAdapters) };
-              request = directedVisualSession?.hasSources()
-                ? await orchestrateFreshDirectedVisuals(request)
-                : injectEvidenceContract(request);
+              request = injectEvidenceContract(request);
               nativeVisionEligibleCount = 0;
               nativeVisionRawOnly = false;
               nativeVisionProbeUsage = null;
@@ -2329,7 +2252,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        if (!nativeVisionRawOnly && !historyOnlyDirectedMedia && !freshDirectedVisualExpected) {
+        if (!nativeVisionRawOnly) {
           const readyMessage = mediaProgress?.renderMediaReady()
             || statusText(config.responseLanguage, 'mediaReady');
           log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
@@ -2380,9 +2303,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (!hasMedia && visualCoordinator) request = await orchestrateFreshDirectedVisuals(request);
-
-      if (hasMedia && !nativeVisionRawOnly && !historyOnlyDirectedMedia && !freshDirectedVisualExpected) {
+      if (hasMedia && !nativeVisionRawOnly) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
@@ -2410,27 +2331,22 @@ export function createProxyServer(config, dependencies = {}) {
         if (nativeVisionRuntimeFallbackUsed || nativeVisionEligibleCount <= 0) return null;
         nativeVisionRuntimeFallbackUsed = true;
         nativeVisionRawOnly = false;
-        const fallbackConfig = { ...config, visionNativePassthrough: false };
+        const fallbackConfig = { ...config, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
         const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
         let fallbackBody = {
           ...structuredClone(body),
           messages: await adaptMessages(structuredClone(body?.messages || []), fallbackAdapters),
         };
-        fallbackBody = directedVisualSession?.hasSources()
-          ? await orchestrateFreshDirectedVisuals(fallbackBody)
-          : injectEvidenceContract(fallbackBody);
+        fallbackBody = injectEvidenceContract(fallbackBody);
         if (body && typeof body === 'object') {
           body.messages = fallbackBody.messages;
           body.system = fallbackBody.system;
-          body.tools = fallbackBody.tools;
-          if (Object.prototype.hasOwnProperty.call(fallbackBody, 'tool_choice')) body.tool_choice = fallbackBody.tool_choice;
         }
         nativeVisionEligibleCount = 0;
         return body;
       };
 
       const upstream = async (body, signal, runtimeOptions = {}) => {
-        if (visualCoordinator?.activeRecovery) visualCoordinator.body = body;
         requestStage = 'managed_model_round';
         const invoke = (requestBody) => callUpstreamManagedStream(requestBody, config, req.headers, signal, '/v1/messages', {
           onResponseChunk: onBaseResponseChunk,
@@ -2464,31 +2380,32 @@ export function createProxyServer(config, dependencies = {}) {
         ? createServerToolStreamBridge(progress)
         : null;
       if (hasManagedLoop) {
-        let result = visualCoordinator?.replayResponse || await runManagedLoop(request, {
+        let result = await runManagedLoop(request, {
           upstream,
-          executeVisualTool: (toolUse, signal) => executeDirectedVisualQuery(toolUse, {
-            session: directedVisualSession,
-            config,
-            signal,
-            acquireVision: (options) => admission.acquireVision(options),
-            perceptionCache,
-            analysisRegistry,
-            ...(dependencies.directedPerceptionDependencies || {}),
-            onDiagnostic: (event, fields) => log(config, event.includes('invalid') || event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
-            onProgress,
-            onEvent: (event, fields) => log(config, event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info', event, { requestId, ...fields }),
-          }),
-          executeTool: (toolUse, signal) => executeManagedTool(toolUse, config, signal, {
-            model: request.model || '',
-            policy: managedWebPolicyEnforcer.consume(toolUse.name),
-            acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
-            onEvent: (event, fields) => log(
-              config,
-              event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',
-              event,
-              { requestId, ...fields },
-            ),
-          }),
+          executeTool: (toolUse, signal) => {
+            if (isDirectedVisualToolName(toolUse?.name)) {
+              return executeDirectedVisualInspect(directedVisualStore, toolUse.input, config, signal, {
+                acquireVision: (options) => admission.acquireVision(options),
+                onEvent: (event, fields) => log(
+                  config,
+                  event.endsWith('_failed') ? 'warn' : 'info',
+                  event,
+                  { requestId, ...fields },
+                ),
+              });
+            }
+            return executeManagedTool(toolUse, config, signal, {
+              model: request.model || '',
+              policy: managedWebPolicyEnforcer.consume(toolUse.name),
+              acquireProcessor: (options) => admission.acquireWebFetchProcessor(options),
+              onEvent: (event, fields) => log(
+                config,
+                event.endsWith('_rejected') || event.endsWith('_fallback') ? 'warn' : 'info',
+                event,
+                { requestId, ...fields },
+              ),
+            });
+          },
           maxRounds: config.maxToolRounds,
           taskTimeoutMs: config.managedTaskTimeoutMs,
           modelRoundTimeoutMs: config.managedModelRoundTimeoutMs || 360000,
@@ -2512,8 +2429,8 @@ export function createProxyServer(config, dependencies = {}) {
               runtimeTelemetry.beginModelRound(requestId, { round, startedAt });
               runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
               if (progress) {
-                await progress.setState({
-                  phase: 'managed_model_round_start', model_timeline: true, round, model_started_at: startedAt,
+                await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
+                  details: { phase: 'managed_model_round_start', model_timeline: true, round, model_started_at: startedAt },
                 });
               }
               log(config, 'info', 'managed_model_round_started', { requestId, lane, round, start_bytes: startBytes });
@@ -2589,7 +2506,6 @@ export function createProxyServer(config, dependencies = {}) {
             : undefined,
           signal: abortController.signal,
         });
-        if (visualCoordinator) result = await visualCoordinator.observeClientResponse(result);
         if (!nativeWebSearchFastLane) {
           result = await applyFinalPresentationLanguage(result, request);
         }
@@ -2783,6 +2699,7 @@ export function createProxyServer(config, dependencies = {}) {
       try { await progress?.dispose?.(); } catch {}
       runtimeTelemetry.setBusy(requestId, false);
       releaseRuntimeRequest?.();
+      directedVisualStore?.clear();
       await preparedMedia?.cleanup();
     }
   });

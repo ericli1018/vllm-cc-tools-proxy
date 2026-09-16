@@ -14,7 +14,6 @@ const visionClientSource = await fs.readFile(new URL('../src/visual/vision-clien
 const serverCapabilitiesSource = await fs.readFile(new URL('../src/proxy/server-capabilities.js', import.meta.url), 'utf8');
 const toolSearchSource = await fs.readFile(new URL('../src/proxy/tool-search.js', import.meta.url), 'utf8');
 const mediaAdaptersSource = await fs.readFile(new URL('../src/proxy/media-adapters.js', import.meta.url), 'utf8');
-const visualQueryToolSource = await fs.readFile(new URL('../src/visual/visual-query-tool.js', import.meta.url), 'utf8');
 
 test('Compose uses one official Node container with persistent source clone and fast-forward pull', () => {
   assert.match(compose, /image:\s*node:22-bookworm-slim/);
@@ -38,7 +37,7 @@ test('Compose uses one official Node container with persistent source clone and 
 });
 
 test('ENV example preserves base, timeout, vision and managed fetch variables', () => {
-  for (const name of ['VLLM_BASE_URL','VLLM_BASE_MODEL','VLLM_BASE_RESPONSE_MODE','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','VISION_ORCHESTRATION_MODE','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','MANAGED_MODEL_STALL_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
+  for (const name of ['VLLM_BASE_URL','VLLM_BASE_MODEL','VLLM_BASE_RESPONSE_MODE','VLLM_BASE_API_KEY','VLLM_BASE_CONNECT_TIMEOUT_MS','VLLM_BASE_HEADERS_TIMEOUT_MS','VLLM_BASE_BODY_TIMEOUT_MS','CONTEXT_COMPACT_PROVIDER','CONTEXT_COMPACT_URL','CONTEXT_COMPACT_MODEL','CONTEXT_COMPACT_API_KEY','CONTEXT_COMPACT_THINK','VLLM_VISION_URL','VLLM_VISION_MODEL','VLLM_VISION_API_KEY','VLLM_VISION_PROVIDER','VLLM_VISION_THINK','VLLM_VISION_TIMEOUT_MS','WEB_FETCH_API_KEY','WEB_FETCH_PROCESSOR_ENABLED','WEB_FETCH_PROCESSOR_PROVIDER','WEB_FETCH_PROCESSOR_URL','WEB_FETCH_PROCESSOR_MODEL','WEB_FETCH_PROCESSOR_API_KEY','WEB_FETCH_PROCESSOR_THINK','WEB_FETCH_PROCESSOR_CONCURRENCY','WEB_FETCH_PROCESSOR_TIMEOUT_MS','MODEL_RESPONSE_LANGUAGE','MANAGED_MODEL_STALL_TIMEOUT_MS','LOG_PROTOCOL_SNIPPETS']) {
     assert.match(envExample, new RegExp(`^${name}=`, 'm'));
   }
   for (const removed of ['DOCUMENT_PARSER_URL','IMAGE_PARSER_URL','OCR_SERVICE_URL','VISION_SERVICE_URL','AUTO_UPDATE']) {
@@ -808,108 +807,25 @@ test('V0.29.42 startup card prioritizes canonical tool-bearing Main requests and
   assert.ok(changeLogEntries.includes('V0.29.42-實作與驗證報告.md'));
 });
 
-test('V0.30.0 documents directed visual orchestration as an opt-in image-only mode', async () => {
-  assert.match(readme, /V0\.30\.0 External Visual Directed Perception/);
-  assert.match(readme, /VISION_ORCHESTRATION_MODE=directed/);
-  assert.match(envExample, /^VISION_ORCHESTRATION_MODE=legacy$/m);
-  assert.match(compose, /VISION_ORCHESTRATION_MODE:\s*\$\{VISION_ORCHESTRATION_MODE:-legacy\}/);
-  assert.match(mediaAdaptersSource, /VCC_VISUAL_SOURCE/);
-  assert.match(visualQueryToolSource, /proxy_visual_query/);
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.ok(changeLogEntries.includes('V0.30.0-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.0-實作與驗證報告.md'));
-});
 
-
-test('V0.30.1 documents directed structured-output compatibility and keeps PDF scope unchanged', async () => {
-  assert.match(readme, /V0\.30\.1 Directed Structured Output Compatibility/);
-  assert.match(readme, /text-only schema repair/i);
-  assert.match(readme, /validation_stage/);
-  assert.match(readme, /same image.*source_id/i);
-  assert.match(readme, /PDF pipeline.*unchanged/i);
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.ok(changeLogEntries.includes('V0.30.1-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.1-實作與驗證報告.md'));
-});
-
-
-test('V0.30.2 documents history-only directed progress suppression and preserves the 30-second gate', async () => {
+test('V0.29.44 exposes opt-in Main-directed image Vision while preserving PDF and Native Vision routing', async () => {
+  const configSource = await fs.readFile(new URL('../src/config.js', import.meta.url), 'utf8');
   const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const directedSource = await fs.readFile(new URL('../src/visual/directed-vision.js', import.meta.url), 'utf8');
+  const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
+  const compose = await fs.readFile(new URL('../compose.yaml', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(readme, /V0\.30\.2 Directed Visual Progress Continuation Fix/);
-  assert.match(readme, /history-only directed/i);
-  assert.match(readme, /30-second|30 秒/i);
-  assert.match(serverSource, /historyOnlyDirectedMedia/);
-  assert.ok(changeLogEntries.includes('V0.30.2-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.2-實作與驗證報告.md'));
-});
-
-
-test('V0.30.3 release documentation remains preserved after the V0.30.4 orchestration redesign', async () => {
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(readme, /V0\.30\.3 Directed Visual Intent and Tool Discoverability/);
-  assert.match(readme, /need or intend to inspect/i);
-  assert.match(readme, /no visual claim|do not claim.*visually inspected/i);
-  assert.ok(changeLogEntries.includes('V0.30.3-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.3-實作與驗證報告.md'));
-});
-
-
-test('V0.30.4 documents Proxy-owned directed visual orchestration and silent round-start progress', async () => {
-  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
-  const progressSource = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-
-  assert.match(readme, /V0\.30\.4 Proxy-Owned Directed Visual Orchestration/);
-  assert.match(readme, /Proxy detects the fresh directed source/i);
-  assert.match(readme, /no longer exposed as a callable Main tool/i);
-  assert.match(visualQueryToolSource, /VCC_PROXY_DIRECTED_VISUAL_V3/);
-  assert.match(plannerSource, /VCC_PROXY_VISUAL_PLANNER_V1/);
-  assert.match(plannerSource, /visual-query-plan-v1/);
-  assert.match(mediaAdaptersSource, /visual_orchestration:\s*'proxy_managed'/);
-  assert.match(mediaAdaptersSource, /visual_access:\s*'proxy_managed'/);
-  assert.match(proxyServerSource, /orchestrateFreshDirectedVisuals/);
-  assert.match(progressSource, /async setState\(details = \{\}\)/);
-  assert.match(readme, /no "正在請模型規劃下一步…" output/);
-  assert.ok(changeLogEntries.includes('V0.30.4-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.4-實作與驗證報告.md'));
-});
-
-
-test('V0.30.5 documents full-context structured visual planning and directed progress cleanup', async () => {
-  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
-  const proxyServerSource305 = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
-  const progressSource305 = await fs.readFile(new URL('../src/proxy/progress.js', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-
-  assert.match(readme, /V0\.30\.5 Structured Full-Context Visual Planner/);
-  assert.match(readme, /complete existing Main context/i);
-  assert.match(readme, /submit_visual_plan/);
-  assert.match(readme, /simple perception prompt/i);
-  assert.match(plannerSource, /submit_visual_plan/);
-  assert.match(plannerSource, /tool_choice/);
-  assert.match(proxyServerSource305, /freshDirectedVisualExpected/);
-  assert.match(progressSource305, /#clearPending\(\)/);
-  assert.ok(changeLogEntries.includes('V0.30.5-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.5-實作與驗證報告.md'));
-});
-
-
-test('V0.30.6 documents planner resilience and persistent visual evidence state', async () => {
-  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
-  const stateSource = await fs.readFile(new URL('../src/visual/visual-evidence-state.js', import.meta.url), 'utf8');
-  const serverSource = await fs.readFile(new URL('../src/visual/visual-recovery-coordinator.js', import.meta.url), 'utf8');
-  const readme306 = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
-  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(readme306, /V0\.30\.6 Visual Planner Resilience and Evidence State/);
-  assert.match(readme306, /complete existing Main context/i);
-  assert.match(readme306, /RETRYABLE_FAILED/);
-  assert.match(plannerSource, /VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1/);
-  assert.match(plannerSource, /buildVisualQueryPlannerFallbackRequest/);
-  assert.match(stateSource, /VISUAL_EVIDENCE_RESOLVED/);
-  assert.match(stateSource, /VISUAL_EVIDENCE_RETRYABLE_FAILED/);
-  assert.match(serverSource, /visual_evidence_state_reused/);
-  assert.match(serverSource, /visual_query_planning_started/);
-  assert.ok(changeLogEntries.includes('V0.30.6-更新說明.md'));
-  assert.ok(changeLogEntries.includes('V0.30.6-實作與驗證報告.md'));
+  assert.match(configSource, /VISION_ORCHESTRATION_MODE/);
+  assert.match(envExample, /^VISION_ORCHESTRATION_MODE=legacy$/m);
+  assert.match(compose, /VISION_ORCHESTRATION_MODE: \$\{VISION_ORCHESTRATION_MODE:-legacy\}/);
+  assert.match(directedSource, /DIRECTED_VISUAL_TOOL_NAME = 'VisualInspect'/);
+  assert.match(directedSource, /visual_perception_v1/);
+  assert.doesNotMatch(directedSource, /request_image_crop/);
+  assert.match(serverSource, /directed_visual_cache_bypassed/);
+  assert.match(serverSource, /executeDirectedVisualInspect/);
+  assert.match(readme, /V0\.29\.44 Main-Directed External Image Vision/);
+  assert.match(readme, /PDF \/ PDF-derived document pipeline\s+-> existing V0\.29\.43 PDF path/);
+  assert.ok(changeLogEntries.includes('V0.29.44-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.44-實作與驗證報告.md'));
 });

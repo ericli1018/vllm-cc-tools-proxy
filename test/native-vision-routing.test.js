@@ -824,65 +824,22 @@ test('V0.29.32 Native raw Read(image) hides media/file progress and exposes only
   assert.match(stream, /處理中 · .* ○ 0s/);
 });
 
-test('V0.30.4 directed mode Native Vision rejection falls back into Proxy planner plus automatic Vision', async (t) => {
+test('V0.29.44 directed mode does not override Native Vision raw passthrough priority', async () => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
-  const base64 = png.toString('base64');
-  const observed = [];
-  const perception = {
-    schema_version:'visual-perception-v1', status:'complete',
-    answers:[{question_id:'q1',answer:'The screenshot is visually intact.',confidence:0.95,source_ids:['img_01'],support_refs:['img_01:e1']}],
-    source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'No visible layout break.',confidence:0.95}],relationships:[],unresolved:[]}],
-    needs_followup:false,
-  };
-  const upstream = http.createServer(async (req, res) => {
-    const payload = JSON.parse(await readRequest(req));
-    const serialized = JSON.stringify(payload);
-    observed.push(payload);
-    if (serialized.includes(base64)) {
-      res.writeHead(400, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ error: { type: 'invalid_request_error', message: 'This model does not support image input.' } }));
-      return;
-    }
-    assert.match(serialized, /VCC_VISUAL_SOURCE/);
-    assert.equal(Array.isArray(payload.tools) && payload.tools.some((tool) => tool?.name === 'proxy_visual_query'), false);
-    assert.match(String(payload.system || ''), /VCC_PROXY_DIRECTED_VISUAL_V3/);
-    if (String(payload.system || '').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ id:'fallback-planner', type:'message', role:'assistant', model:'m', content:[{type:'tool_use',id:'fallback-plan',name:'submit_visual_plan',input:{
-        schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect the screenshot after Native Vision fallback.',questions:[{id:'q1',question:'Is the screenshot visually intact?'}],requested_evidence:['layout'],detail_level:'high'
-      }}], stop_reason:'end_turn', usage:{} }));
-      return;
-    }
-    assert.match(serialized, /visual-perception-v1/);
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ id: 'directed-fallback-ok', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'directed fallback ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 2 } }));
-  });
-  const upstreamUrl = await listen(upstream);
-  t.after(() => upstream.close());
-  let genericVisionCalls = 0;
-  let directedVisionCalls = 0;
-  const proxy = createProxyServer(proxyConfig({
-    vllmBaseUrl: upstreamUrl,
+  let visionCalls = 0;
+  const adapters = createMediaAdapters(baseAdapterConfig({
+    vllmBaseVisionEnabled: true,
+    visionNativePassthrough: true,
     visionOrchestrationMode: 'directed',
-    usagePreflightEnabled: false,
-  }), {
-    mediaAdapterDependencies: {
-      normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180, originalWidth: 600, originalHeight: 180 }),
-      analyzeVisualAssets: async () => { genericVisionCalls += 1; return { markdown: 'MUST NOT RUN', warnings: [], cropCount: 0, needsZoom: false }; },
-    },
-    directedPerceptionDependencies: {
-      analyzeVisualAssets: async () => { directedVisionCalls += 1; return { markdown: JSON.stringify(perception) }; },
-    },
+  }), undefined, undefined, {
+    mediaProgress: fakeProgress('direct_image'),
+    normalizeImage: async (buffer) => ({ buffer, mediaType: 'image/png', width: 600, height: 180 }),
+    analyzeVisualAssets: async () => { visionCalls += 1; return { markdown: 'SHOULD NOT RUN' }; },
   });
-  const proxyUrl = await listen(proxy);
-  t.after(() => proxy.close());
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] }),
-  });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'directed fallback ok');
-  assert.equal(genericVisionCalls, 0);
-  assert.equal(directedVisionCalls, 1);
-  assert.equal(observed.length, 3);
+  const output = await adapters.adaptImage({
+    type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') },
+  }, { path: ['messages', 0, 'content', 0] });
+  assert.equal(output.type, 'image');
+  assert.equal(output.source.data, png.toString('base64'));
+  assert.equal(visionCalls, 0);
 });
