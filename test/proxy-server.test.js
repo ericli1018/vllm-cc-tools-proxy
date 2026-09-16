@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.44', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.45', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.44/);
+  assert.match(first, /VERSION\s+0\.29\.45/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.44');
+  assert.equal(payload.version, '0.29.45');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.44/);
+  assert.match(payload.display, /CCTP 0\.29\.45/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4537,5 +4537,63 @@ test('V0.29.44 directed mode leaves PDF on the legacy PDF evidence pipeline', as
   const serialized = JSON.stringify(observed);
   assert.match(serialized, /DIRECTED_MODE_LEGACY_PDF_EVIDENCE/);
   assert.match(String(observed.system || ''), /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
+  assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
+});
+
+test('V0.29.45 directed historical-only continuation does not advertise active media progress', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  const logs = [];
+  let observed;
+  const base = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'v2945-final', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'NO_FRESH_MEDIA' }], stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 2 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: 'http://127.0.0.1:9',
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm',
+    visionOrchestrationMode: 'directed',
+    progressVisibleAfterMs: 0,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-old-45', name: 'Read', input: { file_path: '/tmp/old.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old-45', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
+    }] }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'bash-now-45', name: 'Bash', input: { command: 'pwd' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'bash-now-45', content: 'ok' }] },
+  ];
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: true,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages,
+    }),
+  });
+  assert.equal(response.status, 200);
+  const wire = await response.text();
+  assert.match(wire, /NO_FRESH_MEDIA/);
+  assert.doesNotMatch(wire, /正在處理新的文件與圖片內容/);
+  assert.doesNotMatch(wire, /文件與圖片內容已就緒/);
+  assert.doesNotMatch(wire, /正在請模型規劃下一步/);
+  assert.equal(logs.some((entry) => entry.event === 'managed_task_progress'
+    && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
+  assert.match(JSON.stringify(observed), /\[PROXY_HISTORICAL_VISUAL\]/);
   assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
 });

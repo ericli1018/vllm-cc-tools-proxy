@@ -1,8 +1,19 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.44 adds opt-in Main-directed external image perception with `VISION_ORCHESTRATION_MODE=directed`: ordinary images become request-local visual assets, the text-only Main model decides what it needs to inspect through the Proxy-internal `VisualInspect` tool, and the external Vision model returns bounded structured JSON evidence. The Proxy does not auto-crop, auto-zoom, semantically retry, or cache directed Vision results. PDF and Native Vision routing remain unchanged. V0.29.43 runtime clock, V0.29.42 startup-card ownership, V0.29.40 30-second buffered progress, statusLine/preview, ToolSearch, WebSearch/WebFetch, Context Compact liveness, and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.45 fixes Directed Vision continuation UI so historical images remain transcript-cleanup inputs only and no longer make a new request look like it contains active media. `hasMedia` remains responsible for historical-media sanitization, while `hasActiveMedia` alone drives media bootstrap, media progress, media-ready messages, media heartbeat rendering, and the initial model-planning progress row. V0.29.44 Main-directed `VisualInspect`, Fresh Image Only semantics, PDF/Native Vision isolation, V0.29.43 runtime clock, startup-card ownership, statusLine/preview, ToolSearch, WebSearch/WebFetch, Compact and bounded recovery remain intact.
 
 
+
+## V0.29.45 Active-Media Progress Isolation
+
+V0.29.45 separates two concepts that must not be conflated on Claude Code continuation requests:
+
+- `hasMedia`: the conversation history contains media and may still require mechanical sanitization/transform (for example, converting old directed images into `[PROXY_HISTORICAL_VISUAL]` markers).
+- `hasActiveMedia`: the current request actually contains media that is active after routing/freshness filtering and therefore has real media work to report.
+
+In `VISION_ORCHESTRATION_MODE=directed`, a continuation whose history contains old screenshots but whose newest tool result is Bash/List/Text now has `hasMedia=true` and `hasActiveMedia=false`. Historical images are still removed from raw Base64 transcript input, but they do **not** trigger media usage bootstrap, `media_cache_miss`, `media_ready`, media heartbeat rendering, or the initial `正在請模型規劃下一步…` media-planning progress. A newly reacquired image in the newest message still produces the normal Directed Vision flow.
+
+PDF, legacy external Vision, and Native Vision routing are unchanged.
 
 ## V0.29.44 Main-Directed External Image Vision
 

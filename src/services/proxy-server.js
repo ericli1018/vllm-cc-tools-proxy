@@ -2008,7 +2008,8 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       const activeMediaCount = mediaProgress?.descriptors?.length || 0;
-      const needsManagedWork = hasManagedLoop || (activeMediaCount > 0 && (!allMediaCached || nativeVisionEligibleCount > 0));
+      const hasActiveMedia = activeMediaCount > 0;
+      const needsManagedWork = hasManagedLoop || (hasActiveMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
       const adapterDependencies = {
         allowedMediaPaths: preparedMedia?.allowedPaths,
         acquireVision: (options) => admission.acquireVision(options),
@@ -2107,7 +2108,7 @@ export function createProxyServer(config, dependencies = {}) {
       const onProgress = async (message, details = {}) => {
         const { force = false, ...stateDetails } = details;
         const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
-        const rendered = nativeVisionRawOnly
+        const rendered = nativeVisionRawOnly || !hasActiveMedia
           ? localized
           : (mediaProgress?.render(localized, stateDetails) || localized);
         log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
@@ -2181,7 +2182,7 @@ export function createProxyServer(config, dependencies = {}) {
               sampleModelHeartbeat(),
             );
           }
-          return (!nativeVisionRawOnly ? mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() }) : null)
+          return (hasActiveMedia && !nativeVisionRawOnly ? mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() }) : null)
             || statusText(config.responseLanguage, 'currentStepWaiting', {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
             });
@@ -2193,7 +2194,7 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       let mediaProgressOpenedEarly = false;
-      if (request.stream === true && hasMedia && !allMediaCached) {
+      if (request.stream === true && hasActiveMedia && !allMediaCached) {
         const bootstrapRequest = buildMediaUsageBootstrapRequest(request);
         const bootstrapUsage = await preflightManagedUsage(
           bootstrapRequest,
@@ -2217,7 +2218,7 @@ export function createProxyServer(config, dependencies = {}) {
 
       if (hasMedia) {
         requestStage = 'media_transform';
-        if (!allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
+        if (hasActiveMedia && !allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
         if (directedVisualStore?.size > 0) {
@@ -2272,7 +2273,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        if (!nativeVisionRawOnly) {
+        if (hasActiveMedia && !nativeVisionRawOnly) {
           const readyMessage = mediaProgress?.renderMediaReady()
             || statusText(config.responseLanguage, 'mediaReady');
           log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
@@ -2323,7 +2324,7 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (hasMedia && !nativeVisionRawOnly) {
+      if (hasActiveMedia && !nativeVisionRawOnly) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
@@ -2485,7 +2486,7 @@ export function createProxyServer(config, dependencies = {}) {
               } : {}),
             });
           },
-          showInitialModelProgress: hasMedia,
+          showInitialModelProgress: hasActiveMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),
           writeProtocolDiagnostics: protocolDiagnosticStore
             ? (bundle) => protocolDiagnosticStore.write({ request_id: requestId, ...bundle })
@@ -2658,7 +2659,7 @@ export function createProxyServer(config, dependencies = {}) {
       }
 
       completed = true;
-      log(config, 'info', 'request_completed', { requestId, hasMedia, managed: hasManagedLoop });
+      log(config, 'info', 'request_completed', { requestId, hasMedia, hasActiveMedia, managed: hasManagedLoop });
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';

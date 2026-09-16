@@ -829,3 +829,16 @@ test('V0.29.44 exposes opt-in Main-directed image Vision while preserving PDF an
   assert.ok(changeLogEntries.includes('V0.29.44-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.44-實作與驗證報告.md'));
 });
+
+
+test('V0.29.45 separates historical media cleanup from active-media progress', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(serverSource, /const hasActiveMedia = activeMediaCount > 0/);
+  assert.match(serverSource, /request\.stream === true && hasActiveMedia && !allMediaCached/);
+  assert.match(serverSource, /showInitialModelProgress: hasActiveMedia/);
+  assert.match(readme, /V0\.29\.45 Active-Media Progress Isolation/);
+  assert.ok(changeLogEntries.includes('V0.29.45-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.45-實作與驗證報告.md'));
+});
