@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.45', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.46', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.45/);
+  assert.match(first, /VERSION\s+0\.29\.46/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.45');
+  assert.equal(payload.version, '0.29.46');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.45/);
+  assert.match(payload.display, /CCTP 0\.29\.46/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4282,8 +4282,9 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.match(reminder.text, /<\/system-reminder>$/);
 });
 
-test('V0.29.44 directed image waits for Main VisualInspect and returns structured Vision JSON internally', async (t) => {
+test('V0.29.46 directed image performs one-shot Main planning, one Vision pass, then final Main', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
   const sequence = [];
   const baseBodies = [];
   const visionBodies = [];
@@ -4293,215 +4294,153 @@ test('V0.29.44 directed image waits for Main VisualInspect and returns structure
     const payload = JSON.parse((await read(req)).toString());
     visionBodies.push(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      choices: [{ message: { role: 'assistant', content: JSON.stringify({
-        schema: 'visual_perception_v1',
-        asset_id: 'visual-1',
-        status: 'complete',
-        answers: [{
-          question_id: 'q1', status: 'answered', answer: 'HELLO',
-          evidence: [{ kind: 'text', value: 'HELLO', region: [100, 100, 900, 300] }], uncertainty: '',
-        }],
-        follow_up_regions: [],
-      }) } }],
-    }));
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      schema: 'visual_perception_v1', asset_id: 'visual-1', status: 'partial',
+      answers: [{ question_id: 'q1', status: 'unresolved', answer: null, evidence: [], uncertainty: 'small text' }],
+      follow_up_regions: [{ bbox: [600, 200, 950, 500], target: 'error panel', reason: 'text_too_small' }],
+    }) } }] }));
   });
 
   const base = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
     baseBodies.push(payload);
-    const toolResult = payload.messages.flatMap((message) => Array.isArray(message.content) ? message.content : [])
-      .find((block) => block?.type === 'tool_result' && block?.tool_use_id === 'visual-call-1');
-    sequence.push(toolResult ? 'base2' : 'base1');
+    const serialized = JSON.stringify(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    if (!toolResult) {
+    if (serialized.includes('VCC_DIRECTED_VISUAL_PLANNING_V1')) {
+      sequence.push('planning');
+      assert.equal(Array.isArray(payload.tools), false);
+      assert.equal('tool_choice' in payload, false);
+      assert.match(serialized, /PROXY_VISUAL_INPUT/);
+      assert.doesNotMatch(serialized, /VisualInspect/);
       res.end(JSON.stringify({
-        id: 'inspect', type: 'message', role: 'assistant', model: 'm',
-        content: [{ type: 'tool_use', id: 'visual-call-1', name: 'VisualInspect', input: {
-          asset_id: 'visual-1', objective: 'Read the visible word.',
-          questions: [{ id: 'q1', question: 'What exact word is visible?' }],
-        } }],
-        stop_reason: 'tool_use', usage: { input_tokens: 1, output_tokens: 1 },
+        id: 'plan', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: JSON.stringify({
+          schema: 'visual_perception_plan_v1',
+          assets: [{ asset_id: 'visual-1', objective: 'Inspect screenshot for visible defects.', questions: [{ id: 'q1', question: 'What visible defect or unreadable area is present?' }] }],
+        }) }], stop_reason: 'end_turn', usage: {},
       }));
       return;
     }
-    const parsed = JSON.parse(toolResult.content);
-    assert.equal(parsed.schema, 'visual_perception_v1');
-    assert.equal(parsed.answers[0].answer, 'HELLO');
+    sequence.push('final');
+    assert.match(serialized, /PROXY_VISUAL_EVIDENCE/);
+    assert.match(serialized, /text_too_small/);
+    assert.doesNotMatch(serialized, /PROXY_VISUAL_INPUT/);
+    assert.doesNotMatch(serialized, /PROXY_HISTORICAL_VISUAL/);
+    assert.doesNotMatch(serialized, /VisualInspect/);
+    assert.equal(serialized.includes(base64), false);
+    assert.ok((payload.tools || []).some((tool) => tool.name === 'Bash'));
     res.end(JSON.stringify({
       id: 'done', type: 'message', role: 'assistant', model: 'm',
-      content: [{ type: 'text', text: 'DIRECTED_DONE' }], stop_reason: 'end_turn',
-      usage: { input_tokens: 1, output_tokens: 1 },
+      content: [{ type: 'tool_use', id: 'bash-1', name: 'Bash', input: { command: 'crop-or-reread-if-needed' } }],
+      stop_reason: 'tool_use', usage: {},
     }));
   });
 
   const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    vllmVisionUrl: vision.url,
-    vllmVisionModel: 'vision-model',
-    vllmVisionProvider: 'vllm',
-    vllmVisionThink: false,
-    visionOrchestrationMode: 'directed',
+    vllmBaseUrl: base.url, vllmVisionUrl: vision.url, vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm', vllmVisionThink: false, visionOrchestrationMode: 'directed',
   }));
   const proxyUrl = await listen(proxy);
-  t.after(() => vision.server.close());
-  t.after(() => base.server.close());
-  t.after(() => proxy.close());
+  t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
 
-  const base64 = png.toString('base64');
   const response = await fetch(`${proxyUrl}/v1/messages`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
       model: 'm', stream: false,
-      messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }],
+      tools: [{ name: 'Bash', description: 'shell', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: 'Check this screenshot.' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
+      ] }],
     }),
   });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'DIRECTED_DONE');
-  assert.deepEqual(sequence, ['base1', 'vision', 'base2']);
-  assert.equal(visionBodies.length, 1);
+  const body = await response.json();
+  assert.equal(body.content[0].name, 'Bash');
+  assert.deepEqual(sequence, ['planning', 'vision', 'final']);
   assert.equal(baseBodies.length, 2);
-
-  const firstSerialized = JSON.stringify(baseBodies[0]);
-  assert.match(firstSerialized, /\[PROXY_VISUAL_ASSET\]/);
-  assert.match(firstSerialized, /visual-1/);
-  assert.equal(firstSerialized.includes(base64), false);
-  assert.ok(baseBodies[0].tools.some((tool) => tool.name === 'VisualInspect'));
-  assert.doesNotMatch(String(baseBodies[0].system || ''), /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
+  assert.equal(visionBodies.length, 1);
 });
 
-test('V0.29.44 directed continuation suppresses historical images instead of re-registering them', async (t) => {
+test('V0.29.46 directed historical images are removed entirely and do not trigger planning or Vision', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   let observed;
   let visionCalls = 0;
-  const vision = await startJsonServer(async (_req, res) => {
-    visionCalls += 1;
-    res.writeHead(500, { 'content-type': 'application/json' });
-    res.end('{}');
-  });
+  let baseCalls = 0;
+  const vision = await startJsonServer(async (_req, res) => { visionCalls += 1; res.writeHead(500); res.end('{}'); });
   const base = await startJsonServer(async (req, res) => {
+    baseCalls += 1;
     observed = JSON.parse((await read(req)).toString());
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      id: 'done', type: 'message', role: 'assistant', model: 'm',
-      content: [{ type: 'text', text: 'HISTORY_SUPPRESSED' }], stop_reason: 'end_turn', usage: {},
-    }));
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'NO_VISUAL_STATE'}],stop_reason:'end_turn',usage:{} }));
   });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    vllmVisionUrl: vision.url,
-    vllmVisionModel: 'vision-model',
-    vllmVisionProvider: 'vllm',
-    visionOrchestrationMode: 'directed',
-  }));
+  const proxy = createProxyServer(config({ vllmBaseUrl: base.url, vllmVisionUrl: vision.url, vllmVisionModel: 'vision-model', vllmVisionProvider: 'vllm', visionOrchestrationMode: 'directed' }));
   const proxyUrl = await listen(proxy);
   t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
-
   const messages = [
     { role: 'assistant', content: [{ type: 'tool_use', id: 'read-old', name: 'Read', input: { file_path: '/tmp/old.png' } }] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old', content: [{
-      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
-    }] }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } }] }] },
     { role: 'assistant', content: [{ type: 'tool_use', id: 'bash-now', name: 'Bash', input: { command: 'ls' } }] },
     { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'bash-now', content: 'ok' }] },
   ];
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'm', stream: false, messages }),
-  });
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({model:'m',stream:false,messages}) });
   assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'HISTORY_SUPPRESSED');
   assert.equal(visionCalls, 0);
+  assert.equal(baseCalls, 1);
   const serialized = JSON.stringify(observed);
-  assert.match(serialized, /\[PROXY_HISTORICAL_VISUAL\]/);
-  assert.doesNotMatch(serialized, /\[PROXY_VISUAL_ASSET\]/);
   assert.equal(serialized.includes(base64), false);
-  assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
+  assert.doesNotMatch(serialized, /PROXY_HISTORICAL_VISUAL|PROXY_VISUAL_INPUT|PROXY_VISUAL_EVIDENCE|VisualInspect/);
 });
 
-test('V0.29.44 directed continuation registers only the latest reacquired image', async (t) => {
+test('V0.29.46 directed fresh image may precede reminder messages in the current interaction tail', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
-  let observed;
-  const base = await startJsonServer(async (req, res) => {
-    observed = JSON.parse((await read(req)).toString());
-    res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({
-      id: 'done', type: 'message', role: 'assistant', model: 'm',
-      content: [{ type: 'text', text: 'LATEST_ONLY' }], stop_reason: 'end_turn', usage: {},
-    }));
-  });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    vllmVisionUrl: 'http://127.0.0.1:9',
-    vllmVisionModel: 'vision-model',
-    vllmVisionProvider: 'vllm',
-    visionOrchestrationMode: 'directed',
-  }));
-  const proxyUrl = await listen(proxy);
-  t.after(() => base.server.close()); t.after(() => proxy.close());
-
-  const messages = [
-    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-old', name: 'Read', input: { file_path: '/tmp/old.png' } }] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old', content: [{
-      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
-    }] }] },
-    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-new', name: 'Read', input: { file_path: '/tmp/new.png' } }] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-new', content: [{
-      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
-    }] }] },
-  ];
-  const response = await fetch(`${proxyUrl}/v1/messages`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'm', stream: false, messages }),
-  });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).content[0].text, 'LATEST_ONLY');
-  const serialized = JSON.stringify(observed);
-  const serializedMessages = JSON.stringify(observed.messages);
-  assert.equal((serializedMessages.match(/\[PROXY_HISTORICAL_VISUAL\]/g) || []).length, 1);
-  assert.equal((serializedMessages.match(/\[PROXY_VISUAL_ASSET\]/g) || []).length, 1);
-  assert.equal(serialized.includes(base64), false);
-  assert.ok((observed.tools || []).some((tool) => tool.name === 'VisualInspect'));
-});
-
-test('V0.29.44 directed count_tokens exposes descriptor and VisualInspect schema without executing Vision', async (t) => {
-  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let baseCall = 0;
   let visionCalls = 0;
   const vision = await startJsonServer(async (_req, res) => {
     visionCalls += 1;
-    res.writeHead(500, { 'content-type': 'application/json' });
-    res.end('{}');
-  });
-  let observed;
-  const base = await startJsonServer(async (req, res) => {
-    assert.equal(req.url, '/v1/messages/count_tokens');
-    observed = JSON.parse((await read(req)).toString());
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ input_tokens: 321 }));
+    res.end(JSON.stringify({ choices:[{message:{content:JSON.stringify({schema:'visual_perception_v1',asset_id:'visual-1',status:'complete',answers:[{question_id:'q1',status:'answered',answer:'visible',evidence:[],uncertainty:''}],follow_up_regions:[]})}}] }));
   });
-  const proxy = createProxyServer(config({
-    vllmBaseUrl: base.url,
-    vllmVisionUrl: vision.url,
-    vllmVisionModel: 'vision-model',
-    vllmVisionProvider: 'vllm',
-    visionOrchestrationMode: 'directed',
-  }));
+  const base = await startJsonServer(async (req, res) => {
+    baseCall += 1;
+    const body = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (JSON.stringify(body).includes('VCC_DIRECTED_VISUAL_PLANNING_V1')) {
+      res.end(JSON.stringify({ id:'p',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema:'visual_perception_plan_v1',assets:[{asset_id:'visual-1',objective:'inspect',questions:[{id:'q1',question:'what is visible?'}]}]})}],stop_reason:'end_turn',usage:{} }));
+    } else {
+      assert.match(JSON.stringify(body), /PROXY_VISUAL_EVIDENCE/);
+      res.end(JSON.stringify({ id:'d',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'TAIL_OK'}],stop_reason:'end_turn',usage:{} }));
+    }
+  });
+  const proxy = createProxyServer(config({ vllmBaseUrl:base.url,vllmVisionUrl:vision.url,vllmVisionModel:'vision-model',vllmVisionProvider:'vllm',visionOrchestrationMode:'directed' }));
   const proxyUrl = await listen(proxy);
   t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:false,messages:[
+    {role:'assistant',content:[{type:'text',text:'previous answer'}]},
+    {role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:base64}}]},
+    {role:'user',content:[{type:'text',text:'<system-reminder>current interaction reminder</system-reminder>'}]},
+  ]}) });
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).content[0].text,'TAIL_OK');
+  assert.equal(baseCall,2);
+  assert.equal(visionCalls,1);
+});
 
-  const response = await fetch(`${proxyUrl}/v1/messages/count_tokens`, {
-    method: 'POST', headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ model: 'm', messages: [{ role: 'user', content: [{
-      type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') },
-    }] }] }),
-  });
-  assert.equal(response.status, 200);
-  assert.equal((await response.json()).input_tokens, 321);
-  assert.equal(visionCalls, 0);
-  assert.match(JSON.stringify(observed.messages), /\[PROXY_VISUAL_ASSET\]/);
-  assert.ok(observed.tools.some((tool) => tool.name === 'VisualInspect'));
+test('V0.29.46 directed count_tokens uses current image metadata only and never executes planning or Vision', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let visionCalls = 0;
+  const vision = await startJsonServer(async (_req,res)=>{visionCalls+=1;res.writeHead(500);res.end('{}');});
+  let observed;
+  const base = await startJsonServer(async (req,res)=>{observed=JSON.parse((await read(req)).toString());res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({input_tokens:321}));});
+  const proxy=createProxyServer(config({vllmBaseUrl:base.url,vllmVisionUrl:vision.url,vllmVisionModel:'vision-model',vllmVisionProvider:'vllm',visionOrchestrationMode:'directed'}));
+  const proxyUrl=await listen(proxy); t.after(()=>vision.server.close());t.after(()=>base.server.close());t.after(()=>proxy.close());
+  const response=await fetch(`${proxyUrl}/v1/messages/count_tokens`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',messages:[{role:'user',content:[{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}]})});
+  assert.equal(response.status,200); assert.equal((await response.json()).input_tokens,321); assert.equal(visionCalls,0);
+  const serialized=JSON.stringify(observed);
+  assert.match(serialized,/PROXY_VISUAL_INPUT/);
+  assert.doesNotMatch(serialized,/VisualInspect|PROXY_HISTORICAL_VISUAL/);
 });
 
 test('V0.29.44 directed mode leaves PDF on the legacy PDF evidence pipeline', async (t) => {
@@ -4540,7 +4479,7 @@ test('V0.29.44 directed mode leaves PDF on the legacy PDF evidence pipeline', as
   assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
 });
 
-test('V0.29.45 directed historical-only continuation does not advertise active media progress', async (t) => {
+test('V0.29.46 directed historical-only continuation does not advertise active media progress', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   const logs = [];
@@ -4594,6 +4533,5 @@ test('V0.29.45 directed historical-only continuation does not advertise active m
   assert.doesNotMatch(wire, /正在請模型規劃下一步/);
   assert.equal(logs.some((entry) => entry.event === 'managed_task_progress'
     && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
-  assert.match(JSON.stringify(observed), /\[PROXY_HISTORICAL_VISUAL\]/);
-  assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
+  assert.doesNotMatch(JSON.stringify(observed), /PROXY_HISTORICAL_VISUAL|PROXY_VISUAL_INPUT|PROXY_VISUAL_EVIDENCE|VisualInspect/);
 });

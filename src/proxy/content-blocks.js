@@ -33,13 +33,15 @@ async function adaptBlock(block, adapters, context, depth = 0, ancestors = new W
   if (Array.isArray(block.content)) {
     clone.content = [];
     for (let index = 0; index < block.content.length; index += 1) {
-      clone.content.push(await adaptBlock(block.content[index], adapters, {
+      const adapted = await adaptBlock(block.content[index], adapters, {
         ...context,
         path: [...context.path, 'content', index],
         parentType: block.type,
         toolUseId: block.tool_use_id || context.toolUseId,
-      }, depth + 1, ancestors));
+      }, depth + 1, ancestors);
+      if (adapted !== null && adapted !== undefined) clone.content.push(adapted);
     }
+    if (block.type === 'tool_result' && clone.content.length === 0) clone.content = '';
   }
   return clone;
   } finally {
@@ -56,13 +58,14 @@ export async function adaptMessages(messages, adapters = {}) {
     if (Array.isArray(message.content)) {
       clone.content = [];
       for (let blockIndex = 0; blockIndex < message.content.length; blockIndex += 1) {
-        clone.content.push(await adaptBlock(message.content[blockIndex], adapters, {
+        const adapted = await adaptBlock(message.content[blockIndex], adapters, {
           messageIndex,
           path: ['messages', messageIndex, 'content', blockIndex],
           role: message.role,
           parentType: null,
           toolUseId: null,
-        }, 0, new WeakSet()));
+        }, 0, new WeakSet());
+        if (adapted !== null && adapted !== undefined) clone.content.push(adapted);
       }
     } else if (typeof message.content === 'string') {
       clone.content = message.content;

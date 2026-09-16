@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.45'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.45'
+test "$(node -p "require('./package.json').version")" = '0.29.46'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.46'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.45'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.46'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1196,28 +1196,42 @@ node --test test/config.test.js --test-name-pattern='V0.29.43 runtime clock'
 node --test test/proxy-server.test.js --test-name-pattern='V0.29.43 injects a second-precision'
 
 
-# V0.29.44 Main-directed external image Vision contract
+# V0.29.44 directed-mode configuration and legacy routing history
 test -f src/visual/directed-vision.js
 test -f change_log/V0.29.44-更新說明.md
 test -f change_log/V0.29.44-實作與驗證報告.md
 grep -Fq 'V0.29.44 Main-Directed External Image Vision' README.md
 grep -q '^VISION_ORCHESTRATION_MODE=legacy$' .env.example
 grep -Fq 'VISION_ORCHESTRATION_MODE: ${VISION_ORCHESTRATION_MODE:-legacy}' compose.yaml
-grep -Fq "DIRECTED_VISUAL_TOOL_NAME = 'VisualInspect'" src/visual/directed-vision.js
 grep -Fq 'visual_perception_v1' src/visual/directed-vision.js
 ! grep -Fq 'request_image_crop' src/visual/directed-vision.js
-grep -Fq 'directed_visual_cache_bypassed' src/services/proxy-server.js
-grep -Fq 'executeDirectedVisualInspect' src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.44' test/config.test.js test/directed-vision.test.js test/media-adapters.test.js test/managed-loop.test.js test/native-vision-routing.test.js test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.44 directed mode leaves PDF' test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.44 exposes opt-in' test/deployment.test.js
 
 
-# V0.29.45 active-media progress isolation contract
+# V0.29.45 active-media progress isolation history
 test -f change_log/V0.29.45-更新說明.md
 test -f change_log/V0.29.45-實作與驗證報告.md
 grep -Fq 'V0.29.45 Active-Media Progress Isolation' README.md
 grep -Fq 'const hasActiveMedia = activeMediaCount > 0' src/services/proxy-server.js
 grep -Fq 'request.stream === true && hasActiveMedia && !allMediaCached' src/services/proxy-server.js
 grep -Fq 'showInitialModelProgress: hasActiveMedia' src/services/proxy-server.js
-node --test --test-name-pattern='V0.29.45 directed historical-only continuation' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.46 directed historical-only continuation' test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.45 separates historical media cleanup' test/deployment.test.js
+
+
+# V0.29.46 stateless one-shot Directed Vision contract
+test -f change_log/V0.29.46-更新說明.md
+test -f change_log/V0.29.46-實作與驗證報告.md
+grep -Fq 'V0.29.46 Stateless One-Shot Directed Vision' README.md
+grep -Fq 'VCC_DIRECTED_VISUAL_PLANNING_V1' src/visual/directed-vision.js
+grep -Fq 'visual_perception_plan_v1' src/visual/directed-vision.js
+grep -Fq 'PROXY_VISUAL_EVIDENCE' src/visual/directed-vision.js
+grep -Fq 'buildDirectedPlanningRequest' src/services/proxy-server.js
+grep -Fq 'executeDirectedPerception' src/services/proxy-server.js
+grep -Fq 'injectDirectedPerceptionEvidence' src/services/proxy-server.js
+grep -Fq 'currentInteractionStartIndex' src/services/proxy-server.js
+! grep -Rq 'DIRECTED_VISUAL_TOOL_NAME\|executeDirectedVisualInspect\|isDirectedVisualToolName\|PROXY_HISTORICAL_VISUAL' src
+node --test test/v02946-directed-one-shot.test.js
+node --test --test-name-pattern='V0.29.46 directed' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.46 directed image Vision is one-shot' test/deployment.test.js

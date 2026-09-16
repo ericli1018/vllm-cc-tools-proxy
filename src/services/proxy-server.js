@@ -37,9 +37,10 @@ import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetr
 import { injectRuntimeClockReminder } from '../proxy/runtime-clock.js';
 import {
   DirectedVisualStore,
-  directedVisualToolDefinition,
-  executeDirectedVisualInspect,
-  isDirectedVisualToolName,
+  buildDirectedPlanningRequest,
+  parseDirectedPlanningResponse,
+  executeDirectedPerception,
+  injectDirectedPerceptionEvidence,
 } from '../visual/directed-vision.js';
 import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount } from '../proxy/anthropic-usage.js';
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
@@ -55,6 +56,14 @@ import {
   extractLanguageRepairSegmentFromAnthropic,
   rewriteFinalSegmentsWithExternalProcessor,
 } from './final-language-repair.js';
+
+function currentInteractionStartIndex(messages) {
+  if (!Array.isArray(messages)) return 0;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (messages[index]?.role === 'assistant') return index + 1;
+  }
+  return 0;
+}
 
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
@@ -1864,9 +1873,9 @@ export function createProxyServer(config, dependencies = {}) {
         const directedVisionCandidates = config.visionOrchestrationMode === 'directed'
           ? mediaInventory.descriptors.filter((entry) => entry.kind === 'image' && !nativeVisionPassthroughPaths.has(entry.pathKey))
           : [];
-        const directedFreshMessageIndex = request.messages.length - 1;
-        const directedVisionEligible = directedVisionCandidates.filter((entry) => entry.path?.[0] === 'messages' && entry.path?.[1] === directedFreshMessageIndex);
-        const directedHistorical = directedVisionCandidates.filter((entry) => !(entry.path?.[0] === 'messages' && entry.path?.[1] === directedFreshMessageIndex));
+        const directedInteractionStartIndex = currentInteractionStartIndex(request.messages);
+        const directedVisionEligible = directedVisionCandidates.filter((entry) => entry.path?.[0] === 'messages' && Number(entry.path?.[1]) >= directedInteractionStartIndex);
+        const directedHistorical = directedVisionCandidates.filter((entry) => !(entry.path?.[0] === 'messages' && Number(entry.path?.[1]) >= directedInteractionStartIndex));
         directedVisionEligibleCount = directedVisionEligible.length;
         directedVisionPaths = new Set(directedVisionEligible.map((entry) => entry.pathKey));
         directedHistoricalPaths = new Set(directedHistorical.map((entry) => entry.pathKey));
@@ -1887,14 +1896,14 @@ export function createProxyServer(config, dependencies = {}) {
         }
         if (directedVisionEligibleCount > 0) {
           directedVisualStore = new DirectedVisualStore();
-          if (messagesPath === '/v1/messages') hasManagedLoop = true;
           log(config, 'info', 'directed_vision_route_selected', {
             requestId,
             eligible_image_count: directedVisionEligibleCount,
             source_kinds: [...new Set(directedVisionEligible.map((entry) => entry.sourceKind))].sort(),
-            orchestration_mode: 'directed',
+            orchestration_mode: 'directed_one_shot',
             proxy_crop_enabled: false,
             semantic_cache_enabled: false,
+            historical_visual_context: false,
           });
         }
         if (nativeVisionEligibleCount > 0) {
@@ -2221,9 +2230,56 @@ export function createProxyServer(config, dependencies = {}) {
         if (hasActiveMedia && !allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
-        if (directedVisualStore?.size > 0) {
-          const tools = Array.isArray(request.tools) ? request.tools.filter((tool) => tool?.name !== 'VisualInspect') : [];
-          request = { ...request, tools: [...tools, directedVisualToolDefinition()] };
+        if (directedVisualStore?.size > 0 && messagesPath === '/v1/messages') {
+          requestStage = 'directed_perception_planning';
+          await onProgress('正在請主模型規劃圖片分析需求…', { phase: 'directed_perception_planning' });
+          log(config, 'info', 'directed_perception_planning_started', {
+            requestId, asset_count: directedVisualStore.size,
+          });
+          const planningRequest = buildDirectedPlanningRequest(request, directedVisualStore);
+          const planningResponse = await callUpstreamJson(
+            planningRequest, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent },
+          );
+          const perceptionPlan = parseDirectedPlanningResponse(planningResponse, directedVisualStore);
+          log(config, 'info', 'directed_perception_planning_completed', {
+            requestId, asset_count: perceptionPlan.assets.length,
+            question_count: perceptionPlan.assets.reduce((total, asset) => total + asset.questions.length, 0),
+          });
+          const evidenceByAssetId = new Map();
+          for (const assetPlan of perceptionPlan.assets) {
+            await onProgress('正在依照模型需求分析圖片…', { phase: 'directed_perception_sensor' });
+            let result;
+            try {
+              result = await executeDirectedPerception(directedVisualStore, assetPlan, config, abortController.signal, {
+                acquireVision: (options) => admission.acquireVision(options),
+                onEvent: (event, fields) => log(
+                  config,
+                  event.endsWith('_failed') ? 'warn' : 'info',
+                  event,
+                  { requestId, ...fields },
+                ),
+              });
+            } catch (error) {
+              result = {
+                schema: 'visual_perception_error_v1',
+                asset_id: assetPlan.asset_id,
+                status: 'error',
+                error: {
+                  code: String(error?.code || error?.name || 'directed_perception_failed').slice(0, 100),
+                  message: String(error?.message || 'Directed visual perception failed.').slice(0, 1000),
+                  retryable: Boolean(error?.retryable),
+                },
+              };
+            }
+            evidenceByAssetId.set(assetPlan.asset_id, { plan: assetPlan, result });
+          }
+          request.messages = injectDirectedPerceptionEvidence(request.messages, evidenceByAssetId);
+          directedVisualStore.clear();
+          log(config, 'info', 'directed_perception_evidence_injected', {
+            requestId, asset_count: evidenceByAssetId.size,
+          });
+        } else if (directedVisualStore?.size > 0 && messagesPath === '/v1/messages/count_tokens') {
+          directedVisualStore.clear();
         }
         const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisionEligibleCount);
         if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
@@ -2404,17 +2460,6 @@ export function createProxyServer(config, dependencies = {}) {
         let result = await runManagedLoop(request, {
           upstream,
           executeTool: (toolUse, signal) => {
-            if (isDirectedVisualToolName(toolUse?.name)) {
-              return executeDirectedVisualInspect(directedVisualStore, toolUse.input, config, signal, {
-                acquireVision: (options) => admission.acquireVision(options),
-                onEvent: (event, fields) => log(
-                  config,
-                  event.endsWith('_failed') ? 'warn' : 'info',
-                  event,
-                  { requestId, ...fields },
-                ),
-              });
-            }
             return executeManagedTool(toolUse, config, signal, {
               model: request.model || '',
               policy: managedWebPolicyEnforcer.consume(toolUse.name),

@@ -20,7 +20,6 @@ import {
 import { injectManagedWebResultInstruction, renderManagedToolResult } from './web-result-contract.js';
 import { collectRequestProtocolSnippets, collectResponseAnomalySnippets } from './protocol-diagnostics.js';
 import { prepareContinuationState } from './continuation-state.js';
-import { isDirectedVisualToolName } from '../visual/directed-vision.js';
 import {
   isToolSearchToolName,
   executeLocalToolSearch,
@@ -1005,70 +1004,6 @@ export async function runManagedLoop(initialRequest, {
       if (request.tool_choice?.type === 'tool' && isToolSearchToolName(request.tool_choice?.name)) {
         request.tool_choice = { type: 'auto' };
       }
-      continue;
-    }
-    const directedVisualUses = toolUses.filter((block) => isDirectedVisualToolName(block?.name));
-    if (directedVisualUses.length > 0) {
-      const actionSignature = managedActionSignature(directedVisualUses);
-      if (previousManagedActionSignature === actionSignature) {
-        await onDiagnostic('managed_no_progress_detected', {
-          round: round + 1,
-          tool_names: directedVisualUses.map((block) => String(block?.name || '')),
-        });
-        throw new HttpError(422, 'Managed tool loop repeated the exact same action without progress.', {
-          code: 'managed_no_progress',
-          retryable: false,
-        });
-      }
-      previousManagedActionSignature = actionSignature;
-      const results = await Promise.all(directedVisualUses.map(async (toolUse) => {
-        await onProgress(progressMessage(toolUse.name, toolUse.input, 'start', locale), {
-          phase: 'managed_tool_start', name: String(toolUse.name || ''), round: round + 1, force: true,
-        });
-        try {
-          const remaining = remainingTaskMs();
-          if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
-          const output = taskDeadlineEnabled
-            ? await runWithBoundedTime(
-              (boundedSignal) => executeTool(toolUse, boundedSignal),
-              { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
-            )
-            : await executeTool(toolUse, signal);
-          const neutralOutput = neutralizeProtocolValue(output);
-          await onProgress(progressMessage(toolUse.name, toolUse.input, 'done', locale), {
-            phase: 'managed_tool_done', name: String(toolUse.name || ''), round: round + 1,
-          });
-          await onDiagnostic('directed_visual_tool_executed', {
-            round: round + 1,
-            tool_name: String(toolUse.name || ''),
-            tool_use_id: String(toolUse.id || ''),
-          });
-          return {
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(neutralOutput),
-          };
-        } catch (error) {
-          if (error instanceof HttpError && error.code === 'managed_task_timeout') throw error;
-          if (!(error instanceof HttpError)) throw error;
-          await onProgress(progressMessage(toolUse.name, toolUse.input, 'error', locale), {
-            phase: 'managed_tool_error', name: String(toolUse.name || ''), round: round + 1, code: error.code,
-          });
-          return {
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            is_error: true,
-            content: JSON.stringify(neutralizeProtocolValue(safeToolError(error))),
-          };
-        }
-      }));
-      request.messages.push({
-        role: 'assistant',
-        content: (Array.isArray(response?.content) ? response.content : [])
-          .filter((block) => block?.type !== 'tool_use' || isDirectedVisualToolName(block?.name))
-          .map((block) => structuredClone(block)),
-      });
-      request.messages.push({ role: 'user', content: results });
       continue;
     }
     if (typeof diagnosticPassthroughWebTools === 'function' && toolUses.some((block) => isManagedToolName(block.name))) {

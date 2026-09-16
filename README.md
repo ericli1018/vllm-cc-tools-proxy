@@ -1,8 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.45 fixes Directed Vision continuation UI so historical images remain transcript-cleanup inputs only and no longer make a new request look like it contains active media. `hasMedia` remains responsible for historical-media sanitization, while `hasActiveMedia` alone drives media bootstrap, media progress, media-ready messages, media heartbeat rendering, and the initial model-planning progress row. V0.29.44 Main-directed `VisualInspect`, Fresh Image Only semantics, PDF/Native Vision isolation, V0.29.43 runtime clock, startup-card ownership, statusLine/preview, ToolSearch, WebSearch/WebFetch, Compact and bounded recovery remain intact.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.46 replaces the previous Directed Vision `VisualInspect`/Managed-Loop design with a stateless one-shot perception pipeline: a fresh image always triggers hidden Main-model perception planning, exactly one external Vision sensor pass per image, and then the normal final Main-model request with structured current-turn evidence. Historical directed images, descriptors and Vision evidence are not re-injected. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
 
 
+
+
+## V0.29.46 Stateless One-Shot Directed Vision
+
+When `VISION_ORCHESTRATION_MODE=directed`, ordinary external images now use a one-shot pipeline rather than a Proxy-managed visual tool loop:
+
+```text
+Main/Claude Code intentionally acquires image
+  -> Proxy keeps only the current interaction image in ephemeral request-local memory
+  -> hidden Main perception-planning pass decides WHAT observable facts are required
+  -> external Vision receives that plan + image exactly once
+  -> Vision returns structured `visual_perception_v1` JSON, including uncertainty/follow-up regions
+  -> Proxy injects that current-turn evidence into the normal Main request
+  -> Proxy visual orchestration stops
+  -> Main decides any later Bash/Read/crop/reacquisition through normal Claude Code tools
+```
+
+There is no `need_visual` branch: the presence of a fresh image is already the Main model's visual intent. The planning pass must cover every fresh current-interaction image and only decides the objective/questions. It has no client tools and cannot solve the user's task.
+
+Directed image state is ephemeral. Historical image blocks are removed from the Base-bound transformed history instead of becoming historical markers; no previous asset id, descriptor, Vision JSON, MediaCache value or MediaContinuationCache value is re-injected into the Main model. If the Main model needs an earlier image again, it must explicitly reacquire it with Claude Code `Read`/`Bash`, exactly like rereading an ordinary file. Freshness is based on the current interaction tail (messages after the most recent assistant turn), so a newly returned image remains fresh even if Claude Code appends a system-reminder/user context message after it.
+
+The previous Proxy-internal `VisualInspect` declaration/dispatcher and Directed-Vision Managed Loop have been removed. Vision performs no automatic crop, zoom, tile, semantic retry or follow-up round. A partial/unreadable Vision result may contain normalized `follow_up_regions`; the final Main model decides whether to reacquire a higher-resolution region. A Vision service/schema failure is injected once as bounded current-turn sensor error evidence so the Main model can decide what to do next; the Proxy does not retry semantically.
+
+`/v1/messages/count_tokens` never runs planning or Vision; it counts the bounded current-image metadata placeholder only. PDF processing, Native Vision raw passthrough and `VISION_ORCHESTRATION_MODE=legacy` retain their existing behavior.
 
 ## V0.29.45 Active-Media Progress Isolation
 

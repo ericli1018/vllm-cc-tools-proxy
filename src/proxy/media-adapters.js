@@ -7,7 +7,7 @@ import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage 
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
 import { analyzeGenericZoomFallback } from '../visual/generic-zoom.js';
-import { formatDirectedVisualDescriptor, formatHistoricalDirectedVisualMarker } from '../visual/directed-vision.js';
+import { formatDirectedVisualInput } from '../visual/directed-vision.js';
 import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
@@ -298,10 +298,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             source_kind: provenance.sourceKind,
             has_source_ref: Boolean(provenance.readSourceRef),
           });
-          return {
-            type: 'text',
-            text: formatHistoricalDirectedVisualMarker({ filename, sourceKind: provenance.sourceKind }),
-          };
+          return null;
         }
         if (!directedVisualStore || typeof directedVisualStore.register !== 'function') {
           throw new HttpError(500, 'Directed visual store is unavailable for this request.', { code: 'directed_visual_store_unavailable' });
@@ -335,7 +332,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           source_kind: asset.sourceKind,
           has_source_ref: Boolean(asset.sourceRef),
         });
-        return { type: 'text', text: formatDirectedVisualDescriptor(asset) };
+        return { type: 'text', text: formatDirectedVisualInput(asset) };
       }
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       const fallback = {

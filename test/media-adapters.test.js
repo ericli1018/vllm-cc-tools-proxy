@@ -647,7 +647,7 @@ test('V0.29.9 terminal unavailable image evidence is continuation-reusable but n
   assert.equal(continuationWrites[0].value.cacheable, false);
 });
 
-test('V0.29.44 directed image mode registers request-local asset without eager Vision or semantic cache', async () => {
+test('V0.29.46 directed image mode registers ephemeral planning input without eager Vision or semantic cache', async () => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   let visionCalls = 0;
   let cacheReads = 0;
@@ -706,10 +706,10 @@ test('V0.29.44 directed image mode registers request-local asset without eager V
   assert.deepEqual(registered[0].buffer, Buffer.from('normalized-image'));
   assert.equal(registered[0].sourceRef, '/workspace/screen.png');
   assert.equal(output.type, 'text');
-  assert.match(output.text, /PROXY_VISUAL_ASSET/);
+  assert.match(output.text, /PROXY_VISUAL_INPUT/);
   assert.match(output.text, /"asset_id":"visual-1"/);
   assert.match(output.text, /"received_width":1568/);
   assert.match(output.text, /"normalized_width":1200/);
-  assert.match(output.text, /VisualInspect/);
+  assert.doesNotMatch(output.text, /VisualInspect/);
   assert.equal(output.text.includes(png.toString('base64')), false);
 });

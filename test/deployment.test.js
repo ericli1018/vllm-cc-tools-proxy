@@ -819,11 +819,11 @@ test('V0.29.44 exposes opt-in Main-directed image Vision while preserving PDF an
   assert.match(configSource, /VISION_ORCHESTRATION_MODE/);
   assert.match(envExample, /^VISION_ORCHESTRATION_MODE=legacy$/m);
   assert.match(compose, /VISION_ORCHESTRATION_MODE: \$\{VISION_ORCHESTRATION_MODE:-legacy\}/);
-  assert.match(directedSource, /DIRECTED_VISUAL_TOOL_NAME = 'VisualInspect'/);
+  assert.match(directedSource, /visual_perception_v1/);
   assert.match(directedSource, /visual_perception_v1/);
   assert.doesNotMatch(directedSource, /request_image_crop/);
   assert.match(serverSource, /directed_visual_cache_bypassed/);
-  assert.match(serverSource, /executeDirectedVisualInspect/);
+  assert.match(serverSource, /directed_visual_cache_bypassed/);
   assert.match(readme, /V0\.29\.44 Main-Directed External Image Vision/);
   assert.match(readme, /PDF \/ PDF-derived document pipeline\s+-> existing V0\.29\.43 PDF path/);
   assert.ok(changeLogEntries.includes('V0.29.44-更新說明.md'));
@@ -841,4 +841,21 @@ test('V0.29.45 separates historical media cleanup from active-media progress', a
   assert.match(readme, /V0\.29\.45 Active-Media Progress Isolation/);
   assert.ok(changeLogEntries.includes('V0.29.45-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.45-實作與驗證報告.md'));
+});
+
+
+test('V0.29.46 directed image Vision is one-shot and stateless', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const directedSource = await fs.readFile(new URL('../src/visual/directed-vision.js', import.meta.url), 'utf8');
+  const mediaSource = await fs.readFile(new URL('../src/proxy/media-adapters.js', import.meta.url), 'utf8');
+  assert.match(directedSource, /VCC_DIRECTED_VISUAL_PLANNING_V1/);
+  assert.match(directedSource, /visual_perception_plan_v1/);
+  assert.match(directedSource, /PROXY_VISUAL_EVIDENCE/);
+  assert.match(serverSource, /buildDirectedPlanningRequest/);
+  assert.match(serverSource, /executeDirectedPerception/);
+  assert.match(serverSource, /injectDirectedPerceptionEvidence/);
+  assert.match(serverSource, /currentInteractionStartIndex/);
+  assert.doesNotMatch(serverSource, /directedVisualToolDefinition|executeDirectedVisualInspect|isDirectedVisualToolName/);
+  assert.doesNotMatch(directedSource, /DIRECTED_VISUAL_TOOL_NAME|VisualInspect|PROXY_HISTORICAL_VISUAL/);
+  assert.doesNotMatch(mediaSource, /formatHistoricalDirectedVisualMarker/);
 });
