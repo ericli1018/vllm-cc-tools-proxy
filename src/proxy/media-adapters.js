@@ -245,6 +245,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const provenance = {
         origin: tracked?.origin || 'direct',
         originTool: tracked?.originTool || '',
+        toolUseId: context.toolUseId || '',
         sourceKind: tracked?.sourceKind || 'direct_image',
         readSourceRef: tracked?.readSourceRef || '',
         requestedPages: Array.isArray(tracked?.pageScope?.pages) ? tracked.pageScope.pages : null,

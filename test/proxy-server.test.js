@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.6', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.7', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.6/);
+  assert.match(first, /VERSION\s+0\.30\.7/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.6');
+  assert.equal(payload.version, '0.30.7');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.6/);
+  assert.match(payload.display, /CCTP 0\.30\.7/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4820,7 +4820,7 @@ test('V0.30.6 planner tool_missing falls back with the same Main context and sti
   assert.equal(mainCalls,1);
 });
 
-test('V0.30.6 resolved historical image reuses visual evidence without rerunning Planner or Vision', async (t) => {
+test('V0.30.7 resolver-approved historical image reuses visual evidence without rerunning Planner or Vision', async (t) => {
   const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
   const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
   let plannerCalls=0, visionCalls=0, mainCalls=0;
@@ -4828,6 +4828,10 @@ test('V0.30.6 resolved historical image reuses visual evidence without rerunning
   const base=await startJsonServer(async (req,res)=>{
     const payload=JSON.parse((await read(req)).toString());
     res.writeHead(200,{'content-type':'application/json'});
+    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_RESOLVER_V1')) {
+      res.end(JSON.stringify({id:'resolve',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'r',name:'resolve_visual_intent',input:{action:'reuse',source_ids:['img_01'],reason:'Current question assessed against stored evidence.'}}],stop_reason:'tool_use',usage:{}}));
+      return;
+    }
     if (String(payload.system||'').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
       plannerCalls += 1;
       res.end(JSON.stringify({id:'plan',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'p',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect screenshot',questions:[{id:'layout',question:'Any visual issue?'}],requested_evidence:['layout'],detail_level:'normal'}}],stop_reason:'end_turn',usage:{}}));
@@ -4853,7 +4857,7 @@ test('V0.30.6 resolved historical image reuses visual evidence without rerunning
   assert.equal(mainCalls,2);
 });
 
-test('V0.30.6 retryable failed historical image retries visual orchestration on the next continuation', async (t) => {
+test('V0.30.7 resolver-approved failed historical image retries visual orchestration on the next continuation', async (t) => {
   const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
   const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
   let primaryPlannerCalls=0, fallbackPlannerCalls=0, visionCalls=0, mainCalls=0;
@@ -4861,6 +4865,10 @@ test('V0.30.6 retryable failed historical image retries visual orchestration on 
   const base=await startJsonServer(async (req,res)=>{
     const payload=JSON.parse((await read(req)).toString());
     res.writeHead(200,{'content-type':'application/json'});
+    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_RESOLVER_V1')) {
+      res.end(JSON.stringify({id:'resolve',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'r',name:'resolve_visual_intent',input:{action:'inspect',source_ids:['img_01'],reason:'Current question assessed against stored evidence.'}}],stop_reason:'tool_use',usage:{}}));
+      return;
+    }
     const system=String(payload.system||'');
     if (system.includes('VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1')) {
       fallbackPlannerCalls += 1;

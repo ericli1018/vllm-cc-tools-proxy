@@ -7,7 +7,7 @@ export const VISUAL_QUERY_PLANNER_FALLBACK_MARKER = 'VCC_PROXY_VISUAL_PLANNER_FA
 
 const PLANNER_INSTRUCTION = `[${VISUAL_QUERY_PLANNER_MARKER}]
 You are the Proxy's internal visual perception planner.
-A fresh image source has been detected for the current task, but you do not receive image pixels.
+Image sources requiring observation have been selected for the current task, but you do not receive image pixels.
 Use the ENTIRE existing Main context to decide only WHAT observable facts should be inspected in the listed VCC_VISUAL_SOURCE handles.
 Do not answer the user's final task. Do not claim to see image content.
 You MUST call the internal ${VISUAL_QUERY_PLAN_TOOL} tool exactly once with the perception plan.
@@ -30,7 +30,7 @@ function appendSystem(system, text) {
 function plannerRequestText(sourceIds) {
   return [
     '[VCC_PROXY_VISUAL_PLANNER_REQUEST]',
-    `Fresh source_ids: ${JSON.stringify(sourceIds)}`,
+    `Selected source_ids: ${JSON.stringify(sourceIds)}`,
     'Use the complete existing Main request context, conversation, recent tool calls, filenames, and source metadata to decide what the Vision sensor should inspect.',
     `Call ${VISUAL_QUERY_PLAN_TOOL} exactly once.`,
   ].join('\n');
@@ -39,7 +39,7 @@ function plannerRequestText(sourceIds) {
 function visualPlanTool(sourceIds) {
   return {
     name: VISUAL_QUERY_PLAN_TOOL,
-    description: 'Submit the task-specific visual perception plan for the fresh VCC visual sources. This is an internal Proxy planner tool.',
+    description: 'Submit the task-specific visual perception plan for the selected VCC visual sources. This is an internal Proxy planner tool.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -77,6 +77,8 @@ export function buildVisualQueryPlannerRequest(request, { sourceIds = [] } = {})
   if (ids.length < 1) throw new HttpError(500, 'Visual planner requires at least one source.', { code:'visual_query_planner_sources_missing' });
   const clone = structuredClone(request || {});
   clone.stream = false;
+  delete clone.thinking;
+  delete clone.output_config;
   clone.system = appendSystem(clone.system, PLANNER_INSTRUCTION);
   clone.tools = [visualPlanTool(ids)];
   clone.tool_choice = { type: 'tool', name: VISUAL_QUERY_PLAN_TOOL };
@@ -92,6 +94,8 @@ export function buildVisualQueryPlannerFallbackRequest(request, { sourceIds = []
   if (ids.length < 1) throw new HttpError(500, 'Visual planner fallback requires at least one source.', { code:'visual_query_planner_sources_missing' });
   const clone = structuredClone(request || {});
   clone.stream = false;
+  delete clone.thinking;
+  delete clone.output_config;
   clone.system = appendSystem(clone.system, PLANNER_FALLBACK_INSTRUCTION);
   clone.tools = [];
   delete clone.tool_choice;

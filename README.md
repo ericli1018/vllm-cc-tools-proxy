@@ -1,6 +1,33 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.6 keeps the V0.30.5 full-context Proxy-owned Directed Visual flow and adds resilience around planner misses plus cross-continuation visual evidence state. The visual planner still sees the complete existing Main context; Ollama Vision still receives only the task-specific perception plan plus image pixels.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.7 adds durable image recovery through real frontend tools while preserving the complete existing Main context for task-specific visual planning.
+
+## V0.30.7 Durable Visual Recovery
+
+Text Main decides which observable facts are needed. Vision receives the resulting questions and image pixels; the Proxy returns structured observations to Main through a paired synthetic tool exchange. `proxy_visual_query` remains private to the Proxy.
+
+For a new human question about historical images, an internal full-context Main resolver selects relevant sources and chooses `skip`, `reuse`, or `inspect`. Only complete evidence covering the current question can be reused; a previous layout answer does not automatically answer a new OCR question. Up to four images can be inspected together. Multi-source snapshots are not reused as a single-source answer.
+
+When required pixels are missing from the incoming history and all available source caches, the Proxy supplies saved source locators and the original visual questions to Main. Main must issue a real declared frontend Read, screenshot, or attachment tool call. The Proxy validates its schema and target, persists the correlation, and ends the HTTP response with `stop_reason=tool_use`. It resumes on the next request carrying the matching image tool result. A screenshot path is followed by Read; a path or an error result is never treated as image evidence. Deferred tools continue to use the existing local tool-search path.
+
+Original bytes, source metadata, evidence, and pending tool calls are stored separately under `visual-recovery-v1` inside the media cache directory. Evicted or corrupt bytes leave their source locator available. Session-scoped recovery survives restart; replays return the same pending tool call. A changed hash creates a new image version. An explicit request for the original cannot be answered using its replacement; a request for the current screen reacquires pixels even if old pixels are cached.
+
+Acquisition is limited to two attempts (a screenshot followed by Read counts as one) and four frontend tool steps. Exact repeated failed calls are rejected. One correction is allowed if Main does not emit a valid source tool call. Missing answers and unresolved observations remain partial, with at most one targeted follow-up; its reservation is persisted before the follow-up call. Exhaustion or an unavailable frontend source is reported to Main so it can ask for the specific missing image.
+
+Enable this flow with your existing Vision endpoint settings:
+
+```dotenv
+VISION_ORCHESTRATION_MODE=directed
+VLLM_BASE_VISION_ENABLED=false
+VISION_NATIVE_PASSTHROUGH=false
+MEDIA_CACHE_MAX_MB=64
+```
+
+Keep the existing `proxy-data` volume for restart continuity. Frontends must provide a stable `x-claude-code-session-id` or JSON `metadata.user_id.session_id`; requests without either use isolated, request-local recovery state. `MEDIA_CACHE_MAX_MB=0` disables original-byte retention but preserves bounded source/recovery metadata. Each cache uses its own byte budget; this is not an aggregate process-memory limit. Source/recovery records share a 256-entry cap and the configured cache retention period; each metadata record is limited to 256 KiB. One process owns a cache directory.
+
+No usable source locator/tool means Main asks for that specific image. Tool names and inputs come from actual frontend declarations and saved history; filenames and screenshots are not invented. The default orchestration mode remains `legacy` for existing deployments. Native vision retains precedence when explicitly enabled and falls back to directed perception on image capability rejection. PDF routing, language handling, the 30-second progress gate and quiet subagent behavior retain their existing contracts. Internal planner output budgets no longer inherit an incompatible extended-thinking budget from Main.
+
+The V0.30.6 section below describes the historical behavior superseded by V0.30.7. See `change_log/V0.30.7-更新說明.md` for the release scope and validation procedure.
 
 ## V0.30.6 Visual Planner Resilience and Evidence State
 

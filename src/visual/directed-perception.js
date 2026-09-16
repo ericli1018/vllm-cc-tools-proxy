@@ -214,7 +214,18 @@ export function validatePerceptionResult(value, request) {
       }
     }
   }
-  return structuredClone(value);
+  const result = structuredClone(value);
+  if (result.status !== 'unavailable') {
+    const answered = new Set(result.answers.map(answer => answer.question_id));
+    const unresolved = new Set(result.source_results.flatMap(source => source.unresolved.map(item => item.question_id)));
+    for (const question of request.questions) {
+      if (!answered.has(question.id) && !unresolved.has(question.id)) {
+        result.source_results[0].unresolved.push({ question_id: question.id, reason_code: 'question_unanswered', detail: 'The sensor omitted this requested question.', retryable: true });
+      }
+    }
+    if (result.source_results.some(source => source.unresolved.length)) result.status = 'partial';
+  }
+  return result;
 }
 
 function unavailablePerceptionResult(request, { reasonCode = 'service_unavailable', detail = 'Visual perception is unavailable.', retryable = true } = {}) {
@@ -261,8 +272,16 @@ export async function executeDirectedVisualQuery(toolUse, {
   if (perceptionCache) {
     const cached = await perceptionCache.get(cacheKey);
     if (cached?.result) {
-      await onDiagnostic('visual_query_cache_hit', { key_prefix: cacheKey.slice(0, 12) });
-      return structuredClone(cached.result);
+      try {
+        const checked = validatePerceptionResult(cached.result, request);
+        if (checked.status === 'complete') {
+          checked.needs_followup = false;
+          await onDiagnostic('visual_query_cache_hit', { key_prefix: cacheKey.slice(0, 12) });
+          return checked;
+        }
+      } catch (error) {
+        await onDiagnostic('visual_query_cache_invalid', { code: error.code || 'invalid_cached_result' });
+      }
     }
     await onDiagnostic('visual_query_cache_miss', { key_prefix: cacheKey.slice(0, 12) });
   }

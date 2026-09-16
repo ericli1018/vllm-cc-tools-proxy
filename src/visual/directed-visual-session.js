@@ -9,7 +9,7 @@ export class DirectedVisualSession {
 
   register(entry = {}) {
     const sourceBuffer = Buffer.isBuffer(entry.sourceBuffer) ? Buffer.from(entry.sourceBuffer) : Buffer.alloc(0);
-    const imageSha256 = sourceBuffer.length ? crypto.createHash('sha256').update(sourceBuffer).digest('hex') : '';
+    const imageSha256 = sourceBuffer.length ? crypto.createHash('sha256').update(sourceBuffer).digest('hex') : (/^[a-f0-9]{64}$/.test(entry.imageSha256 || '') ? entry.imageSha256 : '');
     if (imageSha256) {
       const existingId = this.sourceIdByImageSha256.get(imageSha256);
       if (existingId) {
@@ -17,13 +17,20 @@ export class DirectedVisualSession {
         if (existing) {
           const provenance = structuredClone(entry.provenance || {});
           existing.provenances.push(provenance);
+          if (sourceBuffer.length && !existing.sourceBuffer.length) {
+            existing.sourceBuffer = sourceBuffer;
+            existing.normalized = entry.normalized || null;
+          }
           return { sourceId: existingId, reused: true };
         }
       }
     }
 
-    const sourceId = `img_${String(this.nextId).padStart(2, '0')}`;
-    this.nextId += 1;
+    let sourceId = /^img_\d+$/.test(entry.sourceId || '') && !this.sources.has(entry.sourceId) ? entry.sourceId : '';
+    while (!sourceId || this.sources.has(sourceId)) {
+      sourceId = `img_${String(this.nextId).padStart(2, '0')}`;
+      this.nextId += 1;
+    }
     const provenance = structuredClone(entry.provenance || {});
     const record = {
       sourceId,

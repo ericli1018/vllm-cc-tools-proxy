@@ -19,10 +19,11 @@ import { forwardTransparent } from '../proxy/bypass.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { DirectedVisualSession } from '../visual/directed-visual-session.js';
+import { VisualRecoveryStore } from '../visual/visual-recovery-store.js';
+import { VisualRecoveryCoordinator } from '../visual/visual-recovery-coordinator.js';
+import { imageFreePlanningBody, hasImagePayload, collectVisualContext } from '../visual/visual-recovery-context.js';
 import { injectDirectedVisualContract, isProxyVisualToolName } from '../visual/visual-query-tool.js';
-import { buildVisualQueryPlannerRequest, buildVisualQueryPlannerFallbackRequest, parseVisualQueryPlan, parseVisualQueryPlanFallback, createSyntheticVisualExchange, unavailableVisualPerception } from '../visual/visual-query-planner.js';
 import { executeDirectedVisualQuery } from '../visual/directed-perception.js';
-import { VisualEvidenceStateStore, VISUAL_EVIDENCE_RESOLVED, VISUAL_EVIDENCE_RETRYABLE_FAILED, visualEvidenceIdentity, materializeResolvedVisualEvidence } from '../visual/visual-evidence-state.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
 import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '../i18n/response-language.js';
@@ -618,12 +619,13 @@ export function createProxyServer(config, dependencies = {}) {
     retentionMs: config.cache?.retentionMs,
   });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
-  const visualEvidenceStateStore = dependencies.visualEvidenceStateStore || new VisualEvidenceStateStore({
-    retentionMs: config.cache?.retentionMs || 60 * 60 * 1000,
-    maxEntries: 256,
+  const visualRecoveryStore = dependencies.visualRecoveryStore || new VisualRecoveryStore({
+    rootDir: config.cache?.rootDir || '', retentionMs: config.cache?.retentionMs ?? 3600000,
+    maxBytes: config.cache?.maxBytes ?? 67108864, maxEntries: 256,
   });
   const cacheReady = Promise.all([
     mediaCache.initialize(),
+    config.visionOrchestrationMode === 'directed' ? visualRecoveryStore.initialize() : Promise.resolve(),
     perceptionCache.initialize(),
     typeof documentSourceCache.initialize === 'function' ? documentSourceCache.initialize() : Promise.resolve(documentSourceCache),
   ]);
@@ -1663,10 +1665,15 @@ export function createProxyServer(config, dependencies = {}) {
 
       requestStage = 'request_classification';
       const classification = classifyMessagesRequest(original);
+      const visualContext = config.visionOrchestrationMode === 'directed' && messagesPath === '/v1/messages'
+        ? collectVisualContext(original.messages || []) : null;
+      const hasDirectedReferences = Boolean(visualContext && (visualContext.references.length
+        || (clientSessionId && ((await visualRecoveryStore.listSources(clientSessionId)).length
+          || (await visualRecoveryStore.listRecoveries(clientSessionId)).some(r => ['required','waiting_client','needs_read','retry'].includes(r.status))))));
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'
         ? classification.mediaCount.documents + classification.mediaCount.images > 0
           || classification.reasons.includes('native_web_tool')
-        : classification.managed;
+        : classification.managed || hasDirectedReferences;
 
       if (initiallyManaged) {
         log(config, 'info', 'incoming_protocol_inventory', {
@@ -1805,7 +1812,7 @@ export function createProxyServer(config, dependencies = {}) {
       const hasMedia = classification.mediaCount.documents + classification.mediaCount.images > 0;
       const hasManagedTools = classification.reasons.includes('managed_web_tool') && messagesPath === '/v1/messages';
       const hasLocalToolSearch = Boolean(localToolSearchPrepared.state?.enabled) && messagesPath === '/v1/messages';
-      let hasManagedLoop = hasManagedTools || hasLocalToolSearch;
+      let hasManagedLoop = hasManagedTools || hasLocalToolSearch || hasDirectedReferences;
       const passthroughClientWebTools = hasManagedTools
         && serverWebUiDeclaration.native_count === 0
         && serverWebUiDeclaration.alias_count > 0;
@@ -1853,8 +1860,7 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionRuntimeFallbackUsed = false;
       let nativeVisionRawOnly = false;
       const directedVisualSession = config.visionOrchestrationMode === 'directed' ? new DirectedVisualSession() : null;
-      const directedCurrentMessageIndex = request.messages.length - 1;
-      const orchestratedDirectedSourceIds = new Set();
+      const directedOriginalMessages = request.messages;
       let directedVisualEligibleCount = 0;
       let historyOnlyDirectedMedia = false;
       let freshDirectedVisualExpected = false;
@@ -2215,156 +2221,30 @@ export function createProxyServer(config, dependencies = {}) {
         return progress;
       };
 
-      const visualEvidenceKeyForSource = (sourceId) => {
-        const source = directedVisualSession?.get(sourceId);
-        return visualEvidenceIdentity({ sessionId: clientSessionId, imageSha256: source?.imageSha256 || '' });
-      };
-
-      const persistVisualState = (sourceIds, visualPlan, perceptionResult, error = null) => {
-        if (!clientSessionId || sourceIds.length !== 1) return;
-        const sourceId = sourceIds[0];
-        const key = visualEvidenceKeyForSource(sourceId);
-        if (!key) return;
-        const usable = perceptionResult && perceptionResult.status !== 'unavailable'
-          && Array.isArray(perceptionResult.answers) && perceptionResult.answers.length > 0;
-        if (usable) {
-          visualEvidenceStateStore.setResolved(key, { plan: visualPlan, perception: perceptionResult, sourceId });
-          log(config, 'info', 'visual_evidence_state_resolved', { requestId, source_id: sourceId, key_prefix: key.slice(0,12) });
-        } else {
-          visualEvidenceStateStore.setRetryableFailed(key, {
-            code: error?.code || 'visual_perception_unavailable',
-            detail: error?.message || 'Visual evidence was unavailable.',
-          });
-          log(config, 'warn', 'visual_evidence_state_retryable_failed', { requestId, source_id: sourceId, key_prefix:key.slice(0,12), code:error?.code || 'visual_perception_unavailable' });
-        }
-      };
-
-      const injectResolvedVisualState = (body, sourceIds) => {
-        if (!clientSessionId || sourceIds.length !== 1) return null;
-        const sourceId=sourceIds[0];
-        const key=visualEvidenceKeyForSource(sourceId);
-        const state=key ? visualEvidenceStateStore.get(key) : null;
-        if (state?.status !== VISUAL_EVIDENCE_RESOLVED) return null;
-        const materialized=materializeResolvedVisualEvidence(state, sourceId);
-        if (!materialized) return null;
-        const next=ensureDirectedVisualCapability(structuredClone(body));
-        const toolUseId=`vcc-auto-visual-reuse-${requestId}-${orchestratedDirectedSourceIds.size + 1}`;
-        next.messages.push(...createSyntheticVisualExchange(materialized.plan, materialized.perception, {toolUseId}));
-        orchestratedDirectedSourceIds.add(sourceId);
-        log(config,'info','visual_evidence_state_reused',{requestId,source_id:sourceId,key_prefix:key.slice(0,12),status:state.status});
-        log(config,'info','visual_query_result_injected',{requestId,source_ids:[sourceId],status:materialized.perception?.status || 'unknown',answer_count:Array.isArray(materialized.perception?.answers)?materialized.perception.answers.length:0,reused:true});
-        return next;
-      };
-
-      const orchestrateFreshDirectedVisuals = async (body) => {
-        if (!directedVisualSession?.hasSources()) return body;
-        const currentSourceIds = directedVisualSession.sourceIdsForMessageIndex(
-          directedCurrentMessageIndex,
-          { sourceKinds: ['direct_image', 'read_image', 'tool_result_image'] },
-        );
-        let sourceIds = currentSourceIds.filter((sourceId) => !orchestratedDirectedSourceIds.has(sourceId));
-        let historyRetry = false;
-
-        if (sourceIds.length === 0) {
-          const latestHistoryIds = directedVisualSession.latestSourceIds({
-            sourceKinds:['direct_image','read_image','tool_result_image'],
-            beforeMessageIndex: directedCurrentMessageIndex,
-          }).filter((sourceId)=>!orchestratedDirectedSourceIds.has(sourceId));
-          if (latestHistoryIds.length === 1 && clientSessionId) {
-            const key=visualEvidenceKeyForSource(latestHistoryIds[0]);
-            const state=key ? visualEvidenceStateStore.get(key) : null;
-            if (state?.status === VISUAL_EVIDENCE_RESOLVED) {
-              return injectResolvedVisualState(body, latestHistoryIds) || ensureDirectedVisualCapability(body);
-            }
-            if (state?.status === VISUAL_EVIDENCE_RETRYABLE_FAILED) {
-              sourceIds=latestHistoryIds;
-              historyRetry=true;
-              log(config,'info','visual_evidence_state_retry_started',{requestId,source_id:sourceIds[0],key_prefix:key.slice(0,12),previous_code:state.code || ''});
-            }
-          }
-        }
-
-        if (sourceIds.length === 0) return ensureDirectedVisualCapability(body);
-
-        const plannerStartedAt = Date.now();
-        log(config, 'info', 'visual_query_planning_started', {
-          requestId, source_ids: sourceIds, source_count: sourceIds.length, history_retry: historyRetry,
-        });
-        let visualPlan = null;
-        let perceptionResult = null;
-        let planningError = null;
-        try {
-          const plannerBaseBody=ensureDirectedVisualCapability(body);
-          const plannerRequest = buildVisualQueryPlannerRequest(plannerBaseBody, { sourceIds });
-          const plannerResponse = await callUpstreamJson(
-            plannerRequest, config, req.headers, abortController.signal, '/v1/messages',
-            { onBusyEvent: onBaseBusyEvent },
-          );
-          try {
-            visualPlan = parseVisualQueryPlan(plannerResponse, sourceIds);
-          } catch (error) {
-            if (!error?.retryable) throw error;
-            log(config,'warn','visual_query_planning_fallback_started',{
-              requestId,source_ids:sourceIds,primary_code:error?.code || 'visual_query_planner_failed',
-            });
-            const fallbackRequest=buildVisualQueryPlannerFallbackRequest(plannerBaseBody,{sourceIds,primaryResponse:plannerResponse});
-            const fallbackResponse=await callUpstreamJson(
-              fallbackRequest,config,req.headers,abortController.signal,'/v1/messages',
-              {onBusyEvent:onBaseBusyEvent},
-            );
-            visualPlan=parseVisualQueryPlanFallback(fallbackResponse,sourceIds);
-            log(config,'info','visual_query_planning_fallback_completed',{
-              requestId,source_ids:sourceIds,question_count:visualPlan.questions.length,
-            });
-          }
-          log(config, 'info', 'visual_query_planning_completed', {
-            requestId, source_ids: sourceIds, question_count: visualPlan.questions.length,
-            elapsed_ms: Date.now() - plannerStartedAt,
-          });
-          perceptionResult = await executeDirectedVisualQuery({
-            id: `vcc-auto-visual-${requestId}-${orchestratedDirectedSourceIds.size + 1}`,
-            name: 'proxy_visual_query',
-            input: {
-              source_ids: visualPlan.source_ids, objective: visualPlan.objective, questions: visualPlan.questions,
-              requested_evidence: visualPlan.requested_evidence, detail_level: visualPlan.detail_level,
-            },
+      const visualCoordinator = directedVisualSession && messagesPath === '/v1/messages'
+        ? new VisualRecoveryCoordinator({
+          session: directedVisualSession,
+          store: clientSessionId ? visualRecoveryStore : new VisualRecoveryStore(),
+          sessionId: clientSessionId, requestId, messages: directedOriginalMessages, config,
+          signal: abortController.signal,
+          ...(dependencies.mediaAdapterDependencies?.normalizeImage ? { normalizeImage: dependencies.mediaAdapterDependencies.normalizeImage } : {}),
+          callMain: body => callUpstreamJson(imageFreePlanningBody(body), config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent }),
+          perceive: visualPlan => executeDirectedVisualQuery({
+            name: 'proxy_visual_query', input: visualPlan,
           }, {
             session: directedVisualSession, config, signal: abortController.signal,
-            acquireVision: (options) => admission.acquireVision(options), perceptionCache, analysisRegistry,
-            ...(dependencies.directedPerceptionDependencies || {}),
+            acquireVision: options => admission.acquireVision(options), perceptionCache, analysisRegistry,
+            ...(dependencies.directedPerceptionDependencies || {}), onProgress,
             onDiagnostic: (event, fields) => log(config, event.includes('invalid') || event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
-            onProgress,
-            onEvent: (event, fields) => log(config, event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info', event, { requestId, ...fields }),
-          });
-        } catch (error) {
-          planningError=error;
-          log(config, 'warn', 'visual_query_planning_failed', {
-            requestId, source_ids: sourceIds, code: error?.code || error?.name || 'error',
-            retryable: Boolean(error?.retryable), elapsed_ms: Date.now() - plannerStartedAt,
-          });
-          visualPlan = {
-            schema_version: 'visual-query-plan-v1', source_ids: sourceIds,
-            objective: 'Visual inspection was requested by the current task, but the internal visual planner was unavailable.',
-            questions: [{ id:'planner_unavailable', question:'Preserve uncertainty because the internal visual planner was unavailable.' }],
-            requested_evidence: [], detail_level: 'normal',
-          };
-          perceptionResult = unavailableVisualPerception(visualPlan, {
-            code: error?.code || 'visual_query_planner_failed',
-            detail: 'The Proxy could not obtain a valid task-specific visual perception plan.',
-          });
-        }
-        persistVisualState(sourceIds,visualPlan,perceptionResult,planningError);
-        const toolUseId = `vcc-auto-visual-${requestId}-${orchestratedDirectedSourceIds.size + 1}`;
-        const exchange = createSyntheticVisualExchange(visualPlan, perceptionResult, { toolUseId });
-        const next = ensureDirectedVisualCapability(structuredClone(body));
-        next.messages.push(...exchange);
-        for (const sourceId of sourceIds) orchestratedDirectedSourceIds.add(sourceId);
-        log(config, 'info', 'visual_query_result_injected', {
-          requestId, source_ids: sourceIds, status: perceptionResult?.status || 'unknown',
-          answer_count: Array.isArray(perceptionResult?.answers) ? perceptionResult.answers.length : 0,
-          history_retry: historyRetry,
-        });
-        return next;
+            onEvent: (event, fields) => log(config, 'info', event, { requestId, ...fields }),
+          }),
+          onDiagnostic: (event, fields) => log(config, event.includes('failed') ? 'warn' : 'info', event, { requestId, ...fields }),
+        }) : null;
+      const orchestrateFreshDirectedVisuals = body => {
+        // Pure native images wait for Main or a real capability fallback. Mixed requests
+        // inspect directed sources now; the internal Main adapter removes native pixels.
+        if (!visualCoordinator || (nativeVisionEligibleCount > 0 && hasImagePayload(body.messages) && !directedVisualSession.hasSources())) return Promise.resolve(body);
+        return visualCoordinator.prepare(body);
       };
 
       let mediaProgressOpenedEarly = false;
@@ -2500,6 +2380,8 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
+      if (!hasMedia && visualCoordinator) request = await orchestrateFreshDirectedVisuals(request);
+
       if (hasMedia && !nativeVisionRawOnly && !historyOnlyDirectedMedia && !freshDirectedVisualExpected) {
         const readyMessage = mediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
@@ -2548,6 +2430,7 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       const upstream = async (body, signal, runtimeOptions = {}) => {
+        if (visualCoordinator?.activeRecovery) visualCoordinator.body = body;
         requestStage = 'managed_model_round';
         const invoke = (requestBody) => callUpstreamManagedStream(requestBody, config, req.headers, signal, '/v1/messages', {
           onResponseChunk: onBaseResponseChunk,
@@ -2581,7 +2464,7 @@ export function createProxyServer(config, dependencies = {}) {
         ? createServerToolStreamBridge(progress)
         : null;
       if (hasManagedLoop) {
-        let result = await runManagedLoop(request, {
+        let result = visualCoordinator?.replayResponse || await runManagedLoop(request, {
           upstream,
           executeVisualTool: (toolUse, signal) => executeDirectedVisualQuery(toolUse, {
             session: directedVisualSession,
@@ -2706,6 +2589,7 @@ export function createProxyServer(config, dependencies = {}) {
             : undefined,
           signal: abortController.signal,
         });
+        if (visualCoordinator) result = await visualCoordinator.observeClientResponse(result);
         if (!nativeWebSearchFastLane) {
           result = await applyFinalPresentationLanguage(result, request);
         }

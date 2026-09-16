@@ -92,3 +92,13 @@ test('V0.30.6 planner fallback parses a JSON object from text or thinking withou
   assert.deepEqual(plan.source_ids,['img_01']);
   assert.equal(plan.questions[0].id,'layout');
 });
+
+test('V0.30.7 internal planner bounded budgets are compatible with an extended-thinking Main request',()=>{
+  const body={model:'m',system:'full system',messages:[{role:'user',content:'complete original task'}],thinking:{type:'enabled',budget_tokens:8192},output_config:{effort:'high'},max_tokens:32768};
+  for(const build of [buildVisualQueryPlannerRequest,buildVisualQueryPlannerFallbackRequest]){
+    const request=build(body,{sourceIds:['img_01']});
+    assert.equal(request.thinking,undefined);
+    assert.deepEqual(request.messages[0],body.messages[0]);
+    assert.equal(body.thinking.budget_tokens,8192,'caller remains unchanged');
+  }
+});

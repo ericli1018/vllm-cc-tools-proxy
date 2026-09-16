@@ -179,3 +179,13 @@ test('V0.30.4 DirectedVisualSession resolves fresh source ids by current message
   assert.deepEqual(session.sourceIdsForMessageIndex(3,{sourceKinds:['read_image']}),['img_01']);
   assert.deepEqual(session.sourceIdsForMessageIndex(2,{sourceKinds:['read_image']}),[]);
 });
+
+test('V0.30.7 incomplete old cached perception must not bypass current question coverage checks', async () => {
+  let calls=0;
+  const result=await executeDirectedVisualQuery(toolUse(), {
+    session:fixtureSession(),config:cfg(),
+    perceptionCache:{get:async()=>({result:{...validResult,answers:[]}}),set:async()=>true},
+    analyzeVisualAssets:async()=>{calls++;return {markdown:JSON.stringify(validResult)};},
+  });
+  assert.equal(calls,1);assert.equal(result.answers[0].answer,'RESET_N');
+});
