@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.30.5', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.30.6', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.30\.5/);
+  assert.match(first, /VERSION\s+0\.30\.6/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.30.5');
+  assert.equal(payload.version, '0.30.6');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.30\.5/);
+  assert.match(payload.display, /CCTP 0\.30\.6/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4780,4 +4780,119 @@ test('V0.30.4 managed round start remains telemetry-only and never emits model-p
   assert.doesNotMatch(stream,/正在請模型規劃下一步/);
   assert.ok(logs.some((entry)=>entry.event==='progress_state_changed' && entry.phase==='managed_model_round_start'));
   assert.equal(logs.some((entry)=>entry.event==='managed_task_progress' && entry.phase==='managed_model_round_start'),false);
+});
+
+test('V0.30.6 planner tool_missing falls back with the same Main context and still reaches Vision before Main', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  let primaryPlannerCalls=0, fallbackPlannerCalls=0, visionCalls=0, mainCalls=0;
+  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'Layout is visually intact.',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'No clipping.',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false};
+  const base=await startJsonServer(async (req,res)=>{
+    const payload=JSON.parse((await read(req)).toString());
+    res.writeHead(200,{'content-type':'application/json'});
+    const system=String(payload.system || '');
+    if (system.includes('VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1')) {
+      fallbackPlannerCalls += 1;
+      assert.match(JSON.stringify(payload.messages),/FULL_CONTEXT_FALLBACK_306/);
+      res.end(JSON.stringify({id:'fallback',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect rendered screenshot',questions:[{id:'layout',question:'Is the page clipped or overlapping?'}],requested_evidence:['layout'],detail_level:'high'})}],stop_reason:'end_turn',usage:{}}));
+      return;
+    }
+    if (system.includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
+      primaryPlannerCalls += 1;
+      assert.match(JSON.stringify(payload.messages),/FULL_CONTEXT_FALLBACK_306/);
+      res.end(JSON.stringify({id:'primary-miss',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'I should inspect layout and clipping.'}],stop_reason:'end_turn',usage:{}}));
+      return;
+    }
+    mainCalls += 1;
+    assert.match(JSON.stringify(payload.messages),/Layout is visually intact/);
+    res.end(JSON.stringify({id:'main',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'FALLBACK_VISUAL_OK'}],stop_reason:'end_turn',usage:{}}));
+  });
+  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
+    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
+    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
+  });
+  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const response=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers:{'content-type':'application/json','x-claude-code-session-id':'sess-fallback-306'},body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'FULL_CONTEXT_FALLBACK_306 inspect it'},{type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}}]}]})});
+  assert.equal(response.status,200);
+  assert.equal((await response.json()).content[0].text,'FALLBACK_VISUAL_OK');
+  assert.equal(primaryPlannerCalls,1);
+  assert.equal(fallbackPlannerCalls,1);
+  assert.equal(visionCalls,1);
+  assert.equal(mainCalls,1);
+});
+
+test('V0.30.6 resolved historical image reuses visual evidence without rerunning Planner or Vision', async (t) => {
+  const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
+  const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
+  let plannerCalls=0, visionCalls=0, mainCalls=0;
+  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'RESOLVED_EVIDENCE_306',confidence:0.95,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'Resolved evidence',confidence:0.95}],relationships:[],unresolved:[]}],needs_followup:false};
+  const base=await startJsonServer(async (req,res)=>{
+    const payload=JSON.parse((await read(req)).toString());
+    res.writeHead(200,{'content-type':'application/json'});
+    if (String(payload.system||'').includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
+      plannerCalls += 1;
+      res.end(JSON.stringify({id:'plan',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'p',name:'submit_visual_plan',input:{schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Inspect screenshot',questions:[{id:'layout',question:'Any visual issue?'}],requested_evidence:['layout'],detail_level:'normal'}}],stop_reason:'end_turn',usage:{}}));
+      return;
+    }
+    mainCalls += 1;
+    const serialized=JSON.stringify(payload.messages);
+    assert.match(serialized,/RESOLVED_EVIDENCE_306/);
+    res.end(JSON.stringify({id:`main-${mainCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:`MAIN_${mainCalls}`}],stop_reason:'end_turn',usage:{}}));
+  });
+  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
+    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
+    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
+  });
+  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const headers={'content-type':'application/json','x-claude-code-session-id':'sess-resolved-306'};
+  const first=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot' },image]}]})});
+  assert.equal(first.status,200); await first.json();
+  const second=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]},{role:'assistant',content:[{type:'text',text:'previous'}]},{role:'user',content:'look at the screenshot again'}]})});
+  assert.equal(second.status,200); await second.json();
+  assert.equal(plannerCalls,1,'resolved history must not rerun planner');
+  assert.equal(visionCalls,1,'resolved history must not rerun Vision');
+  assert.equal(mainCalls,2);
+});
+
+test('V0.30.6 retryable failed historical image retries visual orchestration on the next continuation', async (t) => {
+  const png=await fs.readFile(new URL('./fixtures/text-image.png',import.meta.url));
+  const image={type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}};
+  let primaryPlannerCalls=0, fallbackPlannerCalls=0, visionCalls=0, mainCalls=0;
+  const perception={schema_version:'visual-perception-v1',status:'complete',answers:[{question_id:'layout',answer:'RETRY_RECOVERED_306',confidence:0.9,source_ids:['img_01'],support_refs:['img_01:e1']}],source_results:[{source_id:'img_01',evidence:[{evidence_id:'e1',kind:'layout',observation:'Recovered',confidence:0.9}],relationships:[],unresolved:[]}],needs_followup:false};
+  const base=await startJsonServer(async (req,res)=>{
+    const payload=JSON.parse((await read(req)).toString());
+    res.writeHead(200,{'content-type':'application/json'});
+    const system=String(payload.system||'');
+    if (system.includes('VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1')) {
+      fallbackPlannerCalls += 1;
+      if (fallbackPlannerCalls === 1) {
+        res.end(JSON.stringify({id:'fb-bad',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'not json'}],stop_reason:'end_turn',usage:{}}));
+      } else {
+        res.end(JSON.stringify({id:'fb-good',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema_version:'visual-query-plan-v1',source_ids:['img_01'],objective:'Retry screenshot inspection',questions:[{id:'layout',question:'Any issue?'}],requested_evidence:['layout'],detail_level:'normal'})}],stop_reason:'end_turn',usage:{}}));
+      }
+      return;
+    }
+    if (system.includes('VCC_PROXY_VISUAL_PLANNER_V1')) {
+      primaryPlannerCalls += 1;
+      res.end(JSON.stringify({id:'primary-miss',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'tool call missed'}],stop_reason:'end_turn',usage:{}}));
+      return;
+    }
+    mainCalls += 1;
+    const serialized=JSON.stringify(payload.messages);
+    if (mainCalls === 2) assert.match(serialized,/RETRY_RECOVERED_306/);
+    res.end(JSON.stringify({id:`main-${mainCalls}`,type:'message',role:'assistant',model:'m',content:[{type:'text',text:`MAIN_${mainCalls}`}],stop_reason:'end_turn',usage:{}}));
+  });
+  const proxy=createProxyServer(config({vllmBaseUrl:base.url,visionOrchestrationMode:'directed',vllmVisionUrl:'http://vision.invalid',vllmVisionModel:'vision',vllmVisionProvider:'vllm'}),{
+    mediaAdapterDependencies:{normalizeImage:async()=>({buffer:png,mediaType:'image/png',width:600,height:180,originalWidth:600,originalHeight:180})},
+    directedPerceptionDependencies:{analyzeVisualAssets:async()=>{visionCalls+=1; return {markdown:JSON.stringify(perception)};}},
+  });
+  const proxyUrl=await listen(proxy); t.after(()=>base.server.close()); t.after(()=>proxy.close());
+  const headers={'content-type':'application/json','x-claude-code-session-id':'sess-retry-306'};
+  const first=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]}]})});
+  assert.equal(first.status,200); await first.json();
+  const second=await fetch(`${proxyUrl}/v1/messages`,{method:'POST',headers,body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[{type:'text',text:'inspect screenshot'},image]},{role:'assistant',content:[{type:'text',text:'could not see it'}]},{role:'user',content:'look at the screenshot again'}]})});
+  assert.equal(second.status,200); await second.json();
+  assert.equal(primaryPlannerCalls,2,'retryable historical image must retry planner');
+  assert.equal(fallbackPlannerCalls,2,'each tool miss receives one fallback attempt');
+  assert.equal(visionCalls,1,'Vision runs only after the retry planner recovers');
+  assert.equal(mainCalls,2);
 });

@@ -109,8 +109,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.30.5'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.5'
+test "$(node -p "require('./package.json').version")" = '0.30.6'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.30.6'
 
 
 test -f src/i18n/response-language.js
@@ -539,7 +539,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.30.5'
+test "$(node -p "require('./package-lock.json').version")" = '0.30.6'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1274,3 +1274,17 @@ node --test --test-name-pattern='V0.30.5 a fresh directed image|V0.30.4 Proxy au
 node --test --test-name-pattern='V0.30.5 silent model round start' test/progress.test.js
 node --test --test-name-pattern='V0.30.5 documents full-context' test/deployment.test.js
 node --test --test-name-pattern='V0.30.5 runtime' test/version.test.js
+
+# V0.30.6 Visual Planner Resilience + Evidence State contract
+test -f src/visual/visual-evidence-state.js
+test -f change_log/V0.30.6-更新說明.md
+test -f change_log/V0.30.6-實作與驗證報告.md
+grep -Fq 'V0.30.6 Visual Planner Resilience and Evidence State' README.md
+grep -Fq 'VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1' src/visual/visual-query-planner.js
+grep -Fq 'VISUAL_EVIDENCE_RETRYABLE_FAILED' src/visual/visual-evidence-state.js
+grep -Fq 'visual_evidence_state_reused' src/services/proxy-server.js
+grep -Fq 'visual_evidence_state_retry_started' src/services/proxy-server.js
+node --test test/visual-query-planner.test.js test/visual-evidence-state.test.js
+node --test --test-name-pattern='V0.30.6' test/proxy-server.test.js
+node --test --test-name-pattern='V0.30.6 documents planner resilience' test/deployment.test.js
+node --test --test-name-pattern='V0.30.6 runtime' test/version.test.js

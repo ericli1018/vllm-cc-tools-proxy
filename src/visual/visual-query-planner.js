@@ -3,6 +3,7 @@ import { HttpError } from '../lib/http.js';
 export const VISUAL_QUERY_PLANNER_MARKER = 'VCC_PROXY_VISUAL_PLANNER_V1';
 export const VISUAL_QUERY_PLAN_SCHEMA = 'visual-query-plan-v1';
 export const VISUAL_QUERY_PLAN_TOOL = 'submit_visual_plan';
+export const VISUAL_QUERY_PLANNER_FALLBACK_MARKER = 'VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1';
 
 const PLANNER_INSTRUCTION = `[${VISUAL_QUERY_PLANNER_MARKER}]
 You are the Proxy's internal visual perception planner.
@@ -12,6 +13,13 @@ Do not answer the user's final task. Do not claim to see image content.
 You MUST call the internal ${VISUAL_QUERY_PLAN_TOOL} tool exactly once with the perception plan.
 Do not emit the plan as prose or JSON text.
 Questions must ask for observable visual facts, not final-task reasoning.`;
+
+const PLANNER_FALLBACK_INSTRUCTION = `[${VISUAL_QUERY_PLANNER_FALLBACK_MARKER}]
+The previous internal visual planning attempt did not produce the required tool call.
+Use the SAME complete Main context to produce the visual perception plan.
+Return exactly one JSON object and nothing else.
+The JSON must contain: schema_version, source_ids, objective, questions, requested_evidence, detail_level.
+Do not answer the user's final task. Do not claim to see image pixels.`;
 
 function appendSystem(system, text) {
   if (typeof system === 'string') return system ? `${system}\n\n${text}` : text;
@@ -72,19 +80,48 @@ export function buildVisualQueryPlannerRequest(request, { sourceIds = [] } = {})
   clone.system = appendSystem(clone.system, PLANNER_INSTRUCTION);
   clone.tools = [visualPlanTool(ids)];
   clone.tool_choice = { type: 'tool', name: VISUAL_QUERY_PLAN_TOOL };
-  clone.max_tokens = Math.min(Math.max(Number(clone.max_tokens) || 2048, 512), 4096);
+  clone.max_tokens = Math.min(Math.max(Number(clone.max_tokens) || 1024, 512), 2048);
   const messages = Array.isArray(clone.messages) ? clone.messages : [];
   messages.push({ role:'user', content:[{ type:'text', text:plannerRequestText(ids) }] });
   clone.messages = messages;
   return clone;
 }
 
-function extractText(response) {
+export function buildVisualQueryPlannerFallbackRequest(request, { sourceIds = [], primaryResponse = null } = {}) {
+  const ids = [...new Set(sourceIds.map((id) => String(id || '').trim()).filter(Boolean))];
+  if (ids.length < 1) throw new HttpError(500, 'Visual planner fallback requires at least one source.', { code:'visual_query_planner_sources_missing' });
+  const clone = structuredClone(request || {});
+  clone.stream = false;
+  clone.system = appendSystem(clone.system, PLANNER_FALLBACK_INSTRUCTION);
+  clone.tools = [];
+  delete clone.tool_choice;
+  clone.max_tokens = Math.min(Math.max(Number(clone.max_tokens) || 768, 256), 1024);
+  const messages = Array.isArray(clone.messages) ? clone.messages : [];
+  const prior = extractPlannerResponseText(primaryResponse);
+  messages.push({ role:'user', content:[{ type:'text', text:[
+    '[VCC_PROXY_VISUAL_PLANNER_FALLBACK_REQUEST]',
+    `source_ids: ${JSON.stringify(ids)}`,
+    ...(prior ? ['Previous planner response:', prior.slice(0, 6000)] : []),
+    'Return exactly one visual-query-plan-v1 JSON object. No markdown and no prose.',
+  ].join('\n') }] });
+  clone.messages = messages;
+  return clone;
+}
+
+function extractPlannerResponseText(response) {
   return (Array.isArray(response?.content) ? response.content : [])
-    .filter((block) => block?.type === 'text')
-    .map((block) => String(block.text || ''))
+    .map((block) => {
+      if (block?.type === 'text') return String(block.text || '');
+      if (block?.type === 'thinking') return String(block.thinking || '');
+      return '';
+    })
+    .filter(Boolean)
     .join('\n')
     .trim();
+}
+
+function extractText(response) {
+  return extractPlannerResponseText(response);
 }
 
 function parseJsonObject(text) {
@@ -152,6 +189,13 @@ export function parseVisualQueryPlan(response, expectedSourceIds = []) {
     requested_evidence: requestedEvidence,
     detail_level: detailLevel,
   };
+}
+
+export function parseVisualQueryPlanFallback(response, expectedSourceIds = []) {
+  const value = parseJsonObject(extractPlannerResponseText(response));
+  return parseVisualQueryPlan({
+    content:[{ type:'tool_use', id:'vcc-planner-fallback', name:VISUAL_QUERY_PLAN_TOOL, input:value }],
+  }, expectedSourceIds);
 }
 
 export function unavailableVisualPerception(plan, { code='visual_query_planner_failed', detail='Visual planning was unavailable.' } = {}) {

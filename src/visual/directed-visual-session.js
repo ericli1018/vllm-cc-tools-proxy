@@ -67,4 +67,21 @@ export class DirectedVisualSession {
     }
     return ids;
   }
+  latestSourceIds({ sourceKinds = null, beforeMessageIndex = Infinity } = {}) {
+    const allowed = Array.isArray(sourceKinds) ? new Set(sourceKinds.map((item) => String(item || ''))) : null;
+    let latest = -1;
+    const ids = [];
+    for (const [sourceId, record] of this.sources.entries()) {
+      const provenances = Array.isArray(record?.provenances) ? record.provenances : [];
+      for (const provenance of provenances) {
+        const index = Number(provenance?.messageIndex);
+        const kind = String(provenance?.sourceKind || record?.sourceKind || '');
+        if (!Number.isInteger(index) || index < 0 || index >= beforeMessageIndex || (allowed && !allowed.has(kind))) continue;
+        if (index > latest) { latest = index; ids.length = 0; }
+        if (index === latest && !ids.includes(sourceId)) ids.push(sourceId);
+      }
+    }
+    return ids;
+  }
+
 }

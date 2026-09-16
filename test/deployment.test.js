@@ -893,3 +893,23 @@ test('V0.30.5 documents full-context structured visual planning and directed pro
   assert.ok(changeLogEntries.includes('V0.30.5-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.30.5-實作與驗證報告.md'));
 });
+
+
+test('V0.30.6 documents planner resilience and persistent visual evidence state', async () => {
+  const plannerSource = await fs.readFile(new URL('../src/visual/visual-query-planner.js', import.meta.url), 'utf8');
+  const stateSource = await fs.readFile(new URL('../src/visual/visual-evidence-state.js', import.meta.url), 'utf8');
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme306 = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(readme306, /V0\.30\.6 Visual Planner Resilience and Evidence State/);
+  assert.match(readme306, /complete existing Main context/i);
+  assert.match(readme306, /RETRYABLE_FAILED/);
+  assert.match(plannerSource, /VCC_PROXY_VISUAL_PLANNER_FALLBACK_V1/);
+  assert.match(plannerSource, /buildVisualQueryPlannerFallbackRequest/);
+  assert.match(stateSource, /VISUAL_EVIDENCE_RESOLVED/);
+  assert.match(stateSource, /VISUAL_EVIDENCE_RETRYABLE_FAILED/);
+  assert.match(serverSource, /visual_evidence_state_reused/);
+  assert.match(serverSource, /visual_evidence_state_retry_started/);
+  assert.ok(changeLogEntries.includes('V0.30.6-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.30.6-實作與驗證報告.md'));
+});

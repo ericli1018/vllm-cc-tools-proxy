@@ -20,8 +20,9 @@ import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { DirectedVisualSession } from '../visual/directed-visual-session.js';
 import { injectDirectedVisualContract, isProxyVisualToolName } from '../visual/visual-query-tool.js';
-import { buildVisualQueryPlannerRequest, parseVisualQueryPlan, createSyntheticVisualExchange, unavailableVisualPerception } from '../visual/visual-query-planner.js';
+import { buildVisualQueryPlannerRequest, buildVisualQueryPlannerFallbackRequest, parseVisualQueryPlan, parseVisualQueryPlanFallback, createSyntheticVisualExchange, unavailableVisualPerception } from '../visual/visual-query-planner.js';
 import { executeDirectedVisualQuery } from '../visual/directed-perception.js';
+import { VisualEvidenceStateStore, VISUAL_EVIDENCE_RESOLVED, VISUAL_EVIDENCE_RETRYABLE_FAILED, visualEvidenceIdentity, materializeResolvedVisualEvidence } from '../visual/visual-evidence-state.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
 import { formatRuntimeStatusLine, localizeProgressMessage, statusText } from '../i18n/response-language.js';
@@ -617,6 +618,10 @@ export function createProxyServer(config, dependencies = {}) {
     retentionMs: config.cache?.retentionMs,
   });
   const analysisRegistry = dependencies.analysisRegistry || new MediaAnalysisRegistry();
+  const visualEvidenceStateStore = dependencies.visualEvidenceStateStore || new VisualEvidenceStateStore({
+    retentionMs: config.cache?.retentionMs || 60 * 60 * 1000,
+    maxEntries: 256,
+  });
   const cacheReady = Promise.all([
     mediaCache.initialize(),
     perceptionCache.initialize(),
@@ -2210,30 +2215,110 @@ export function createProxyServer(config, dependencies = {}) {
         return progress;
       };
 
+      const visualEvidenceKeyForSource = (sourceId) => {
+        const source = directedVisualSession?.get(sourceId);
+        return visualEvidenceIdentity({ sessionId: clientSessionId, imageSha256: source?.imageSha256 || '' });
+      };
+
+      const persistVisualState = (sourceIds, visualPlan, perceptionResult, error = null) => {
+        if (!clientSessionId || sourceIds.length !== 1) return;
+        const sourceId = sourceIds[0];
+        const key = visualEvidenceKeyForSource(sourceId);
+        if (!key) return;
+        const usable = perceptionResult && perceptionResult.status !== 'unavailable'
+          && Array.isArray(perceptionResult.answers) && perceptionResult.answers.length > 0;
+        if (usable) {
+          visualEvidenceStateStore.setResolved(key, { plan: visualPlan, perception: perceptionResult, sourceId });
+          log(config, 'info', 'visual_evidence_state_resolved', { requestId, source_id: sourceId, key_prefix: key.slice(0,12) });
+        } else {
+          visualEvidenceStateStore.setRetryableFailed(key, {
+            code: error?.code || 'visual_perception_unavailable',
+            detail: error?.message || 'Visual evidence was unavailable.',
+          });
+          log(config, 'warn', 'visual_evidence_state_retryable_failed', { requestId, source_id: sourceId, key_prefix:key.slice(0,12), code:error?.code || 'visual_perception_unavailable' });
+        }
+      };
+
+      const injectResolvedVisualState = (body, sourceIds) => {
+        if (!clientSessionId || sourceIds.length !== 1) return null;
+        const sourceId=sourceIds[0];
+        const key=visualEvidenceKeyForSource(sourceId);
+        const state=key ? visualEvidenceStateStore.get(key) : null;
+        if (state?.status !== VISUAL_EVIDENCE_RESOLVED) return null;
+        const materialized=materializeResolvedVisualEvidence(state, sourceId);
+        if (!materialized) return null;
+        const next=ensureDirectedVisualCapability(structuredClone(body));
+        const toolUseId=`vcc-auto-visual-reuse-${requestId}-${orchestratedDirectedSourceIds.size + 1}`;
+        next.messages.push(...createSyntheticVisualExchange(materialized.plan, materialized.perception, {toolUseId}));
+        orchestratedDirectedSourceIds.add(sourceId);
+        log(config,'info','visual_evidence_state_reused',{requestId,source_id:sourceId,key_prefix:key.slice(0,12),status:state.status});
+        log(config,'info','visual_query_result_injected',{requestId,source_ids:[sourceId],status:materialized.perception?.status || 'unknown',answer_count:Array.isArray(materialized.perception?.answers)?materialized.perception.answers.length:0,reused:true});
+        return next;
+      };
+
       const orchestrateFreshDirectedVisuals = async (body) => {
         if (!directedVisualSession?.hasSources()) return body;
         const currentSourceIds = directedVisualSession.sourceIdsForMessageIndex(
           directedCurrentMessageIndex,
           { sourceKinds: ['direct_image', 'read_image', 'tool_result_image'] },
         );
-        const freshSourceIds = currentSourceIds.filter((sourceId) => !orchestratedDirectedSourceIds.has(sourceId));
-        if (freshSourceIds.length === 0) return ensureDirectedVisualCapability(body);
+        let sourceIds = currentSourceIds.filter((sourceId) => !orchestratedDirectedSourceIds.has(sourceId));
+        let historyRetry = false;
+
+        if (sourceIds.length === 0) {
+          const latestHistoryIds = directedVisualSession.latestSourceIds({
+            sourceKinds:['direct_image','read_image','tool_result_image'],
+            beforeMessageIndex: directedCurrentMessageIndex,
+          }).filter((sourceId)=>!orchestratedDirectedSourceIds.has(sourceId));
+          if (latestHistoryIds.length === 1 && clientSessionId) {
+            const key=visualEvidenceKeyForSource(latestHistoryIds[0]);
+            const state=key ? visualEvidenceStateStore.get(key) : null;
+            if (state?.status === VISUAL_EVIDENCE_RESOLVED) {
+              return injectResolvedVisualState(body, latestHistoryIds) || ensureDirectedVisualCapability(body);
+            }
+            if (state?.status === VISUAL_EVIDENCE_RETRYABLE_FAILED) {
+              sourceIds=latestHistoryIds;
+              historyRetry=true;
+              log(config,'info','visual_evidence_state_retry_started',{requestId,source_id:sourceIds[0],key_prefix:key.slice(0,12),previous_code:state.code || ''});
+            }
+          }
+        }
+
+        if (sourceIds.length === 0) return ensureDirectedVisualCapability(body);
 
         const plannerStartedAt = Date.now();
         log(config, 'info', 'visual_query_planning_started', {
-          requestId, source_ids: freshSourceIds, source_count: freshSourceIds.length,
+          requestId, source_ids: sourceIds, source_count: sourceIds.length, history_retry: historyRetry,
         });
         let visualPlan = null;
         let perceptionResult = null;
+        let planningError = null;
         try {
-          const plannerRequest = buildVisualQueryPlannerRequest(ensureDirectedVisualCapability(body), { sourceIds: freshSourceIds });
+          const plannerBaseBody=ensureDirectedVisualCapability(body);
+          const plannerRequest = buildVisualQueryPlannerRequest(plannerBaseBody, { sourceIds });
           const plannerResponse = await callUpstreamJson(
             plannerRequest, config, req.headers, abortController.signal, '/v1/messages',
             { onBusyEvent: onBaseBusyEvent },
           );
-          visualPlan = parseVisualQueryPlan(plannerResponse, freshSourceIds);
+          try {
+            visualPlan = parseVisualQueryPlan(plannerResponse, sourceIds);
+          } catch (error) {
+            if (!error?.retryable) throw error;
+            log(config,'warn','visual_query_planning_fallback_started',{
+              requestId,source_ids:sourceIds,primary_code:error?.code || 'visual_query_planner_failed',
+            });
+            const fallbackRequest=buildVisualQueryPlannerFallbackRequest(plannerBaseBody,{sourceIds,primaryResponse:plannerResponse});
+            const fallbackResponse=await callUpstreamJson(
+              fallbackRequest,config,req.headers,abortController.signal,'/v1/messages',
+              {onBusyEvent:onBaseBusyEvent},
+            );
+            visualPlan=parseVisualQueryPlanFallback(fallbackResponse,sourceIds);
+            log(config,'info','visual_query_planning_fallback_completed',{
+              requestId,source_ids:sourceIds,question_count:visualPlan.questions.length,
+            });
+          }
           log(config, 'info', 'visual_query_planning_completed', {
-            requestId, source_ids: freshSourceIds, question_count: visualPlan.questions.length,
+            requestId, source_ids: sourceIds, question_count: visualPlan.questions.length,
             elapsed_ms: Date.now() - plannerStartedAt,
           });
           perceptionResult = await executeDirectedVisualQuery({
@@ -2252,12 +2337,13 @@ export function createProxyServer(config, dependencies = {}) {
             onEvent: (event, fields) => log(config, event === 'vision_upstream_response' && fields?.http_status !== 200 ? 'warn' : 'info', event, { requestId, ...fields }),
           });
         } catch (error) {
+          planningError=error;
           log(config, 'warn', 'visual_query_planning_failed', {
-            requestId, source_ids: freshSourceIds, code: error?.code || error?.name || 'error',
+            requestId, source_ids: sourceIds, code: error?.code || error?.name || 'error',
             retryable: Boolean(error?.retryable), elapsed_ms: Date.now() - plannerStartedAt,
           });
           visualPlan = {
-            schema_version: 'visual-query-plan-v1', source_ids: freshSourceIds,
+            schema_version: 'visual-query-plan-v1', source_ids: sourceIds,
             objective: 'Visual inspection was requested by the current task, but the internal visual planner was unavailable.',
             questions: [{ id:'planner_unavailable', question:'Preserve uncertainty because the internal visual planner was unavailable.' }],
             requested_evidence: [], detail_level: 'normal',
@@ -2267,14 +2353,16 @@ export function createProxyServer(config, dependencies = {}) {
             detail: 'The Proxy could not obtain a valid task-specific visual perception plan.',
           });
         }
+        persistVisualState(sourceIds,visualPlan,perceptionResult,planningError);
         const toolUseId = `vcc-auto-visual-${requestId}-${orchestratedDirectedSourceIds.size + 1}`;
         const exchange = createSyntheticVisualExchange(visualPlan, perceptionResult, { toolUseId });
         const next = ensureDirectedVisualCapability(structuredClone(body));
         next.messages.push(...exchange);
-        for (const sourceId of freshSourceIds) orchestratedDirectedSourceIds.add(sourceId);
+        for (const sourceId of sourceIds) orchestratedDirectedSourceIds.add(sourceId);
         log(config, 'info', 'visual_query_result_injected', {
-          requestId, source_ids: freshSourceIds, status: perceptionResult?.status || 'unknown',
+          requestId, source_ids: sourceIds, status: perceptionResult?.status || 'unknown',
           answer_count: Array.isArray(perceptionResult?.answers) ? perceptionResult.answers.length : 0,
+          history_retry: historyRetry,
         });
         return next;
       };

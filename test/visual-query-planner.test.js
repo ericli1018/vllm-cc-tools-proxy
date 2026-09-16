@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   VISUAL_QUERY_PLANNER_MARKER,
   buildVisualQueryPlannerRequest,
+  buildVisualQueryPlannerFallbackRequest,
   parseVisualQueryPlan,
+  parseVisualQueryPlanFallback,
   createSyntheticVisualExchange,
 } from '../src/visual/visual-query-planner.js';
 
@@ -57,4 +59,36 @@ test('V0.30.4 synthetic visual exchange preserves tool_result semantics without 
   assert.equal(exchange[1].content[0].type,'tool_result');
   assert.equal(exchange[1].content[0].tool_use_id,'auto-1');
   assert.match(exchange[1].content[0].content,/visual-perception-v1/);
+});
+
+
+test('V0.30.6 planner fallback preserves the complete Main context and asks for bounded JSON only after tool_missing', () => {
+  const original = {
+    model:'m', stream:true, max_tokens:32768,
+    system:'FULL_MAIN_SYSTEM_306',
+    tools:[{name:'Bash',description:'shell',input_schema:{type:'object'}}],
+    messages:[
+      {role:'user',content:'FULL_MAIN_CONTEXT_306 build and inspect the page'},
+      {role:'assistant',content:[{type:'tool_use',id:'r1',name:'Read',input:{file_path:'/tmp/s.png'}}]},
+      {role:'user',content:[{type:'tool_result',tool_use_id:'r1',content:'image result'}]},
+    ],
+  };
+  const primaryResponse={content:[{type:'text',text:'I should inspect layout, text clipping and the footer.'}]};
+  const fallback=buildVisualQueryPlannerFallbackRequest(original,{sourceIds:['img_01'],primaryResponse});
+  assert.equal(fallback.stream,false);
+  assert.match(String(fallback.system),/FULL_MAIN_SYSTEM_306/);
+  assert.match(JSON.stringify(fallback.messages),/FULL_MAIN_CONTEXT_306/);
+  assert.match(JSON.stringify(fallback.messages),/I should inspect layout/);
+  assert.deepEqual(fallback.tools,[]);
+  assert.equal('tool_choice' in fallback,false);
+  assert.ok(fallback.max_tokens <= 1024);
+});
+
+test('V0.30.6 planner fallback parses a JSON object from text or thinking without changing the visual plan schema', () => {
+  const plan=parseVisualQueryPlanFallback({content:[
+    {type:'thinking',thinking:'Planning only. {"schema_version":"visual-query-plan-v1","source_ids":["img_01"],"objective":"Inspect screenshot","questions":[{"id":"layout","question":"Is anything clipped or overlapping?"}],"requested_evidence":["layout"],"detail_level":"high"}'},
+  ]},['img_01']);
+  assert.equal(plan.objective,'Inspect screenshot');
+  assert.deepEqual(plan.source_ids,['img_01']);
+  assert.equal(plan.questions[0].id,'layout');
 });

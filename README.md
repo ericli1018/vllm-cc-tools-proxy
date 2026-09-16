@@ -1,10 +1,47 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.5 keeps the V0.30.4 Proxy-owned Directed Visual architecture, but hardens the internal visual planner: the planner receives the complete existing Main context and must return its perception plan through one forced internal `submit_visual_plan` tool call instead of free-form JSON text. The Proxy then sends only a simple perception prompt (objective/questions) plus the image to Ollama Vision and injects the resulting `visual-perception-v1` evidence back into the original Main flow. Fresh directed images no longer emit generic `media_ready` progress, and a silent model-round start supersedes any stale pre-30-second media progress while preserving the existing `處理中…` timeline.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.30.6 keeps the V0.30.5 full-context Proxy-owned Directed Visual flow and adds resilience around planner misses plus cross-continuation visual evidence state. The visual planner still sees the complete existing Main context; Ollama Vision still receives only the task-specific perception plan plus image pixels.
 
+## V0.30.6 Visual Planner Resilience and Evidence State
 
+V0.30.6 preserves the complete V0.30.5 data flow:
 
+```text
+complete existing Main context
+→ Proxy internal visual planner
+→ visual-query-plan-v1
+→ simple perception prompt + image pixels
+→ Ollama Vision
+→ visual-perception-v1
+→ synthetic tool_result
+→ original Main flow
+```
 
+The Main planner continues to receive the **complete existing Main context**. V0.30.6 does not compact or replace that context. The Vision sensor still does **not** receive the full Claude Code conversation.
+
+Planner resilience now has two bounded stages:
+
+```text
+primary: forced submit_visual_plan tool call
+  ↓ tool/schema miss
+fallback: same complete Main context + bounded JSON-only plan recovery
+  ↓
+validated visual-query-plan-v1
+```
+
+The fallback is used only after a retryable planner-structure failure. It does not receive image pixels and does not answer the user's final task. Primary planner output is capped more tightly, and fallback output is capped to 1024 tokens.
+
+V0.30.6 also replaces the old fresh/history-only visual decision with a bounded **visual evidence state** for single logical images inside the same Claude Code session:
+
+- `UNSEEN`: no persisted visual result exists yet.
+- `RESOLVED`: usable `visual-perception-v1` evidence exists and can be reinjected on a later history-only continuation without rerunning Planner/Vision.
+- `RETRYABLE_FAILED`: the prior planner/perception attempt was unavailable; a later history-only continuation may retry visual orchestration instead of leaving Main with only `visual_content_visible=false` metadata.
+
+Fresh current-turn images are still replanned for the current task even if the exact pixels were resolved earlier, so old task-specific evidence is not silently substituted for a new visual question. Persistent reuse/retry is intentionally limited to one logical directed image at a time; multi-image fresh orchestration remains on the V0.30.5 path.
+
+This supersedes the V0.30.4 historical rule that replayed historical images never re-enter orchestration. The current rule is evidence-state driven: **resolved history reuses evidence; retryable failed history retries; unseen history remains passive unless it becomes fresh.**
+
+V0.30.6 does not redesign Directed Sensor output, crop/zoom, schema repair, Perception Cache, Native Vision precedence/fallback, PDF Vision, the 30-second progress gate, or Managed Loop execution.
 
 ## V0.30.5 Structured Full-Context Visual Planner
 
