@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.47'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.47'
+test "$(node -p "require('./package.json').version")" = '0.29.48'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.48'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.47'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.48'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1244,3 +1244,13 @@ grep -Fq 'const hasVisibleActiveMedia = visibleActiveMediaCount > 0' src/service
 node --test test/v02947-directed-tool-planning.test.js
 node --test --test-name-pattern='V0.29.47 directed image performs forced|V0.29.47 directed image keeps planning|V0.29.47 multiple fresh images' test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.47 directed image planning uses forced' test/deployment.test.js
+
+
+# V0.29.48 lean final visual evidence contract
+test -f change_log/V0.29.48-更新說明.md
+test -f change_log/V0.29.48-實作與驗證報告.md
+grep -Fq 'V0.29.48 Lean Final Visual Evidence' README.md
+grep -Fq "JSON.stringify(result)" src/visual/directed-vision.js
+! grep -Fq 'perception_request: entry.plan' src/visual/directed-vision.js
+node --test test/v02948-directed-evidence.test.js
+node --test --test-name-pattern='V0.29.47 directed image performs forced' test/proxy-server.test.js

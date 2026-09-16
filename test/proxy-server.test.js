@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.47', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.48', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.47/);
+  assert.match(first, /VERSION\s+0\.29\.48/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.47');
+  assert.equal(payload.version, '0.29.48');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.47/);
+  assert.match(payload.display, /CCTP 0\.29\.48/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4326,6 +4326,7 @@ test('V0.29.47 directed image performs forced tool planning, one Vision pass, th
     sequence.push('final');
     assert.match(serialized, /PROXY_VISUAL_EVIDENCE/);
     assert.match(serialized, /text_too_small/);
+    assert.doesNotMatch(serialized, /perception_request|perception_result|Inspect screenshot for visible defects|What visible defect or unreadable area is present/);
     assert.doesNotMatch(serialized, /PROXY_VISUAL_INPUT/);
     assert.doesNotMatch(serialized, /PROXY_HISTORICAL_VISUAL/);
     assert.doesNotMatch(serialized, /VisualInspect/);

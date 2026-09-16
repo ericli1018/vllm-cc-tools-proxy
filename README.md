@@ -1,10 +1,29 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.47 hardens Directed Vision by turning hidden Main perception planning into a forced internal `SubmitVisualPlan` tool-use contract and making all directed-image preprocessing invisible to Claude Code UI. Fresh images are perceived one image at a time, Vision remains one-shot, and only current-turn evidence reaches the final Main request. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.48 keeps the V0.29.47 forced `SubmitVisualPlan` one-shot Directed Vision flow, but makes the final Main handoff leaner: the Proxy now injects only the validated `visual_perception_v1` result itself, without replaying the planning objective/questions. Directed image state remains request-local and UI-silent. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
 
 
 
 
+
+
+## V0.29.48 Lean Final Visual Evidence
+
+Directed Vision keeps the V0.29.47 flow unchanged through planning and sensing:
+
+```text
+Read(image)
+  -> forced SubmitVisualPlan planning tool-use
+  -> one external Vision sensor call
+  -> validated visual_perception_v1 result
+  -> final Main request
+```
+
+The final Main handoff is now intentionally lean. The temporary planning contract (`objective` and `questions`) is **not** replayed into the final Main context. The `[PROXY_VISUAL_EVIDENCE]` block contains only the already-validated Vision result envelope (`schema`, `asset_id`, `status`, `answers`, and `follow_up_regions`) plus the bounded one-shot usage note.
+
+This removes redundant planning text from the prompt while preserving the exact observable evidence, answer/question-id correlation, uncertainty, normalized evidence regions, and follow-up regions that the Main model may need. Planning tool-use remains Proxy-internal, no visual state survives the request, and no historical image/evidence is re-injected on later turns.
+
+No routing or lifecycle changes are introduced in this release: Directed image UI remains silent; images remain one-at-a-time perception transactions; PDF, Native Vision, `legacy`, Web/ToolSearch, Compact, Recovery and all existing cache policies keep their V0.29.47 behavior.
 
 ## V0.29.47 Forced Planning Tool + Silent Directed Read
 

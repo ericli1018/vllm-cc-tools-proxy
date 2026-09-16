@@ -296,9 +296,13 @@ export async function executeDirectedPerception(store, plan, config, signal, {
 }
 
 function evidenceText(assetId, entry) {
+  const result = neutralizeProtocolValue(entry?.result);
+  if (!result || typeof result !== 'object' || result.asset_id !== assetId) {
+    throw new HttpError(500, `Invalid directed perception evidence for ${assetId}.`, { code: 'directed_perception_evidence_invalid' });
+  }
   return [
     '[PROXY_VISUAL_EVIDENCE]',
-    JSON.stringify(neutralizeProtocolValue({ asset_id: assetId, perception_request: entry.plan, perception_result: entry.result })),
+    JSON.stringify(result),
     'This is one-shot visual sensor evidence from the image acquired in the current interaction. Use it for the current task. If it reports partial/unresolved content or follow_up_regions, decide yourself whether to reacquire/read/crop using normal Claude Code tools. The Proxy will not perform another visual round automatically.',
   ].join('\n');
 }
