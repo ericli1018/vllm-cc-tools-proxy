@@ -17,7 +17,7 @@ function makeStore() {
   return { store, asset };
 }
 
-test('V0.29.46 planning is mandatory perception planning, not a VisualInspect tool decision', () => {
+test('V0.29.47 planning is forced SubmitVisualPlan tool-use and exposes no Claude Code tools', () => {
   const { store, asset } = makeStore();
   const request = {
     model: 'm', stream: true,
@@ -25,29 +25,26 @@ test('V0.29.46 planning is mandatory perception planning, not a VisualInspect to
     tool_choice: { type: 'auto' },
     messages: [{ role: 'user', content: [{ type: 'text', text: `[PROXY_VISUAL_INPUT]\n${JSON.stringify({ asset_id: asset.assetId, width: 1000, height: 700 })}` }] }],
   };
-  const planning = buildDirectedPlanningRequest(request, store);
+  const planning = buildDirectedPlanningRequest(request, asset);
   assert.equal(planning.stream, false);
-  assert.equal('tools' in planning, false);
-  assert.equal('tool_choice' in planning, false);
+  assert.equal(planning.tools.length, 1);
+  assert.equal(planning.tools[0].name, 'SubmitVisualPlan');
+  assert.equal(planning.tool_choice.type, 'tool');
+  assert.equal(planning.tool_choice.name, 'SubmitVisualPlan');
+  assert.equal(planning.tool_choice.disable_parallel_tool_use, true);
   const serialized = JSON.stringify(planning);
-  assert.match(serialized, /VCC_DIRECTED_VISUAL_PLANNING_V1/);
-  assert.match(serialized, /visual_perception_plan_v1/);
-  assert.doesNotMatch(serialized, /need_visual/);
-  assert.doesNotMatch(serialized, /VisualInspect/);
+  assert.match(serialized, /VCC_DIRECTED_VISUAL_PLANNING_V2/);
+  assert.doesNotMatch(serialized, /VisualInspect|need_visual|\"name\":\"Bash\"/);
 
   const parsed = parseDirectedPlanningResponse({
-    content: [{ type: 'text', text: JSON.stringify({
-      schema: 'visual_perception_plan_v1',
-      assets: [{
-        asset_id: asset.assetId,
-        objective: 'Inspect the screenshot for visible problems.',
-        questions: [{ id: 'q1', question: 'What visible UI defect is present?' }],
-      }],
-    }) }],
-  }, store);
-  assert.equal(parsed.assets.length, 1);
-  assert.equal(parsed.assets[0].asset_id, asset.assetId);
-  assert.equal(parsed.assets[0].questions.length, 1);
+    content: [{ type: 'tool_use', id: 'plan-1', name: 'SubmitVisualPlan', input: {
+      objective: 'Inspect the screenshot for visible problems.',
+      questions: [{ id: 'q1', question: 'What visible UI defect is present?' }],
+    } }],
+    stop_reason: 'tool_use',
+  }, asset);
+  assert.equal(parsed.asset_id, asset.assetId);
+  assert.equal(parsed.questions.length, 1);
 });
 
 test('V0.29.46 directed perception calls Vision once and preserves follow-up evidence for Main', async () => {

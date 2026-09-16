@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.46', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.47', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.46/);
+  assert.match(first, /VERSION\s+0\.29\.47/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.46');
+  assert.equal(payload.version, '0.29.47');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.46/);
+  assert.match(payload.display, /CCTP 0\.29\.47/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4282,7 +4282,7 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.match(reminder.text, /<\/system-reminder>$/);
 });
 
-test('V0.29.46 directed image performs one-shot Main planning, one Vision pass, then final Main', async (t) => {
+test('V0.29.47 directed image performs forced tool planning, one Vision pass, then final Main', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   const sequence = [];
@@ -4306,18 +4306,20 @@ test('V0.29.46 directed image performs one-shot Main planning, one Vision pass, 
     baseBodies.push(payload);
     const serialized = JSON.stringify(payload);
     res.writeHead(200, { 'content-type': 'application/json' });
-    if (serialized.includes('VCC_DIRECTED_VISUAL_PLANNING_V1')) {
+    if (serialized.includes('VCC_DIRECTED_VISUAL_PLANNING_V2')) {
       sequence.push('planning');
-      assert.equal(Array.isArray(payload.tools), false);
-      assert.equal('tool_choice' in payload, false);
+      assert.equal(payload.tools.length, 1);
+      assert.equal(payload.tools[0].name, 'SubmitVisualPlan');
+      assert.equal(payload.tool_choice?.type, 'tool');
+      assert.equal(payload.tool_choice?.name, 'SubmitVisualPlan');
+      assert.equal(payload.tool_choice?.disable_parallel_tool_use, true);
       assert.match(serialized, /PROXY_VISUAL_INPUT/);
-      assert.doesNotMatch(serialized, /VisualInspect/);
+      assert.doesNotMatch(serialized, /VisualInspect|\"name\":\"Bash\"/);
       res.end(JSON.stringify({
         id: 'plan', type: 'message', role: 'assistant', model: 'm',
-        content: [{ type: 'text', text: JSON.stringify({
-          schema: 'visual_perception_plan_v1',
-          assets: [{ asset_id: 'visual-1', objective: 'Inspect screenshot for visible defects.', questions: [{ id: 'q1', question: 'What visible defect or unreadable area is present?' }] }],
-        }) }], stop_reason: 'end_turn', usage: {},
+        content: [{ type: 'tool_use', id: 'plan-1', name: 'SubmitVisualPlan', input: {
+          objective: 'Inspect screenshot for visible defects.', questions: [{ id: 'q1', question: 'What visible defect or unreadable area is present?' }],
+        } }], stop_reason: 'tool_use', usage: {},
       }));
       return;
     }
@@ -4407,8 +4409,8 @@ test('V0.29.46 directed fresh image may precede reminder messages in the current
     baseCall += 1;
     const body = JSON.parse((await read(req)).toString());
     res.writeHead(200, { 'content-type': 'application/json' });
-    if (JSON.stringify(body).includes('VCC_DIRECTED_VISUAL_PLANNING_V1')) {
-      res.end(JSON.stringify({ id:'p',type:'message',role:'assistant',model:'m',content:[{type:'text',text:JSON.stringify({schema:'visual_perception_plan_v1',assets:[{asset_id:'visual-1',objective:'inspect',questions:[{id:'q1',question:'what is visible?'}]}]})}],stop_reason:'end_turn',usage:{} }));
+    if (JSON.stringify(body).includes('VCC_DIRECTED_VISUAL_PLANNING_V2')) {
+      res.end(JSON.stringify({ id:'p',type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:'plan-tail',name:'SubmitVisualPlan',input:{objective:'inspect',questions:[{id:'q1',question:'what is visible?'}]}}],stop_reason:'tool_use',usage:{} }));
     } else {
       assert.match(JSON.stringify(body), /PROXY_VISUAL_EVIDENCE/);
       res.end(JSON.stringify({ id:'d',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'TAIL_OK'}],stop_reason:'end_turn',usage:{} }));
@@ -4534,4 +4536,120 @@ test('V0.29.46 directed historical-only continuation does not advertise active m
   assert.equal(logs.some((entry) => entry.event === 'managed_task_progress'
     && ['media_cache_miss', 'media_ready'].includes(entry.phase)), false);
   assert.doesNotMatch(JSON.stringify(observed), /PROXY_HISTORICAL_VISUAL|PROXY_VISUAL_INPUT|PROXY_VISUAL_EVIDENCE|VisualInspect/);
+});
+
+test('V0.29.47 directed image keeps planning and Vision progress invisible to Claude Code UI', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const logs = [];
+  const vision = await startJsonServer(async (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      schema: 'visual_perception_v1', asset_id: 'visual-1', status: 'complete',
+      answers: [{ question_id: 'q1', status: 'answered', answer: 'visible', evidence: [], uncertainty: '' }],
+      follow_up_regions: [],
+    }) } }] }));
+  });
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    if (req.url?.includes('/count_tokens')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ input_tokens: 100 }));
+      return;
+    }
+    if (payload.stream === false && payload.tools?.length === 1 && payload.tools[0]?.name === 'SubmitVisualPlan') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({
+        id: 'plan', type: 'message', role: 'assistant', model: 'm', stop_reason: 'tool_use', usage: {},
+        content: [{ type: 'tool_use', id: 'plan-1', name: 'SubmitVisualPlan', input: {
+          objective: 'Inspect the screenshot.', questions: [{ id: 'q1', question: 'What is visible?' }],
+        } }],
+      }));
+      return;
+    }
+    assert.equal(payload.stream, true);
+    assert.match(JSON.stringify(payload), /PROXY_VISUAL_EVIDENCE/);
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","content":[],"model":"m","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"VISIBLE_FINAL"}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url, vllmVisionUrl: vision.url, vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm', visionOrchestrationMode: 'directed',
+    progressVisibleAfterMs: 0, logLevel: 'info', logSink: (entry) => logs.push(entry),
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: [
+      { type: 'text', text: 'Check this screenshot.' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } },
+    ] }] }),
+  });
+  assert.equal(response.status, 200);
+  const text = await response.text();
+  assert.match(text, /VISIBLE_FINAL/);
+  assert.doesNotMatch(text, /正在處理新的文件與圖片內容|正在準備圖片|正在請主模型規劃圖片分析需求|正在依照模型需求分析圖片|圖片 1\/1|目前處理步驟仍在進行/);
+
+  const internalEvents = logs.map((entry) => entry.event);
+  assert.ok(internalEvents.includes('directed_perception_planning_started'));
+  assert.ok(internalEvents.includes('directed_perception_planning_completed'));
+  assert.ok(internalEvents.includes('directed_perception_started'));
+  assert.ok(internalEvents.includes('directed_perception_completed'));
+});
+
+test('V0.29.47 multiple fresh images are defensively perceived one image at a time before one final Main call', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const sequence = [];
+  let planningIndex = 0;
+  let visionIndex = 0;
+  const vision = await startJsonServer(async (_req, res) => {
+    visionIndex += 1;
+    sequence.push(`vision-${visionIndex}`);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      schema: 'visual_perception_v1', asset_id: `visual-${visionIndex}`, status: 'complete',
+      answers: [{ question_id: 'q1', status: 'answered', answer: `visible-${visionIndex}`, evidence: [], uncertainty: '' }],
+      follow_up_regions: [],
+    }) } }] }));
+  });
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    const serialized = JSON.stringify(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (payload.tools?.length === 1 && payload.tools[0]?.name === 'SubmitVisualPlan') {
+      planningIndex += 1;
+      sequence.push(`planning-${planningIndex}`);
+      const markers = serialized.match(/PROXY_VISUAL_INPUT/g) || [];
+      assert.equal(markers.length, 1);
+      assert.equal(payload.tool_choice?.name, 'SubmitVisualPlan');
+      res.end(JSON.stringify({ id:`p${planningIndex}`,type:'message',role:'assistant',model:'m',content:[{type:'tool_use',id:`tp${planningIndex}`,name:'SubmitVisualPlan',input:{objective:`inspect-${planningIndex}`,questions:[{id:'q1',question:'what is visible?'}]}}],stop_reason:'tool_use',usage:{} }));
+      return;
+    }
+    sequence.push('final');
+    assert.equal((serialized.match(/PROXY_VISUAL_EVIDENCE/g) || []).length, 2);
+    assert.match(serialized, /visible-1/);
+    assert.match(serialized, /visible-2/);
+    res.end(JSON.stringify({ id:'done',type:'message',role:'assistant',model:'m',content:[{type:'text',text:'MULTI_OK'}],stop_reason:'end_turn',usage:{} }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url, vllmVisionUrl: vision.url, vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm', visionOrchestrationMode: 'directed',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+  const response = await fetch(`${proxyUrl}/v1/messages`, { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({model:'m',stream:false,messages:[{role:'user',content:[
+    {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
+    {type:'image',source:{type:'base64',media_type:'image/png',data:png.toString('base64')}},
+  ]}]}) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'MULTI_OK');
+  assert.deepEqual(sequence, ['planning-1','vision-1','planning-2','vision-2','final']);
 });

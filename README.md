@@ -1,9 +1,34 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.46 replaces the previous Directed Vision `VisualInspect`/Managed-Loop design with a stateless one-shot perception pipeline: a fresh image always triggers hidden Main-model perception planning, exactly one external Vision sensor pass per image, and then the normal final Main-model request with structured current-turn evidence. Historical directed images, descriptors and Vision evidence are not re-injected. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.47 hardens Directed Vision by turning hidden Main perception planning into a forced internal `SubmitVisualPlan` tool-use contract and making all directed-image preprocessing invisible to Claude Code UI. Fresh images are perceived one image at a time, Vision remains one-shot, and only current-turn evidence reaches the final Main request. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
 
 
 
+
+
+## V0.29.47 Forced Planning Tool + Silent Directed Read
+
+`VISION_ORCHESTRATION_MODE=directed` now treats image planning as a Proxy-internal forced tool-use transaction instead of free-form JSON text generation.
+
+For each fresh image, the hidden planning request exposes **only** one tool:
+
+```text
+SubmitVisualPlan
+```
+
+and forces:
+
+```json
+{"type":"tool","name":"SubmitVisualPlan","disable_parallel_tool_use":true}
+```
+
+The planning tool input contains only the task-specific `objective` and 1..8 observable `questions`. The model does not provide `asset_id`; the Proxy binds the tool result to the single request-local image transaction. Free text, thinking text, markdown fences and arbitrary JSON text are ignored for planning. Exactly one `SubmitVisualPlan` `tool_use` is required, after which the Proxy performs exactly one Vision sensor call for that image and injects the resulting current-turn evidence into the normal final Main request.
+
+Directed images are processed **one image at a time**. The expected Claude Code workflow remains `Read(image) -> perception -> Main`. If a request defensively contains multiple fresh images, the Proxy runs the same single-image planning/Vision transaction sequentially for each image, then performs one final Main call with all current-turn evidence. No visual state survives the request.
+
+Directed perception is also UI-silent. Claude Code no longer receives Proxy progress lines for `media_cache_miss`, `image_start`, directed planning, directed Vision sensor work, `media_ready`, image counters, or directed-image semantic heartbeat. The user sees the ordinary Claude Code `Read` lifecycle; detailed `directed_*` diagnostics remain in Proxy logs for troubleshooting. Non-directed PDF/legacy media progress and Native Vision behavior keep their existing policies.
+
+The final Main request receives the original Claude Code tool set, never `SubmitVisualPlan`. Planning tool-use is ephemeral Proxy orchestration and is not inserted into the conversation transcript.
 
 ## V0.29.46 Stateless One-Shot Directed Vision
 

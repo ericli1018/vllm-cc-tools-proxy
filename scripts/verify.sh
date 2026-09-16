@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.46'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.46'
+test "$(node -p "require('./package.json').version")" = '0.29.47'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.47'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.46'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.47'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1214,24 +1214,33 @@ test -f change_log/V0.29.45-更新說明.md
 test -f change_log/V0.29.45-實作與驗證報告.md
 grep -Fq 'V0.29.45 Active-Media Progress Isolation' README.md
 grep -Fq 'const hasActiveMedia = activeMediaCount > 0' src/services/proxy-server.js
-grep -Fq 'request.stream === true && hasActiveMedia && !allMediaCached' src/services/proxy-server.js
-grep -Fq 'showInitialModelProgress: hasActiveMedia' src/services/proxy-server.js
+grep -Fq 'const hasVisibleActiveMedia = visibleActiveMediaCount > 0' src/services/proxy-server.js
+grep -Fq 'request.stream === true && hasVisibleActiveMedia && !allMediaCached' src/services/proxy-server.js
+grep -Fq 'showInitialModelProgress: hasVisibleActiveMedia' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.46 directed historical-only continuation' test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.45 separates historical media cleanup' test/deployment.test.js
 
 
-# V0.29.46 stateless one-shot Directed Vision contract
+# V0.29.46 stateless one-shot Directed Vision history
 test -f change_log/V0.29.46-更新說明.md
 test -f change_log/V0.29.46-實作與驗證報告.md
 grep -Fq 'V0.29.46 Stateless One-Shot Directed Vision' README.md
-grep -Fq 'VCC_DIRECTED_VISUAL_PLANNING_V1' src/visual/directed-vision.js
-grep -Fq 'visual_perception_plan_v1' src/visual/directed-vision.js
 grep -Fq 'PROXY_VISUAL_EVIDENCE' src/visual/directed-vision.js
 grep -Fq 'buildDirectedPlanningRequest' src/services/proxy-server.js
 grep -Fq 'executeDirectedPerception' src/services/proxy-server.js
 grep -Fq 'injectDirectedPerceptionEvidence' src/services/proxy-server.js
 grep -Fq 'currentInteractionStartIndex' src/services/proxy-server.js
 ! grep -Rq 'DIRECTED_VISUAL_TOOL_NAME\|executeDirectedVisualInspect\|isDirectedVisualToolName\|PROXY_HISTORICAL_VISUAL' src
-node --test test/v02946-directed-one-shot.test.js
-node --test --test-name-pattern='V0.29.46 directed' test/proxy-server.test.js
-node --test --test-name-pattern='V0.29.46 directed image Vision is one-shot' test/deployment.test.js
+node --test --test-name-pattern='V0.29.46 directed historical images|V0.29.46 directed fresh image may precede|V0.29.46 directed count_tokens' test/proxy-server.test.js
+
+# V0.29.47 forced planning tool + silent directed Read contract
+test -f change_log/V0.29.47-更新說明.md
+test -f change_log/V0.29.47-實作與驗證報告.md
+grep -Fq 'V0.29.47 Forced Planning Tool + Silent Directed Read' README.md
+grep -Fq 'VCC_DIRECTED_VISUAL_PLANNING_V2' src/visual/directed-vision.js
+grep -Fq "PLANNING_TOOL_NAME = 'SubmitVisualPlan'" src/visual/directed-vision.js
+grep -Fq "tool_choice = { type: 'tool', name: PLANNING_TOOL_NAME, disable_parallel_tool_use: true }" src/visual/directed-vision.js
+grep -Fq 'const hasVisibleActiveMedia = visibleActiveMediaCount > 0' src/services/proxy-server.js
+node --test test/v02947-directed-tool-planning.test.js
+node --test --test-name-pattern='V0.29.47 directed image performs forced|V0.29.47 directed image keeps planning|V0.29.47 multiple fresh images' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.47 directed image planning uses forced' test/deployment.test.js

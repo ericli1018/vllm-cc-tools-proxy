@@ -836,20 +836,21 @@ test('V0.29.45 separates historical media cleanup from active-media progress', a
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.match(serverSource, /const hasActiveMedia = activeMediaCount > 0/);
-  assert.match(serverSource, /request\.stream === true && hasActiveMedia && !allMediaCached/);
-  assert.match(serverSource, /showInitialModelProgress: hasActiveMedia/);
+  assert.match(serverSource, /const hasVisibleActiveMedia = visibleActiveMediaCount > 0/);
+  assert.match(serverSource, /request\.stream === true && hasVisibleActiveMedia && !allMediaCached/);
+  assert.match(serverSource, /showInitialModelProgress: hasVisibleActiveMedia/);
   assert.match(readme, /V0\.29\.45 Active-Media Progress Isolation/);
   assert.ok(changeLogEntries.includes('V0.29.45-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.45-實作與驗證報告.md'));
 });
 
 
-test('V0.29.46 directed image Vision is one-shot and stateless', async () => {
+test('V0.29.47 directed image planning uses forced internal tool-use and remains stateless', async () => {
   const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
   const directedSource = await fs.readFile(new URL('../src/visual/directed-vision.js', import.meta.url), 'utf8');
   const mediaSource = await fs.readFile(new URL('../src/proxy/media-adapters.js', import.meta.url), 'utf8');
-  assert.match(directedSource, /VCC_DIRECTED_VISUAL_PLANNING_V1/);
-  assert.match(directedSource, /visual_perception_plan_v1/);
+  assert.match(directedSource, /VCC_DIRECTED_VISUAL_PLANNING_V2/);
+  assert.match(directedSource, /SubmitVisualPlan/);
   assert.match(directedSource, /PROXY_VISUAL_EVIDENCE/);
   assert.match(serverSource, /buildDirectedPlanningRequest/);
   assert.match(serverSource, /executeDirectedPerception/);

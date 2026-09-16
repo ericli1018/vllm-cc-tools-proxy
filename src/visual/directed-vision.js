@@ -74,10 +74,10 @@ export function formatDirectedVisualInput(asset) {
   ].join('\n');
 }
 
-const PLANNING_INSTRUCTION = `[VCC_DIRECTED_VISUAL_PLANNING_V1]
-This is a hidden perception-planning phase for one or more images that were intentionally acquired in the current interaction. Every [PROXY_VISUAL_INPUT] MUST be planned. Do not introduce any optional inspect/skip decision. Do not solve the user's task, do not call tools, do not recommend commands, and do not claim to see pixels. Return JSON only using exactly this schema:
-{"schema":"visual_perception_plan_v1","assets":[{"asset_id":"must match a current asset","objective":"task-specific perception objective","questions":[{"id":"q1","question":"precise observable question"}]}]}
-Return exactly one assets entry for every current visual asset, no extra assets, and 1 to 8 questions per asset.`;
+const PLANNING_TOOL_NAME = 'SubmitVisualPlan';
+
+const PLANNING_INSTRUCTION = `[VCC_DIRECTED_VISUAL_PLANNING_V2]
+This is a hidden perception-planning phase for exactly one image that was intentionally acquired in the current interaction. The image itself is not visible to you in this phase. Decide only what observable information must be extracted from the image for the current task. Do not solve the user's task, do not recommend commands, do not call any other tool, and do not claim to see pixels. You MUST call SubmitVisualPlan exactly once. The tool call is the only accepted planning result.`;
 
 function appendSystemInstruction(system, text) {
   if (Array.isArray(system)) return [...structuredClone(system), { type: 'text', text }];
@@ -85,13 +85,63 @@ function appendSystemInstruction(system, text) {
   return text;
 }
 
-export function buildDirectedPlanningRequest(request, store) {
-  if (!store || store.size < 1) throw new HttpError(500, 'Directed perception planning requires current visual assets.', { code: 'directed_visual_assets_missing' });
+function directedPlanningToolDefinition() {
+  return {
+    name: PLANNING_TOOL_NAME,
+    description: 'Submit the exact visual perception objective and observable questions for the single image in the current planning transaction. You must use this tool exactly once.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['objective', 'questions'],
+      properties: {
+        objective: { type: 'string', minLength: 1, maxLength: 2000 },
+        questions: {
+          type: 'array', minItems: 1, maxItems: 8,
+          items: {
+            type: 'object', additionalProperties: false,
+            required: ['id', 'question'],
+            properties: {
+              id: { type: 'string', minLength: 1, maxLength: 100 },
+              question: { type: 'string', minLength: 1, maxLength: 1000 },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+function normalizePlanningAsset(assetOrStore) {
+  if (assetOrStore?.assetId) return assetOrStore;
+  if (assetOrStore && typeof assetOrStore.values === 'function') {
+    const values = assetOrStore.values();
+    if (values.length === 1) return values[0];
+  }
+  throw new HttpError(500, 'Directed perception planning requires exactly one current visual asset.', { code: 'directed_visual_assets_missing' });
+}
+
+function keepOnlyPlanningAsset(value, assetId) {
+  if (Array.isArray(value)) return value.map((entry) => keepOnlyPlanningAsset(entry, assetId)).filter((entry) => entry !== null);
+  if (!value || typeof value !== 'object') return value;
+  if (value.type === 'text' && typeof value.text === 'string' && value.text.startsWith('[PROXY_VISUAL_INPUT]')) {
+    return value.text.includes(`"asset_id":"${assetId}"`) ? value : null;
+  }
+  const output = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const filtered = keepOnlyPlanningAsset(entry, assetId);
+    if (filtered !== null) output[key] = filtered;
+  }
+  return output;
+}
+
+export function buildDirectedPlanningRequest(request, assetOrStore) {
+  const asset = normalizePlanningAsset(assetOrStore);
   const planning = structuredClone(request || {});
+  planning.messages = keepOnlyPlanningAsset(planning.messages || [], asset.assetId);
   planning.stream = false;
   planning.system = appendSystemInstruction(planning.system, PLANNING_INSTRUCTION);
-  delete planning.tools;
-  delete planning.tool_choice;
+  planning.tools = [directedPlanningToolDefinition()];
+  planning.tool_choice = { type: 'tool', name: PLANNING_TOOL_NAME, disable_parallel_tool_use: true };
   delete planning.output_config;
   if (Number.isInteger(planning.max_tokens)) planning.max_tokens = Math.min(planning.max_tokens, 4096);
   else planning.max_tokens = 4096;
@@ -102,11 +152,6 @@ function stripJsonFence(content) {
   const text = String(content ?? '').trim();
   const fenced = text.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```$/i);
   return fenced ? fenced[1].trim() : text;
-}
-
-function planningText(payload) {
-  if (!Array.isArray(payload?.content)) return '';
-  return payload.content.filter((block) => block?.type === 'text' && typeof block.text === 'string').map((block) => block.text).join('\n').trim();
 }
 
 function planningError(message) {
@@ -122,29 +167,20 @@ function validatePlanQuestion(entry, seen) {
   return { id, question };
 }
 
-export function parseDirectedPlanningResponse(payload, store) {
-  const text = planningText(payload);
-  if (!text) throw planningError('Directed perception planning returned no JSON text.');
-  let raw;
-  try { raw = JSON.parse(stripJsonFence(text)); }
-  catch { throw planningError('Directed perception planning returned malformed JSON.'); }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.schema !== 'visual_perception_plan_v1' || !Array.isArray(raw.assets)) {
-    throw planningError('Directed perception planning schema is invalid.');
-  }
-  const expected = new Set(store.values().map((asset) => asset.assetId));
-  if (raw.assets.length !== expected.size) throw planningError('Directed perception planning must cover every current visual asset exactly once.');
-  const seenAssets = new Set();
-  const assets = raw.assets.map((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) throw planningError('Directed perception planning asset entry is invalid.');
-    const assetId = boundedString(entry.asset_id, 100);
-    const objective = boundedString(entry.objective, 2000);
-    if (!expected.has(assetId) || seenAssets.has(assetId) || !objective) throw planningError('Directed perception planning asset_id/objective is invalid or duplicated.');
-    seenAssets.add(assetId);
-    if (!Array.isArray(entry.questions) || entry.questions.length < 1 || entry.questions.length > 8) throw planningError('Directed perception planning requires 1 to 8 questions per asset.');
-    const questionIds = new Set();
-    return { asset_id: assetId, objective, questions: entry.questions.map((q) => validatePlanQuestion(q, questionIds)) };
-  });
-  return neutralizeProtocolValue({ schema: 'visual_perception_plan_v1', assets });
+export function parseDirectedPlanningResponse(payload, assetOrStore) {
+  const asset = normalizePlanningAsset(assetOrStore);
+  const toolUses = Array.isArray(payload?.content)
+    ? payload.content.filter((block) => block?.type === 'tool_use' && block?.name === PLANNING_TOOL_NAME)
+    : [];
+  if (toolUses.length !== 1) throw planningError('Directed perception planning must return exactly one SubmitVisualPlan tool call.');
+  const raw = toolUses[0]?.input;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw planningError('Directed perception planning tool input is invalid.');
+  const objective = boundedString(raw.objective, 2000);
+  if (!objective) throw planningError('Directed perception planning objective is invalid.');
+  if (!Array.isArray(raw.questions) || raw.questions.length < 1 || raw.questions.length > 8) throw planningError('Directed perception planning requires 1 to 8 questions.');
+  const questionIds = new Set();
+  const questions = raw.questions.map((question) => validatePlanQuestion(question, questionIds));
+  return neutralizeProtocolValue({ asset_id: asset.assetId, objective, questions });
 }
 
 const SENSOR_SYSTEM_PROMPT = `You are a visual perception sensor for a separate text-only reasoning agent. Answer only the requested questions using directly observable image content. Do not solve the user's overall task, recommend code changes, choose tools, or issue commands. Do not crop or request a crop operation. If current resolution is insufficient, mark the question unresolved and report the smallest useful follow-up region using normalized 0..1000 coordinates. Return JSON only and exactly follow the requested schema.`;

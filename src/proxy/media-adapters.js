@@ -303,8 +303,6 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         if (!directedVisualStore || typeof directedVisualStore.register !== 'function') {
           throw new HttpError(500, 'Directed visual store is unavailable for this request.', { code: 'directed_visual_store_unavailable' });
         }
-        const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
-        await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const sourceBuffer = await readSource(block.source, block.source.media_type);
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal });
         const receivedWidth = normalized.originalWidth || normalized.width;

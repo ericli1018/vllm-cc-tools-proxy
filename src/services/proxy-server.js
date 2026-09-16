@@ -738,6 +738,7 @@ export function createProxyServer(config, dependencies = {}) {
     let completed = false;
     let preparedMedia = null;
     let mediaProgress = null;
+    let uiMediaProgress = null;
     let directedVisualStore = null;
     let releaseRuntimeRequest = null;
     let requestStage = 'request_start';
@@ -1882,6 +1883,10 @@ export function createProxyServer(config, dependencies = {}) {
         mediaProgress = directedHistoricalPaths.size > 0
           ? createMediaProgressTracker(request.messages, { locale: config.responseLanguage, excludePaths: directedHistoricalPaths })
           : mediaInventory;
+        const directedUiExcludedPaths = new Set([...directedHistoricalPaths, ...directedVisionPaths]);
+        uiMediaProgress = directedUiExcludedPaths.size > 0
+          ? createMediaProgressTracker(request.messages, { locale: config.responseLanguage, excludePaths: directedUiExcludedPaths })
+          : mediaProgress;
         nativeVisionRawOnly = nativeVisionEligibleCount > 0
           && nativeVisionEligibleCount === mediaProgress.descriptors.length;
         if (directedHistoricalPaths.size > 0) {
@@ -2018,6 +2023,8 @@ export function createProxyServer(config, dependencies = {}) {
 
       const activeMediaCount = mediaProgress?.descriptors?.length || 0;
       const hasActiveMedia = activeMediaCount > 0;
+      const visibleActiveMediaCount = uiMediaProgress?.descriptors?.length || 0;
+      const hasVisibleActiveMedia = visibleActiveMediaCount > 0;
       const needsManagedWork = hasManagedLoop || (hasActiveMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
       const adapterDependencies = {
         allowedMediaPaths: preparedMedia?.allowedPaths,
@@ -2117,9 +2124,9 @@ export function createProxyServer(config, dependencies = {}) {
       const onProgress = async (message, details = {}) => {
         const { force = false, ...stateDetails } = details;
         const localized = localizeProgressMessage(config.responseLanguage, message, stateDetails);
-        const rendered = nativeVisionRawOnly || !hasActiveMedia
+        const rendered = nativeVisionRawOnly || !hasVisibleActiveMedia
           ? localized
-          : (mediaProgress?.render(localized, stateDetails) || localized);
+          : (uiMediaProgress?.render(localized, stateDetails) || localized);
         log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
         if (progress) await progress.update(rendered, { force, details: stateDetails });
         else deferredProgress.push({ rendered, force, stateDetails });
@@ -2191,7 +2198,7 @@ export function createProxyServer(config, dependencies = {}) {
               sampleModelHeartbeat(),
             );
           }
-          return (hasActiveMedia && !nativeVisionRawOnly ? mediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() }) : null)
+          return (hasVisibleActiveMedia && !nativeVisionRawOnly ? uiMediaProgress?.renderHeartbeat({ receivedBytes: getBaseResponseBytes() }) : null)
             || statusText(config.responseLanguage, 'currentStepWaiting', {
               seconds: Math.floor((Date.now() - progressTiming.startedAt) / 1000),
             });
@@ -2203,7 +2210,7 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       let mediaProgressOpenedEarly = false;
-      if (request.stream === true && hasActiveMedia && !allMediaCached) {
+      if (request.stream === true && hasVisibleActiveMedia && !allMediaCached) {
         const bootstrapRequest = buildMediaUsageBootstrapRequest(request);
         const bootstrapUsage = await preflightManagedUsage(
           bootstrapRequest,
@@ -2227,27 +2234,25 @@ export function createProxyServer(config, dependencies = {}) {
 
       if (hasMedia) {
         requestStage = 'media_transform';
-        if (hasActiveMedia && !allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
+        if (hasVisibleActiveMedia && !allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
         const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
         if (directedVisualStore?.size > 0 && messagesPath === '/v1/messages') {
-          requestStage = 'directed_perception_planning';
-          await onProgress('正在請主模型規劃圖片分析需求…', { phase: 'directed_perception_planning' });
-          log(config, 'info', 'directed_perception_planning_started', {
-            requestId, asset_count: directedVisualStore.size,
-          });
-          const planningRequest = buildDirectedPlanningRequest(request, directedVisualStore);
-          const planningResponse = await callUpstreamJson(
-            planningRequest, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent },
-          );
-          const perceptionPlan = parseDirectedPlanningResponse(planningResponse, directedVisualStore);
-          log(config, 'info', 'directed_perception_planning_completed', {
-            requestId, asset_count: perceptionPlan.assets.length,
-            question_count: perceptionPlan.assets.reduce((total, asset) => total + asset.questions.length, 0),
-          });
           const evidenceByAssetId = new Map();
-          for (const assetPlan of perceptionPlan.assets) {
-            await onProgress('正在依照模型需求分析圖片…', { phase: 'directed_perception_sensor' });
+          for (const asset of directedVisualStore.values()) {
+            requestStage = 'directed_perception_planning';
+            log(config, 'info', 'directed_perception_planning_started', {
+              requestId, asset_id: asset.assetId, asset_count: 1,
+            });
+            const planningRequest = buildDirectedPlanningRequest(request, asset);
+            const planningResponse = await callUpstreamJson(
+              planningRequest, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent },
+            );
+            const assetPlan = parseDirectedPlanningResponse(planningResponse, asset);
+            log(config, 'info', 'directed_perception_planning_completed', {
+              requestId, asset_id: asset.assetId, asset_count: 1, question_count: assetPlan.questions.length,
+              response_stop_reason: String(planningResponse?.stop_reason || '').slice(0, 100),
+            });
             let result;
             try {
               result = await executeDirectedPerception(directedVisualStore, assetPlan, config, abortController.signal, {
@@ -2329,8 +2334,8 @@ export function createProxyServer(config, dependencies = {}) {
         }
 
         await preparedMedia.cleanup(); preparedMedia = null;
-        if (hasActiveMedia && !nativeVisionRawOnly) {
-          const readyMessage = mediaProgress?.renderMediaReady()
+        if (hasVisibleActiveMedia && !nativeVisionRawOnly) {
+          const readyMessage = uiMediaProgress?.renderMediaReady()
             || statusText(config.responseLanguage, 'mediaReady');
           log(config, 'info', 'managed_task_progress', { requestId, message: readyMessage, delivery_status: 'requested', phase: 'media_ready' });
         }
@@ -2380,8 +2385,8 @@ export function createProxyServer(config, dependencies = {}) {
         }
       }
 
-      if (hasActiveMedia && !nativeVisionRawOnly) {
-        const readyMessage = mediaProgress?.renderMediaReady()
+      if (hasVisibleActiveMedia && !nativeVisionRawOnly) {
+        const readyMessage = uiMediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
         await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
       }
@@ -2531,7 +2536,7 @@ export function createProxyServer(config, dependencies = {}) {
               } : {}),
             });
           },
-          showInitialModelProgress: hasActiveMedia,
+          showInitialModelProgress: hasVisibleActiveMedia,
           logProtocolSnippets: Boolean(config.logProtocolSnippets),
           writeProtocolDiagnostics: protocolDiagnosticStore
             ? (bundle) => protocolDiagnosticStore.write({ request_id: requestId, ...bundle })
