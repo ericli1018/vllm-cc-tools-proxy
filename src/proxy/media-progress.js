@@ -58,7 +58,7 @@ function readToolContextMap(messages) {
   return result;
 }
 
-function collectDescriptors(messages, locale = 'zh-TW') {
+function collectDescriptors(messages, locale = 'zh-TW', { excludePaths = new Set() } = {}) {
   const toolContexts = readToolContextMap(messages);
   const descriptors = [];
   let documentFallback = 0;
@@ -73,7 +73,7 @@ function collectDescriptors(messages, locale = 'zh-TW') {
     const toolContext = block.type === 'tool_result' ? (toolContexts.get(block.tool_use_id) || inheritedToolContext) : inheritedToolContext;
     if (toolContext?.filename) filename = toolContext.filename;
 
-    if (isMediaBlock(block)) {
+    if (isMediaBlock(block) && !excludePaths.has(pathKey(currentPath))) {
       const kind = block.type === 'document' ? 'document' : 'image';
       const named = safeBasename(block.source?.filename || block.title || block.name || filename);
       let resolved = named;
@@ -143,11 +143,11 @@ function percent(completed, total) {
 }
 
 export class MediaProgressTracker {
-  constructor(messages, { now = () => Date.now(), locale = 'zh-TW' } = {}) {
+  constructor(messages, { now = () => Date.now(), locale = 'zh-TW', excludePaths = new Set() } = {}) {
     this.now = now;
     this.locale = locale;
     this.profile = languageProfile(locale);
-    this.descriptors = collectDescriptors(messages, locale);
+    this.descriptors = collectDescriptors(messages, locale, { excludePaths });
     this.byPath = new Map(this.descriptors.map((entry) => [entry.pathKey, entry]));
     this.current = null;
     this.lastStatusAt = this.now();

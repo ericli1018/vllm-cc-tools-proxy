@@ -95,6 +95,18 @@ export function formatDirectedVisualDescriptor(asset) {
   ].join('\n');
 }
 
+export function formatHistoricalDirectedVisualMarker({ filename = '', sourceKind = 'image' } = {}) {
+  const descriptor = {
+    source_kind: boundedString(sourceKind, 100) || 'image',
+    ...(filename ? { filename: boundedString(filename, 500) } : {}),
+  };
+  return [
+    '[PROXY_HISTORICAL_VISUAL]',
+    JSON.stringify(descriptor),
+    'This image belongs to an earlier conversation turn and is not loaded as a current visual asset. Do not treat it as newly provided visual evidence. If current visual evidence is needed, reacquire the image with normal Claude Code tools (for example Read, or crop then Read) so it arrives in the current turn.',
+  ].join('\\n');
+}
+
 export function directedVisualToolDefinition() {
   return {
     name: DIRECTED_VISUAL_TOOL_NAME,

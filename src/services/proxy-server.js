@@ -1849,24 +1849,42 @@ export function createProxyServer(config, dependencies = {}) {
       let nativeVisionRawOnly = false;
       let directedVisionEligibleCount = 0;
       let directedVisionPaths = new Set();
+      let directedHistoricalPaths = new Set();
 
       if (hasMedia) {
         requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
-        mediaProgress = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
+        const mediaInventory = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
         const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
-          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
+          ? mediaInventory.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
-        nativeVisionRawOnly = nativeVisionEligibleCount > 0
-          && nativeVisionEligibleCount === mediaProgress.descriptors.length;
-        const directedVisionEligible = config.visionOrchestrationMode === 'directed'
-          ? mediaProgress.descriptors.filter((entry) => entry.kind === 'image' && !nativeVisionPassthroughPaths.has(entry.pathKey))
+        const directedVisionCandidates = config.visionOrchestrationMode === 'directed'
+          ? mediaInventory.descriptors.filter((entry) => entry.kind === 'image' && !nativeVisionPassthroughPaths.has(entry.pathKey))
           : [];
+        const directedFreshMessageIndex = request.messages.length - 1;
+        const directedVisionEligible = directedVisionCandidates.filter((entry) => entry.path?.[0] === 'messages' && entry.path?.[1] === directedFreshMessageIndex);
+        const directedHistorical = directedVisionCandidates.filter((entry) => !(entry.path?.[0] === 'messages' && entry.path?.[1] === directedFreshMessageIndex));
         directedVisionEligibleCount = directedVisionEligible.length;
         directedVisionPaths = new Set(directedVisionEligible.map((entry) => entry.pathKey));
+        directedHistoricalPaths = new Set(directedHistorical.map((entry) => entry.pathKey));
+        mediaProgress = directedHistoricalPaths.size > 0
+          ? createMediaProgressTracker(request.messages, { locale: config.responseLanguage, excludePaths: directedHistoricalPaths })
+          : mediaInventory;
+        nativeVisionRawOnly = nativeVisionEligibleCount > 0
+          && nativeVisionEligibleCount === mediaProgress.descriptors.length;
+        if (directedHistoricalPaths.size > 0) {
+          // Historical directed images must bypass media preflight just like raw Native Vision images;
+          // classification above is already complete, so extending this request-local set is safe.
+          for (const historicalPath of directedHistoricalPaths) nativeVisionPassthroughPaths.add(historicalPath);
+          log(config, 'info', 'directed_historical_visuals_suppressed', {
+            requestId,
+            suppressed_image_count: directedHistoricalPaths.size,
+            fresh_image_count: directedVisionEligibleCount,
+          });
+        }
         if (directedVisionEligibleCount > 0) {
           directedVisualStore = new DirectedVisualStore();
           if (messagesPath === '/v1/messages') hasManagedLoop = true;
@@ -1989,7 +2007,8 @@ export function createProxyServer(config, dependencies = {}) {
         allMediaCached = mediaOccurrences.length > 0 && cachedOccurrences === mediaOccurrences.length;
       }
 
-      const needsManagedWork = hasManagedLoop || (hasMedia && (!allMediaCached || nativeVisionEligibleCount > 0));
+      const activeMediaCount = mediaProgress?.descriptors?.length || 0;
+      const needsManagedWork = hasManagedLoop || (activeMediaCount > 0 && (!allMediaCached || nativeVisionEligibleCount > 0));
       const adapterDependencies = {
         allowedMediaPaths: preparedMedia?.allowedPaths,
         acquireVision: (options) => admission.acquireVision(options),
@@ -1998,6 +2017,7 @@ export function createProxyServer(config, dependencies = {}) {
         analysisRegistry,
         preloadedCache,
         directedVisualStore,
+        directedHistoricalPaths,
         ...(dependencies.mediaAdapterDependencies || {}),
         continuationFreshMessageIndex: toolResultContinuation ? request.messages.length - 1 : -1,
         continuationCacheWriter: (key, value) => {

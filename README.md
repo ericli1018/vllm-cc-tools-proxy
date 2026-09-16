@@ -31,6 +31,8 @@ Claude Code / user image
 
 Directed images do not use the persistent Media Cache or same-session semantic continuation cache. Only request-local normalized image bytes/metadata are retained until the request finishes. Each `VisualInspect` call performs exactly one Vision upstream request: there is no directed auto-zoom, generic tiling, crop loop, quality retry, structured-extraction retry, or last-chance semantic salvage. Existing resource boundaries remain authoritative: image byte/pixel limits, Vision request timeout/concurrency, Managed Loop max rounds/deadline, cancellation, and exact-repeat no-progress detection.
 
+Directed mode also uses **Fresh Image Only** semantics across Claude Code continuation requests. Claude Code resends full conversation history, so image blocks from earlier messages are converted to `[PROXY_HISTORICAL_VISUAL]` inert markers and are excluded from preflight, progress counts, request-local asset registration, and `VisualInspect` eligibility. Only image blocks in the newest message may become current `[PROXY_VISUAL_ASSET]` assets. If the Main model needs an earlier image again, it must explicitly reacquire it with normal Claude Code tools; that new `Read` result then becomes fresh visual input.
+
 Vision is constrained to perception rather than task reasoning. Its JSON contains requested answers, observable evidence, uncertainty, and optional normalized follow-up regions; it must not decide the user's final task, issue shell commands, or recommend code changes. Malformed/invalid Vision JSON becomes a bounded `VisualInspect` tool error so the Main model—not the Proxy—decides the next action.
 
 Routing precedence remains explicit:

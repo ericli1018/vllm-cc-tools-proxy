@@ -1,8 +1,8 @@
 09f688c2b6727583127cc3ad7fc619aee3a4951c0431d754e2bc51555f575dbb  ./.env.example
 c25243596674d1d745ee7ef3c93b7cf72ee01b3d59702c81594c60e9ed2ce4ae  ./.gitignore
 0ad6856338f82966a546301aba13f36bd009b52959aff64cedf969571982343b  ./LICENSE
-8008c67f149b72d1f1c9cc68adca4004c17719205aa62d5628582f055517b206  ./README.md
-8f778b7a10b195369ca24de4966c6cf53870684a16ef016cde59b24d09fc3da0  ./change_log/CHANGELOG.md
+58917cd1be13d03ef6f66bb176e43f79a9f9b6a9a4907250188c81a2849e5656  ./README.md
+db2814e2fb1cca170624f30cbb6c7c63225695de7f9c3809c2ff76d18d5259dc  ./change_log/CHANGELOG.md
 4ae45485d557282e1f69af6761ba2fe696caac83bcda64cec0b657e0bb1c360c  ./change_log/V0.2.10-更新說明.md
 e425f8e961ddb175d9035c190bf7255c6761a030e5ab0aa22e0599a182a2b292  ./change_log/V0.2.11-更新說明.md
 9b3771cda8082429ff32f797a8c4999c460159c2e143cf9f36abcc228aa93c01  ./change_log/V0.2.12-更新說明.md
@@ -129,8 +129,8 @@ f0875fe8aee842fde09b24c1b67dd7d6950ce71d498b210f6ee953279ecec269  ./change_log/V
 eda2e5ff154858f0613a14823651aab2ff17c230ddb7d13433bcfc8db9e234c8  ./change_log/V0.29.42-更新說明.md
 90a49e261e76b573aa0094733b93675b36215378925afebbb95d18eb07ace1f7  ./change_log/V0.29.43-實作與驗證報告.md
 68dc437ea8907cbc93f64265efd7a9d3fb13f3f63cce6d97e3b6e2199e9f8b50  ./change_log/V0.29.43-更新說明.md
-8065ecfb8bb24b14161b21aacc389a1fd10312c60ab830e38877659807da5f80  ./change_log/V0.29.44-實作與驗證報告.md
-6d490290d652150addcba65cce7c187d4f57a7b4a05d3fb7f8c7196f7bc7afc9  ./change_log/V0.29.44-更新說明.md
+4f82f50f54f0a49b312bf5baf78b5f3fbbcab4ae11d2cebc0659bab1004af238  ./change_log/V0.29.44-實作與驗證報告.md
+926c7c8576d5259419c8938924aa1cf94a3b8ab5ffab0a9955212ddb9fd7b942  ./change_log/V0.29.44-更新說明.md
 c533253b0da3ddbc548e2e0cf654e372f8280dc39fb2a2f174b2520ef38f5231  ./change_log/V0.29.5-更新說明.md
 a2d8d5cdde52ec0bd2bcf0d7c31de4df090d8fb657fa13e85961da1773786763  ./change_log/V0.29.6-更新說明.md
 4236ae4c9b85b182e54f1088e0279d8d633765cefea3ecb6d92f2ea66a862ca6  ./change_log/V0.29.7-實作與驗證報告.md
@@ -179,9 +179,9 @@ bd5bf614302634a1ff308e3014a2f52a9c4d0dd86499d511b89ad28f4abff73a  ./src/proxy/im
 03451f5a989a0f66f880459330cf5d336de1565b80a90201de13da1a98fcd99b  ./src/proxy/managed-detector.js
 ea3eceeababd0764c8f39c90ea6d2fbdfff66003ccef1ffc941fd3fc7635eac3  ./src/proxy/managed-final.js
 7c039ebc4b6dd16ac80f0cc34a6968a609c18fc72057f1de6c987540d6b4ab59  ./src/proxy/managed-loop.js
-c5f3eac11740d747134b3c8055e7f561e0e283566d1a74dea5dcdf4e93f5f5e8  ./src/proxy/media-adapters.js
+0c914126e4c8c8d8e534128b2904565d27fef8b1fcbb1ce371cacd9ff1ddada4  ./src/proxy/media-adapters.js
 b495ba8bd6be60ec4ce49674a13488cf9da5ff9c44c2058c846f308555c54bc2  ./src/proxy/media-preflight.js
-badc3cbcf881da0fe3d390f3c9edc57ad62a7d27c2f328ce319c2ef1447c25d7  ./src/proxy/media-progress.js
+e85b2be5b166d5d7a36da493cca518110f6169933d3c8a33487a948738b7b7c1  ./src/proxy/media-progress.js
 45ee3a8f1228890bc5ed8edf5fe2b4db89ace33240820f61f58d24156c77d2cc  ./src/proxy/media-usage-bootstrap.js
 a9955cd0ec2f2a36a91e262af58d3e032d5a74090a516eda14f6ae6fec4d166a  ./src/proxy/native-web-tools.js
 4903e86d7ad54f9509d0a234b20c11cdf525c36e46718858ee1067a3c7526aa8  ./src/proxy/pdf-page-scope.js
@@ -203,12 +203,12 @@ ebc0b660afb31b262a2b0b3617823c63aa6a9f96fb4c0fbc3d5f008e56139016  ./src/proxy/we
 31a81232ae81fb91095b8697175b966f9f40b421875071b3490c319cd6909fbd  ./src/services/context-compact-client.js
 0a5250b4f059be67fc58849df3c9ff2623e582904f4ad664967cd6810e3db6ab  ./src/services/continuation-state-compressor.js
 d81b95bebf8ec99f5bcadf3af4440f114d3981b389340f940cdab19b260f4214  ./src/services/final-language-repair.js
-65a0a81034deaabbcc3c5e9591a2362a3e456fc8d482a854e3352ef0bd59b7e4  ./src/services/proxy-server.js
+5e0f9a1e515e75aad002bedc1baf82d72c2d844700c762feb7722d8263abcfde  ./src/services/proxy-server.js
 0ebeec63c60e3e799d99afc5b5e04fa0f92cc6e106817e769709c65808eb795b  ./src/services/web-fetch-processor.js
 b66fcfac9233fa198955e4a3c8fc81f684f5a79ec0ba259cf08cc984218f2135  ./src/version.js
 92ce1bb70585bb8f516b7ff48b5d0e2924140df5e264cd4c96cd2f1ca0d5f916  ./src/visual/asset-registry.js
 d31b04f4fe723a844293e02987abad97df0c24128fd1d4ba65ee2c7f586ff184  ./src/visual/crop-errors.js
-f26b49a1524d38993124c0adcc65d7b831864435fa54c65c7ff68147ebe15a25  ./src/visual/directed-vision.js
+b02391d55c68f35fe4a16d75ac917e68625e3afc0a388cc442e4363c5de71efc  ./src/visual/directed-vision.js
 324889f49608e8cc212030da8a176271929f8e8fc32ffb01f238ee66e382aa4d  ./src/visual/generic-zoom.js
 7e611c77cabf2c875bbfe192f9bab47da8d39a6b49febb320fa46cee8743b323  ./src/visual/pdf-batcher.js
 5bcbfbd7059e38ca5f4ba9d88246dc6c8b86bfb31aae9a8d406567b2bb5f2ae3  ./src/visual/pdf-evidence-merger.js
@@ -255,7 +255,7 @@ f00f76b9783f1fc58a07cfd445552ef9407c153d2d011f6c45791ce5a6045039  ./test/image-p
 d29ef3bc82c50761557e7d59a46976cd89a34529208c8469f73ecfe5ca635276  ./test/media-continuation-cache.test.js
 c45e31c8c37335aeab880112d127f287c37dc207f10c586289dd9b63f327fa6a  ./test/media-fetch.test.js
 5d96c92aacb49e24c141baa8f8ba1bb71352886bbc63cd300c7017aba69862e2  ./test/media-preflight.test.js
-d8662a6aff997f1c67222e260d014e790d41feda657108358d4d5110743247e7  ./test/media-progress.test.js
+a1aa6886c9867578d1bda179b169a2de793a7405673707c758027398b8b1dcca  ./test/media-progress.test.js
 2fd43626b696336ac3ca35f4e9a2da9d8d3bec3a8b9e5d2aca74dc59f9e76fa3  ./test/media-usage-bootstrap.test.js
 a7bfc32a3203b38b9dd1a6e8592c41ec502efa7576b1bfae81e47c5afe04c98a  ./test/native-vision-routing.test.js
 bde7bfe85aa1be350e5c80d52d853005b7c9fcc2e760c92c1822091d6e190681  ./test/native-web-tools.test.js
@@ -271,7 +271,7 @@ f6cd834b0babbe0dbdafa4965c851bc195e8e6314e59858cbfd4f4e4fd76727a  ./test/pdf-zoo
 2bbdcdcb70f3b3ab8e9ececff5855e2d1d04d169cdcb390fbfb36b5f16f4522e  ./test/progress.test.js
 6596e106a0da57382fbffb2378ef7ff23d8ae6984319cabd62264385a0d5739a  ./test/protocol-diagnostic-store.test.js
 3225f521d670f5d466c570a97934b4f34181c56469f1933ffaac64d684ecb4e5  ./test/protocol-diagnostics.test.js
-852e48137e7f66265f653a02f2116b83ad9b522428112069f419a0fb4e47f6c8  ./test/proxy-server.test.js
+37abdd42dea8df08c4a16b25c66304f54fac4d2ddc8b067226838953dbdc0104  ./test/proxy-server.test.js
 5297cc5f97a7d62cfa5f843c92cc30a9efe82b67eaec34de3d3bb4092992d7b7  ./test/response-language.test.js
 211c5e726711e9a857d96d94b0198058ba95abc6038b3e3f9d6c48d0a7bd6908  ./test/runtime-telemetry.test.js
 00d60cb9025e540ef4f6fd75606310cd792d3ef41b1c8f88e7b807e53b2355ba  ./test/server-capability-discovery.test.js

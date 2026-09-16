@@ -116,3 +116,18 @@ test('V0.29.4 media context preserves safe provenance for images returned by Rea
   assert.deepEqual(context.pageScope, { pages: [6], canonical: '6' });
   assert.doesNotMatch(JSON.stringify(context), /\/private\/board\.pdf/);
 });
+
+test('V0.29.44 directed fresh-media progress excludes historical image paths', () => {
+  const messages = [
+    { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'old', filename: 'old.png' } }] },
+    { role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'new', filename: 'new.png' } }] },
+  ];
+  const tracker = createMediaProgressTracker(messages, {
+    excludePaths: new Set([JSON.stringify(['messages', 0, 'content', 0])]),
+  });
+  assert.equal(tracker.descriptors.length, 1);
+  assert.equal(tracker.descriptors[0].filename, 'new.png');
+  assert.equal(tracker.render('正在準備圖片…', {
+    phase: 'image_start', path: ['messages', 1, 'content', 0],
+  }), '檔案：new.png｜圖片 1/1｜狀態：正在準備圖片…');
+});

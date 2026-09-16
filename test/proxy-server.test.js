@@ -4370,6 +4370,102 @@ test('V0.29.44 directed image waits for Main VisualInspect and returns structure
   assert.doesNotMatch(String(baseBodies[0].system || ''), /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
 });
 
+test('V0.29.44 directed continuation suppresses historical images instead of re-registering them', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let observed;
+  let visionCalls = 0;
+  const vision = await startJsonServer(async (_req, res) => {
+    visionCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end('{}');
+  });
+  const base = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'HISTORY_SUPPRESSED' }], stop_reason: 'end_turn', usage: {},
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: vision.url,
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm',
+    visionOrchestrationMode: 'directed',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vision.server.close()); t.after(() => base.server.close()); t.after(() => proxy.close());
+
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-old', name: 'Read', input: { file_path: '/tmp/old.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
+    }] }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'bash-now', name: 'Bash', input: { command: 'ls' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'bash-now', content: 'ok' }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'HISTORY_SUPPRESSED');
+  assert.equal(visionCalls, 0);
+  const serialized = JSON.stringify(observed);
+  assert.match(serialized, /\[PROXY_HISTORICAL_VISUAL\]/);
+  assert.doesNotMatch(serialized, /\[PROXY_VISUAL_ASSET\]/);
+  assert.equal(serialized.includes(base64), false);
+  assert.equal((observed.tools || []).some((tool) => tool.name === 'VisualInspect'), false);
+});
+
+test('V0.29.44 directed continuation registers only the latest reacquired image', async (t) => {
+  const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
+  const base64 = png.toString('base64');
+  let observed;
+  const base = await startJsonServer(async (req, res) => {
+    observed = JSON.parse((await read(req)).toString());
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({
+      id: 'done', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'LATEST_ONLY' }], stop_reason: 'end_turn', usage: {},
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    vllmVisionUrl: 'http://127.0.0.1:9',
+    vllmVisionModel: 'vision-model',
+    vllmVisionProvider: 'vllm',
+    visionOrchestrationMode: 'directed',
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close()); t.after(() => proxy.close());
+
+  const messages = [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-old', name: 'Read', input: { file_path: '/tmp/old.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-old', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
+    }] }] },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'read-new', name: 'Read', input: { file_path: '/tmp/new.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-new', content: [{
+      type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 },
+    }] }] },
+  ];
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages }),
+  });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'LATEST_ONLY');
+  const serialized = JSON.stringify(observed);
+  const serializedMessages = JSON.stringify(observed.messages);
+  assert.equal((serializedMessages.match(/\[PROXY_HISTORICAL_VISUAL\]/g) || []).length, 1);
+  assert.equal((serializedMessages.match(/\[PROXY_VISUAL_ASSET\]/g) || []).length, 1);
+  assert.equal(serialized.includes(base64), false);
+  assert.ok((observed.tools || []).some((tool) => tool.name === 'VisualInspect'));
+});
+
 test('V0.29.44 directed count_tokens exposes descriptor and VisualInspect schema without executing Vision', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   let visionCalls = 0;

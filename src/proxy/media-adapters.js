@@ -7,7 +7,7 @@ import { normalizeImage as defaultNormalizeImage, cropImage as defaultCropImage 
 import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
 import { analyzeGenericZoomFallback } from '../visual/generic-zoom.js';
-import { formatDirectedVisualDescriptor } from '../visual/directed-vision.js';
+import { formatDirectedVisualDescriptor, formatHistoricalDirectedVisualMarker } from '../visual/directed-vision.js';
 import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
@@ -31,6 +31,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const onVisionEvent = dependencies.onVisionEvent || (() => {});
   const mediaProgress = dependencies.mediaProgress || null;
   const directedVisualStore = dependencies.directedVisualStore || null;
+  const directedHistoricalPaths = dependencies.directedHistoricalPaths || new Set();
   const { maxDecodedBytes, maxOutputChars } = config.limits;
 
   const diagnoseSourceControlTags = (value) => {
@@ -291,6 +292,17 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         };
       }
       if (config.visionOrchestrationMode === 'directed') {
+        const currentPathKey = JSON.stringify(context.path || []);
+        if (directedHistoricalPaths.has(currentPathKey)) {
+          onDiagnostic('directed_historical_visual_suppressed', {
+            source_kind: provenance.sourceKind,
+            has_source_ref: Boolean(provenance.readSourceRef),
+          });
+          return {
+            type: 'text',
+            text: formatHistoricalDirectedVisualMarker({ filename, sourceKind: provenance.sourceKind }),
+          };
+        }
         if (!directedVisualStore || typeof directedVisualStore.register !== 'function') {
           throw new HttpError(500, 'Directed visual store is unavailable for this request.', { code: 'directed_visual_store_unavailable' });
         }
