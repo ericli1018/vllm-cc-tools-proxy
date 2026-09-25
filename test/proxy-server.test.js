@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.48', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.50', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.48/);
+  assert.match(first, /VERSION\s+0\.29\.50/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.48');
+  assert.equal(payload.version, '0.29.50');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.48/);
+  assert.match(payload.display, /CCTP 0\.29\.50/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4218,19 +4218,19 @@ test('V0.29.39 malformed managed tool JSON logs bounded tail token budget and th
     }),
   });
   const body = await response.text();
-  assert.match(body, /vllm returned malformed tool input JSON/i);
+  assert.match(body, /managed_tool_truncation_recovery_exhausted/i);
 
-  const upstreamFailed = logs.find((entry) => entry.event === 'base_upstream_request_failed');
-  assert.ok(upstreamFailed);
-  assert.equal(upstreamFailed.tool_name, 'WebSearch');
-  assert.equal(upstreamFailed.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
-  assert.equal(upstreamFailed.partial_json_tail, partialJson.slice(-1024));
-  assert.equal(upstreamFailed.stop_reason, 'max_tokens');
-  assert.equal(upstreamFailed.output_tokens, 32768);
-  assert.equal(upstreamFailed.max_tokens, 32768);
+  const recoveryStarted = logs.find((entry) => entry.event === 'managed_tool_input_recovery_started');
+  assert.ok(recoveryStarted);
+  assert.equal(recoveryStarted.reason, 'max_tokens_truncation');
+  assert.equal(recoveryStarted.partial_tool_name, 'WebSearch');
+  assert.equal(recoveryStarted.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
+  assert.equal(recoveryStarted.output_tokens, 32768);
+  assert.equal(recoveryStarted.max_tokens, 32768);
 
   const requestFailed = logs.find((entry) => entry.event === 'request_failed');
   assert.ok(requestFailed);
+  assert.equal(requestFailed.code, 'managed_tool_truncation_recovery_exhausted');
   assert.equal(requestFailed.request_stage, 'managed_model_round');
   assert.equal(requestFailed.tool_name, 'WebSearch');
   assert.equal(requestFailed.stop_reason, 'max_tokens');
@@ -4653,4 +4653,77 @@ test('V0.29.47 multiple fresh images are defensively perceived one image at a ti
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'MULTI_OK');
   assert.deepEqual(sequence, ['planning-1','vision-1','planning-2','vision-2','final']);
+});
+
+test('V0.29.50 managed completion probe runs before final language repair and probe text is never exposed', async (t) => {
+  const baseBodies = [];
+  const processorBodies = [];
+  const logs = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    baseBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (baseBodies.length === 1) {
+      res.end(JSON.stringify({
+        id: 'candidate-a', type: 'message', role: 'assistant', model: 'm',
+        content: [
+          { type: 'thinking', thinking: 'The requested task appears complete.' },
+          { type: 'text', text: 'The candidate final answer is complete.' },
+        ],
+        stop_reason: 'end_turn', usage: { input_tokens: 20, output_tokens: 8 },
+      }));
+      return;
+    }
+    assert.equal(baseBodies.length, 2, 'language repair must use external processor, not another Base call');
+    const probeMessages = payload.messages;
+    assert.equal(probeMessages.at(-2).role, 'assistant');
+    assert.match(JSON.stringify(probeMessages.at(-2).content), /The candidate final answer is complete/);
+    assert.equal(probeMessages.at(-1).role, 'user');
+    assert.match(JSON.stringify(probeMessages.at(-1).content), /Review the original request and your latest response/);
+    res.end(JSON.stringify({
+      id: 'probe-confirm', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: 'No further work remains.' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 5 },
+    }));
+  });
+  const processor = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    processorBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ message: { role: 'assistant', content: '候選最終回答已完成。' } }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    responseLanguage: 'zh-TW',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    completionProbeEnabled: true,
+    langProcessor: { enabled: true, provider: 'ollama', url: `${processor.url}/api/chat`, model: 'lang-model', apiKey: '', think: false, timeoutMs: 5000 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => processor.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false,
+      tools: [{ name: 'WebSearch', description: 'search', input_schema: { type: 'object' } }],
+      messages: [{ role: 'user', content: '請完成工作後回答' }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.content.find((block) => block?.type === 'text')?.text, '候選最終回答已完成。');
+  assert.equal(baseBodies.length, 2);
+  assert.equal(processorBodies.length, 1);
+  const processorSerialized = JSON.stringify(processorBodies[0]);
+  assert.match(processorSerialized, /The candidate final answer is complete/);
+  assert.doesNotMatch(processorSerialized, /No further work remains/);
+  assert.ok(logs.some((entry) => entry.event === 'completion_probe_started'));
+  assert.ok(logs.some((entry) => entry.event === 'completion_probe_confirmed_final'));
+  const probeConfirmedIndex = logs.findIndex((entry) => entry.event === 'completion_probe_confirmed_final');
+  const repairStartedIndex = logs.findIndex((entry) => entry.event === 'final_language_repair_started');
+  assert.ok(probeConfirmedIndex >= 0 && repairStartedIndex > probeConfirmedIndex);
 });

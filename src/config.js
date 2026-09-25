@@ -267,6 +267,7 @@ export function loadConfig(env = process.env) {
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
     usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
+    completionProbeEnabled: true,
     managedTaskTimeoutMs: optionalTimeoutValue(env.MANAGED_TASK_TIMEOUT_MS, 'MANAGED_TASK_TIMEOUT_MS'),
     managedModelRoundTimeoutMs: intValue(env.MANAGED_MODEL_ROUND_TIMEOUT_MS, 360000, 'MANAGED_MODEL_ROUND_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     managedModelStallTimeoutMs: optionalTimeoutValue(env.MANAGED_MODEL_STALL_TIMEOUT_MS === undefined ? '90000' : env.MANAGED_MODEL_STALL_TIMEOUT_MS, 'MANAGED_MODEL_STALL_TIMEOUT_MS', { min: 1000, max: 3600000 }),

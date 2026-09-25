@@ -1309,3 +1309,375 @@ test('V0.29.31 a second empty end_turn fails with a dedicated bounded-regenerati
   assert.ok(diagnostics.some((entry) => entry.event === 'managed_empty_end_turn_regeneration_exhausted'));
   assert.equal(diagnostics.some((entry) => entry.event === 'managed_continuation_state_preserved'), false);
 });
+
+test('V0.29.49 recovers once from a detected tool-input loop and discards the unfinished tool call', async () => {
+  const requests = [];
+  const diagnostics = [];
+  let calls = 0;
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'inspect the project' }],
+  }, {
+    upstream: async (request, _signal, options = {}) => {
+      requests.push(structuredClone(request));
+      calls += 1;
+      if (calls === 1) {
+        await options.onCheckpoint?.({
+          phase: 'tool',
+          completed_blocks: [{ type: 'text', text: 'I will inspect the relevant files.' }],
+          partial_block: { index: 2, type: 'tool_use', id: 'looping-bash', name: 'Bash' },
+        });
+        throw new HttpError(502, 'tool input loop', {
+          code: 'vllm_tool_input_loop_detected', retryable: true,
+          details: { tool_name: 'Bash', partial_json_bytes: 45000, repeated_period_tokens: 8 },
+        });
+      }
+      const recovery = JSON.stringify(request.messages.at(-1));
+      assert.match(recovery, /repetitive generation loop/i);
+      assert.match(recovery, /discarded/i);
+      assert.match(recovery, /regenerate.*beginning/i);
+      assert.match(recovery, /concise/i);
+      assert.doesNotMatch(recovery, /looping-bash/);
+      return response([{ type: 'tool_use', id: 'short-bash', name: 'Bash', input: { command: 'find docs -type f | head -50' } }], 'tool_use');
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.content.find((block) => block.type === 'tool_use')?.id, 'short-bash');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_tool_input_recovery_started'
+    && entry.details.reason === 'loop_detected'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_tool_input_recovery_completed'));
+});
+
+test('V0.29.49 recovers once when malformed tool input reaches the request max_tokens ceiling', async () => {
+  let calls = 0;
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm', max_tokens: 32768,
+    tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'continue' }],
+  }, {
+    upstream: async (request, _signal, options = {}) => {
+      calls += 1;
+      if (calls === 1) {
+        await options.onCheckpoint?.({
+          phase: 'tool', completed_blocks: [],
+          partial_block: { index: 0, type: 'tool_use', id: 'truncated-bash', name: 'Bash' },
+        });
+        throw new HttpError(502, 'malformed tool input', {
+          code: 'vllm_invalid_stream', retryable: true,
+          details: {
+            tool_name: 'Bash', partial_json_bytes: 106421,
+            output_tokens: 32768, max_tokens: 32768, stop_reason: 'tool_use',
+          },
+        });
+      }
+      const recovery = JSON.stringify(request.messages.at(-1));
+      assert.match(recovery, /output token limit/i);
+      assert.match(recovery, /discarded/i);
+      assert.match(recovery, /concise/i);
+      return response([{ type: 'text', text: 'recovered after truncation' }]);
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.content.at(-1)?.text, 'recovered after truncation');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_tool_input_recovery_started'
+    && entry.details.reason === 'max_tokens_truncation'));
+});
+
+test('V0.29.49 tool-input recovery is bounded to one attempt', async () => {
+  let calls = 0;
+  await assert.rejects(runManagedLoop({
+    model: 'm', tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'go' }],
+  }, {
+    upstream: async (_request, _signal, options = {}) => {
+      calls += 1;
+      await options.onCheckpoint?.({
+        phase: 'tool', completed_blocks: [],
+        partial_block: { index: 0, type: 'tool_use', id: `loop-${calls}`, name: 'Bash' },
+      });
+      throw new HttpError(502, 'loop again', {
+        code: 'vllm_tool_input_loop_detected', retryable: true,
+        details: { tool_name: 'Bash', partial_json_bytes: 24000 },
+      });
+    },
+    executeTool: async () => ({}),
+  }), (error) => {
+    assert.equal(error.code, 'managed_tool_loop_recovery_exhausted');
+    assert.equal(error.retryable, false);
+    return true;
+  });
+  assert.equal(calls, 2);
+});
+
+test('V0.29.49 recovers once from a detected thinking loop and discards the unfinished thinking block', async () => {
+  let calls = 0;
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm', messages: [{ role: 'user', content: 'continue the task' }],
+  }, {
+    upstream: async (request, _signal, options = {}) => {
+      calls += 1;
+      if (calls === 1) {
+        await options.onCheckpoint?.({
+          phase: 'thinking',
+          completed_blocks: [{ type: 'text', text: 'Preserved completed result.' }],
+          partial_block: { index: 1, type: 'thinking' },
+        });
+        throw new HttpError(502, 'thinking loop', {
+          code: 'vllm_thinking_loop_detected', retryable: true,
+          details: { stream_kind: 'thinking', accumulated_bytes: 24000, repeated_period_tokens: 12 },
+        });
+      }
+      const recovery = JSON.stringify(request.messages.at(-1));
+      assert.match(recovery, /reasoning.*repetitive loop|thinking.*repetitive loop/i);
+      assert.match(recovery, /discarded/i);
+      assert.match(recovery, /continue/i);
+      return response([{ type: 'text', text: 'Recovered final answer.' }]);
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.content[0].text, 'Preserved completed result.');
+  assert.equal(result.content.at(-1).text, 'Recovered final answer.');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_stream_loop_recovery_started'
+    && entry.details.kind === 'thinking'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_stream_loop_recovery_completed'
+    && entry.details.kind === 'thinking'));
+});
+
+test('V0.29.49 recovers once from a detected response loop and discards the unfinished response block', async () => {
+  let calls = 0;
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm', messages: [{ role: 'user', content: 'answer the question' }],
+  }, {
+    upstream: async (request, _signal, options = {}) => {
+      calls += 1;
+      if (calls === 1) {
+        await options.onCheckpoint?.({
+          phase: 'response',
+          completed_blocks: [{ type: 'tool_use', id: 'done-tool', name: 'Read', input: { file_path: '/tmp/a' } }],
+          partial_block: { index: 1, type: 'text' },
+        });
+        throw new HttpError(502, 'response loop', {
+          code: 'vllm_response_loop_detected', retryable: true,
+          details: { stream_kind: 'response', accumulated_bytes: 18000, repeated_period_tokens: 9 },
+        });
+      }
+      const recovery = JSON.stringify(request.messages.at(-1));
+      assert.match(recovery, /visible response.*repetitive loop|response.*repetitive loop/i);
+      assert.match(recovery, /discarded/i);
+      assert.match(recovery, /remaining answer|remaining continuation/i);
+      return response([{ type: 'text', text: 'Concise recovered response.' }]);
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.content[0].type, 'tool_use');
+  assert.equal(result.content.at(-1).text, 'Concise recovered response.');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_stream_loop_recovery_started'
+    && entry.details.kind === 'response'));
+});
+
+test('V0.29.49 thinking and response loop recovery are each bounded to one attempt', async () => {
+  for (const [code, expected] of [
+    ['vllm_thinking_loop_detected', 'managed_thinking_loop_recovery_exhausted'],
+    ['vllm_response_loop_detected', 'managed_response_loop_recovery_exhausted'],
+  ]) {
+    let calls = 0;
+    await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'go' }] }, {
+      upstream: async (_request, _signal, options = {}) => {
+        calls += 1;
+        const kind = code.includes('thinking') ? 'thinking' : 'response';
+        await options.onCheckpoint?.({
+          phase: kind, completed_blocks: [], partial_block: { index: 0, type: kind === 'thinking' ? 'thinking' : 'text' },
+        });
+        throw new HttpError(502, `${kind} loop`, {
+          code, retryable: true, details: { stream_kind: kind, accumulated_bytes: 20000 },
+        });
+      },
+      executeTool: async () => ({}),
+    }), (error) => {
+      assert.equal(error.code, expected);
+      assert.equal(error.retryable, false);
+      return true;
+    });
+    assert.equal(calls, 2);
+  }
+});
+
+test('V0.29.50 completion probe confirms candidate final without exposing probe response', async () => {
+  const requests = [];
+  const diagnostics = [];
+  const roundStates = [];
+  const candidate = response([
+    { type: 'thinking', thinking: 'I have completed the requested work.' },
+    { type: 'text', text: 'Candidate final A.' },
+  ], 'end_turn');
+  candidate.id = 'candidate-a';
+
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'Bash', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'finish the task' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      if (requests.length === 1) return structuredClone(candidate);
+      assert.equal(request.messages.length, 3);
+      assert.equal(request.messages[1].role, 'assistant');
+      assert.deepEqual(request.messages[1].content, candidate.content);
+      assert.equal(request.messages[2].role, 'user');
+      assert.match(JSON.stringify(request.messages[2].content), /Review the original request and your latest response/);
+      assert.match(JSON.stringify(request.messages[2].content), /If required work remains, continue executing it now using tools/);
+      return response([{ type: 'text', text: 'Probe says fully complete.' }], 'end_turn');
+    },
+    executeTool: async () => assert.fail('confirmed final probe must not execute tools'),
+    completionProbeEnabled: true,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+    onModelRoundState: (state) => roundStates.push(state.phase),
+  });
+
+  assert.equal(requests.length, 2);
+  assert.deepEqual(roundStates, ['start', 'end']);
+  assert.deepEqual(result.content, candidate.content);
+  assert.equal(result.content.some((block) => block?.text === 'Probe says fully complete.'), false);
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_started'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_confirmed_final'));
+  assert.equal(diagnostics.some((entry) => entry.event === 'completion_probe_continuation'), false);
+});
+
+test('V0.29.50 completion probe hides candidate A and continues managed tools until confirmed final B', async () => {
+  const requests = [];
+  const diagnostics = [];
+  const executions = [];
+  const replies = [
+    response([
+      { type: 'thinking', thinking: 'I think I am done.' },
+      { type: 'text', text: 'Candidate final A must stay hidden.' },
+    ], 'end_turn'),
+    response([{ type: 'tool_use', id: 'search-more', name: 'WebSearch', input: { query: 'missing evidence' } }], 'tool_use'),
+    response([{ type: 'text', text: 'True final B.' }], 'end_turn'),
+    response([{ type: 'text', text: 'Probe confirms B.' }], 'end_turn'),
+  ];
+
+  const result = await runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'research and finish' }],
+  }, {
+    upstream: async (request) => {
+      requests.push(structuredClone(request));
+      const next = replies.shift();
+      assert.ok(next, 'unexpected extra upstream call');
+      return next;
+    },
+    completionProbeEnabled: true,
+    executeTool: async (toolUse) => {
+      executions.push(structuredClone(toolUse));
+      return { results: [{ title: 'Evidence', url: 'https://example.com' }] };
+    },
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0].id, 'search-more');
+  assert.equal(result.content.at(-1)?.text, 'True final B.');
+  assert.doesNotMatch(JSON.stringify(result), /Candidate final A must stay hidden/);
+  assert.equal(requests.length, 4);
+  assert.match(JSON.stringify(requests[2].messages), /Candidate final A must stay hidden/);
+  assert.match(JSON.stringify(requests[2].messages), /Review the original request and your latest response/);
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_continuation'));
+  assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_started').length, 2);
+  assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_confirmed_final').length, 1);
+});
+
+test('V0.29.50 completion probe failure is logged and propagated without returning candidate final', async () => {
+  const diagnostics = [];
+  let calls = 0;
+  await assert.rejects(runManagedLoop({
+    model: 'm', messages: [{ role: 'user', content: 'finish' }],
+  }, {
+    upstream: async () => {
+      calls += 1;
+      if (calls === 1) return response([{ type: 'text', text: 'Candidate A.' }], 'end_turn');
+      throw new HttpError(502, 'probe upstream failed', { code: 'probe_upstream_failed', retryable: true });
+    },
+    executeTool: async () => ({}),
+    completionProbeEnabled: true,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  }), (error) => error.code === 'probe_upstream_failed');
+
+  assert.equal(calls, 2);
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_started'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed'
+    && entry.details.code === 'probe_upstream_failed'));
+  assert.equal(diagnostics.some((entry) => entry.event === 'completion_probe_confirmed_final'), false);
+});
+
+test('V0.29.50 completion probe count is bounded per repeated candidate final', async () => {
+  let calls = 0;
+  const diagnostics = [];
+  await assert.rejects(runManagedLoop({
+    model: 'm',
+    tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'keep checking until complete' }],
+  }, {
+    upstream: async () => {
+      calls += 1;
+      if (calls % 2 === 1) return response([{ type: 'text', text: 'Same candidate final.' }], 'end_turn');
+      return response([{ type: 'tool_use', id: `search-${calls}`, name: 'WebSearch', input: { query: `q-${calls}` } }], 'tool_use');
+    },
+    executeTool: async () => ({ results: [] }),
+    maxRounds: 10,
+    completionProbeEnabled: true,
+    maxCompletionProbesPerCandidate: 2,
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  }), (error) => error.code === 'completion_probe_limit');
+
+  assert.ok(calls >= 5);
+  assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_started').length, 2);
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed'
+    && entry.details.code === 'completion_probe_limit'));
+});
+
+test('V0.29.50 completion probe state is request-local and does not leak into a later managed request', async () => {
+  let firstCalls = 0;
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'first' }] }, {
+    upstream: async () => {
+      firstCalls += 1;
+      if (firstCalls === 1) return response([{ type: 'text', text: 'First candidate.' }], 'end_turn');
+      throw new HttpError(502, 'disconnect-like failure', { code: 'first_probe_failed', retryable: true });
+    },
+    executeTool: async () => ({}),
+    completionProbeEnabled: true,
+  }), (error) => error.code === 'first_probe_failed');
+
+  const laterRequests = [];
+  let laterCalls = 0;
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'second' }] }, {
+    upstream: async (request) => {
+      laterRequests.push(structuredClone(request));
+      laterCalls += 1;
+      if (laterCalls === 1) return response([{ type: 'text', text: 'Second candidate.' }], 'end_turn');
+      return response([{ type: 'text', text: 'Second confirmed.' }], 'end_turn');
+    },
+    executeTool: async () => ({}),
+    completionProbeEnabled: true,
+  });
+
+  assert.equal(result.content[0].text, 'Second candidate.');
+  assert.doesNotMatch(JSON.stringify(laterRequests), /First candidate|Review the original request.*First/);
+});

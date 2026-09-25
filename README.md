@@ -1,11 +1,68 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.48 keeps the V0.29.47 forced `SubmitVisualPlan` one-shot Directed Vision flow, but makes the final Main handoff leaner: the Proxy now injects only the validated `visual_perception_v1` result itself, without replaying the planning objective/questions. Directed image state remains request-local and UI-silent. PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, recovery, runtime clock, startup card and statusLine behavior remain on their existing paths.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.50 adds an End-Turn Completion Probe to the existing managed execution loop: an apparent `end_turn` with no tool use is held as a request-local candidate final, silently reviewed once in the full current context, and only released after the hidden probe confirms that no required work remains. If the probe emits tools, the candidate stays hidden and execution continues. Existing V0.29.49 phase-specific stream-loop detection and V0.29.48 Directed Vision behavior remain unchanged.
 
 
 
 
 
+
+
+## V0.29.50 End-Turn Completion Probe
+
+The existing managed execution loop now treats `stop_reason=end_turn` with zero `tool_use` blocks as a **candidate final**, not an immediately releasable answer. The candidate keeps the Main model's original thinking and visible text in request-local hidden state while the Proxy makes one hidden completion probe using the full current managed context plus that candidate response.
+
+The hidden probe instruction is:
+
+```text
+Review the original request and your latest response. If required work remains, continue executing it now using tools. Do not restate the plan or repeat completed work. If fully complete, return normally without tool use.
+```
+
+Probe behavior is deliberately narrow:
+
+- If the probe returns **no tool use**, the probe response is discarded, the original candidate final is restored, and the existing final-language repair runs afterward. Only the original candidate text is eligible for client delivery.
+- If the probe returns **tool use**, the candidate final is permanently hidden, its thinking/text remains only in this request's hidden continuation history, and the existing managed tool flow continues from the probe response. The final client answer must come from a later genuinely completed response.
+- Probe generation is hidden from visible managed progress/model-round UI and never becomes a Claude Code conversation turn by itself.
+- Each exact candidate final is bounded to at most **999** hidden probes. A limit breach logs `completion_probe_failed` and fails with `completion_probe_limit`; the existing managed-round/task bounds remain additional safety limits.
+- Candidate state, probe counters, and hidden continuation history are local variables inside one `runManagedLoop()` invocation only. They are never written to session memory, continuation caches, media caches, or persistent state and therefore disappear when that request returns or throws, including disconnect/failure paths.
+
+Structured diagnostics are:
+
+- `completion_probe_started`
+- `completion_probe_confirmed_final`
+- `completion_probe_continuation`
+- `completion_probe_failed`
+
+The feature is enabled by default on the production proxy-server managed path. The low-level `runManagedLoop()` helper keeps the option disabled by default so unrelated internal/unit callers preserve their historical behavior unless they explicitly opt in. Language repair remains outside the managed loop and therefore happens only **after** completion-probe confirmation.
+
+V0.29.49 Thinking/Response/Tool-Input loop detection, Directed Vision, PDF/Native Vision, Web/ToolSearch, Compact, startup CARD, runtime clock, and existing recovery paths are otherwise unchanged.
+
+
+## V0.29.49 Stream Loop Detection + Bounded Recovery
+
+Managed Anthropic SSE now applies separate streaming loop detectors to three channels:
+
+- `thinking_delta` -> `vllm_thinking_loop_detected`
+- `text_delta` -> `vllm_response_loop_detected`
+- `tool_use.input_json_delta` -> `vllm_tool_input_loop_detected`
+
+The detectors share repeated-cycle mechanics but do **not** share thresholds. Thinking uses the most conservative profile because normal reasoning may revisit earlier ideas; visible response text is moderately sensitive; tool input remains the strictest safety path because malformed or looping tool JSON can become executable intent.
+
+All detectors start only after a minimum accumulated byte threshold, inspect a bounded UTF-8 tail, require a substantial repeated token sequence, and require multiple consecutive cycles. Bounded finite repetition is explicitly regression-tested to avoid treating normal templates/lists as loops.
+
+### Recovery semantics
+
+When a thinking loop is detected, the unfinished thinking block is discarded in full. The Proxy preserves only already-completed non-thinking text/tool blocks and asks Main to continue reasoning from the completed checkpoint without repeating prior reasoning. Thinking-loop recovery is allowed once; a second loop fails with `managed_thinking_loop_recovery_exhausted`.
+
+When a visible response loop is detected, the unfinished response text block is discarded in full. Completed earlier semantic blocks are preserved and Main is asked to regenerate only the remaining answer/continuation concisely. Response-loop recovery is independently allowed once; a second loop fails with `managed_response_loop_recovery_exhausted`.
+
+Tool-input behavior from the original V0.29.49 remains unchanged: looping tool JSON is discarded in full, never repaired, never executed, and regenerated once from the completed checkpoint. A second tool loop fails with `managed_tool_loop_recovery_exhausted`.
+
+Malformed tool JSON that reaches `output_tokens >= max_tokens` still uses the same bounded tool-input checkpoint recovery as a final safety fallback, including the case where vLLM reports `stop_reason=tool_use` despite truncated JSON. A second truncation fails with `managed_tool_truncation_recovery_exhausted`.
+
+The three recovery budgets are independent. A recovered thinking loop does not consume the response-loop or tool-input recovery allowance. Existing model-stall recovery also remains separate.
+
+Structured diagnostics retain the loop kind, accumulated bytes, repeated period length, preserved checkpoint count, and bounded recovery state. Directed Vision, PDF, Native Vision, legacy external Vision, Web/ToolSearch, Compact, startup CARD, runtime clock and existing stall recovery keep their prior behavior.
 
 ## V0.29.48 Lean Final Visual Evidence
 

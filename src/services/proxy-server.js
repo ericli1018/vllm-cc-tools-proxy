@@ -2430,12 +2430,13 @@ export function createProxyServer(config, dependencies = {}) {
 
       const upstream = async (body, signal, runtimeOptions = {}) => {
         requestStage = 'managed_model_round';
+        const hiddenCompletionProbe = runtimeOptions?.hiddenCompletionProbe === true;
         const invoke = (requestBody) => callUpstreamManagedStream(requestBody, config, req.headers, signal, '/v1/messages', {
-          onResponseChunk: onBaseResponseChunk,
-          onStreamPhase: onManagedModelStreamPhase,
-          onSemanticDelta: onModelSemanticDelta,
+          ...(hiddenCompletionProbe ? {} : { onResponseChunk: onBaseResponseChunk }),
+          ...(hiddenCompletionProbe ? {} : { onStreamPhase: onManagedModelStreamPhase }),
+          ...(hiddenCompletionProbe ? {} : { onSemanticDelta: onModelSemanticDelta }),
           ...(typeof runtimeOptions.onCheckpoint === 'function' ? { onCheckpoint: runtimeOptions.onCheckpoint } : {}),
-          onBusyEvent: onBaseBusyEvent,
+          ...(hiddenCompletionProbe ? {} : { onBusyEvent: onBaseBusyEvent }),
           onResponseMode: onBaseResponseMode,
           onStreamSummary: (summary) => { lastManagedSseSummary = structuredClone(summary || {}); },
         });
@@ -2575,6 +2576,7 @@ export function createProxyServer(config, dependencies = {}) {
               payload,
             )
             : undefined,
+          completionProbeEnabled: config.completionProbeEnabled === true,
           signal: abortController.signal,
         });
         if (!nativeWebSearchFastLane) {
@@ -2713,7 +2715,8 @@ export function createProxyServer(config, dependencies = {}) {
     } catch (error) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
-      const invalidStreamDetails = error?.code === 'vllm_invalid_stream' && error?.details && typeof error.details === 'object'
+      const invalidStreamDetails = error?.details && typeof error.details === 'object'
+        && ['vllm_invalid_stream', 'managed_tool_loop_recovery_exhausted', 'managed_tool_truncation_recovery_exhausted'].includes(String(error?.code || ''))
         ? {
             tool_index: Number.isInteger(error.details.index) ? error.details.index : null,
             tool_name: typeof error.details.tool_name === 'string' ? error.details.tool_name : '',

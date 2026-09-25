@@ -509,3 +509,9 @@ test('V0.29.44 vision orchestration mode defaults to legacy and accepts directed
     VISION_ORCHESTRATION_MODE: 'auto',
   }), /VISION_ORCHESTRATION_MODE/);
 });
+
+
+test('V0.29.50 completion probe is enabled by default in production config', () => {
+  const cfg = loadConfig({ VLLM_BASE_URL: 'http://base:8000' });
+  assert.equal(cfg.completionProbeEnabled, true);
+});

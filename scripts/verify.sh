@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.48'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.48'
+test "$(node -p "require('./package.json').version")" = '0.29.50'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.50'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.48'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.50'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1254,3 +1254,36 @@ grep -Fq "JSON.stringify(result)" src/visual/directed-vision.js
 ! grep -Fq 'perception_request: entry.plan' src/visual/directed-vision.js
 node --test test/v02948-directed-evidence.test.js
 node --test --test-name-pattern='V0.29.47 directed image performs forced' test/proxy-server.test.js
+
+
+# V0.29.49 thinking/response/tool-input loop detection + bounded recovery contract
+test -f change_log/V0.29.49-更新說明.md
+test -f change_log/V0.29.49-實作與驗證報告.md
+grep -Fq 'V0.29.49 Stream Loop Detection + Bounded Recovery' README.md
+grep -Fq 'vllm_thinking_loop_detected' src/proxy/anthropic-sse-collector.js
+grep -Fq 'vllm_response_loop_detected' src/proxy/anthropic-sse-collector.js
+grep -Fq 'vllm_tool_input_loop_detected' src/proxy/anthropic-sse-collector.js
+grep -Fq 'managed_stream_loop_recovery_started' src/proxy/managed-loop.js
+grep -Fq 'managed_thinking_loop_recovery_exhausted' src/proxy/managed-loop.js
+grep -Fq 'managed_response_loop_recovery_exhausted' src/proxy/managed-loop.js
+grep -Fq 'managed_tool_input_recovery_started' src/proxy/managed-loop.js
+grep -Fq 'managed_tool_loop_recovery_exhausted' src/proxy/managed-loop.js
+grep -Fq 'managed_tool_truncation_recovery_exhausted' src/proxy/managed-loop.js
+node --test --test-name-pattern='V0.29.49 collector aborts|V0.29.49 collector does not classify' test/anthropic-sse-collector.test.js
+node --test --test-name-pattern='V0.29.49 recovers once|V0.29.49 tool-input recovery is bounded|V0.29.49 thinking and response loop recovery' test/managed-loop.test.js
+node --test --test-name-pattern='V0.29.49 detects thinking response and tool-input loops' test/deployment.test.js
+
+
+# V0.29.50 End-Turn Completion Probe contract
+test -f change_log/V0.29.50-更新說明.md
+test -f change_log/V0.29.50-實作與驗證報告.md
+grep -Fq 'V0.29.50 End-Turn Completion Probe' README.md
+grep -Fq 'DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999' src/proxy/managed-loop.js
+grep -Fq 'completion_probe_started' src/proxy/managed-loop.js
+grep -Fq 'completion_probe_confirmed_final' src/proxy/managed-loop.js
+grep -Fq 'completion_probe_continuation' src/proxy/managed-loop.js
+grep -Fq 'completion_probe_failed' src/proxy/managed-loop.js
+grep -Fq 'completionProbeEnabled: true' src/config.js
+grep -Fq 'completionProbeEnabled: config.completionProbeEnabled === true' src/services/proxy-server.js
+node --test --test-name-pattern='V0.29.50 completion probe' test/managed-loop.test.js test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.50 completion probe is request-local' test/deployment.test.js

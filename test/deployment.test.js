@@ -860,3 +860,46 @@ test('V0.29.47 directed image planning uses forced internal tool-use and remains
   assert.doesNotMatch(directedSource, /DIRECTED_VISUAL_TOOL_NAME|VisualInspect|PROXY_HISTORICAL_VISUAL/);
   assert.doesNotMatch(mediaSource, /formatHistoricalDirectedVisualMarker/);
 });
+
+
+test('V0.29.49 detects thinking response and tool-input loops with independent bounded recovery', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /vllm_thinking_loop_detected/);
+  assert.match(collectorSource, /vllm_response_loop_detected/);
+  assert.match(collectorSource, /vllm_tool_input_loop_detected/);
+  assert.match(collectorSource, /detectSemanticLoop/);
+  assert.match(collectorSource, /detectToolInputLoop/);
+  assert.match(managedLoopSource, /managed_thinking_loop_recovery_exhausted/);
+  assert.match(managedLoopSource, /managed_response_loop_recovery_exhausted/);
+  assert.match(managedLoopSource, /max_tokens_truncation/);
+  assert.match(managedLoopSource, /managed_tool_loop_recovery_exhausted/);
+  assert.match(managedLoopSource, /managed_tool_truncation_recovery_exhausted/);
+  assert.match(managedLoopSource, /managed_stream_loop_recovery_started/);
+  assert.match(managedLoopSource, /managed_tool_input_recovery_started/);
+  assert.match(readme, /V0\.29\.49 Stream Loop Detection \+ Bounded Recovery/);
+  assert.ok(changeLogEntries.includes('V0.29.49-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.49-實作與驗證報告.md'));
+});
+
+
+test('V0.29.50 completion probe is request-local bounded and enabled only on production managed path', async () => {
+  const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const configSource = await fs.readFile(new URL('../src/config.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(managedLoopSource, /DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999/);
+  assert.match(managedLoopSource, /completion_probe_started/);
+  assert.match(managedLoopSource, /completion_probe_confirmed_final/);
+  assert.match(managedLoopSource, /completion_probe_continuation/);
+  assert.match(managedLoopSource, /completion_probe_failed/);
+  assert.match(managedLoopSource, /completionProbeEnabled = false/);
+  assert.match(configSource, /completionProbeEnabled: true/);
+  assert.match(serverSource, /completionProbeEnabled: config\.completionProbeEnabled === true/);
+  assert.match(readme, /V0\.29\.50 End-Turn Completion Probe/);
+  assert.ok(changeLogEntries.includes('V0.29.50-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.50-實作與驗證報告.md'));
+});

@@ -62,6 +62,123 @@ function applyDelta(block, delta, toolJson) {
   }
 }
 
+const TOOL_INPUT_LOOP_MIN_BYTES = 8192;
+const TOOL_INPUT_LOOP_CHECK_STEP_BYTES = 2048;
+const TOOL_INPUT_LOOP_MAX_TAIL_BYTES = 16384;
+const TOOL_INPUT_LOOP_MIN_PERIOD_TOKENS = 4;
+const TOOL_INPUT_LOOP_MAX_PERIOD_TOKENS = 128;
+const TOOL_INPUT_LOOP_MIN_SEQUENCE_BYTES = 128;
+
+function toolInputLoopError(details) {
+  return new HttpError(502, 'vLLM tool input entered a repetitive generation loop.', {
+    code: 'vllm_tool_input_loop_detected', retryable: true, details,
+  });
+}
+
+function loopTokens(value) {
+  return String(value || '').match(/[A-Za-z0-9_./:@%+=~-]+|[^\s]/g) || [];
+}
+
+function repeatedTokenCycle(value) {
+  const tail = boundedUtf8Tail(value, TOOL_INPUT_LOOP_MAX_TAIL_BYTES);
+  const tokens = loopTokens(tail);
+  const maxPeriod = Math.min(TOOL_INPUT_LOOP_MAX_PERIOD_TOKENS, Math.floor(tokens.length / 3));
+  for (let period = TOOL_INPUT_LOOP_MIN_PERIOD_TOKENS; period <= maxPeriod; period += 1) {
+    const start = tokens.length - (period * 3);
+    let same = true;
+    for (let offset = 0; offset < period && same; offset += 1) {
+      const expected = tokens[start + offset];
+      if (tokens[start + period + offset] !== expected || tokens[start + (period * 2) + offset] !== expected) same = false;
+    }
+    if (!same) continue;
+    const sequence = tokens.slice(tokens.length - period).join(' ');
+    const sequenceBytes = Buffer.byteLength(sequence, 'utf8');
+    if (sequenceBytes < TOOL_INPUT_LOOP_MIN_SEQUENCE_BYTES) continue;
+    return { repeated_period_tokens: period, repeated_sequence_bytes: sequenceBytes };
+  }
+  return null;
+}
+
+function detectToolInputLoop(partialJson, detectorState) {
+  const bytes = Buffer.byteLength(String(partialJson || ''), 'utf8');
+  if (bytes < TOOL_INPUT_LOOP_MIN_BYTES) return null;
+  if (bytes - Number(detectorState?.last_checked_bytes || 0) < TOOL_INPUT_LOOP_CHECK_STEP_BYTES) return null;
+  if (detectorState) detectorState.last_checked_bytes = bytes;
+  const cycle = repeatedTokenCycle(partialJson);
+  return cycle ? { ...cycle, partial_json_bytes: bytes } : null;
+}
+
+
+const SEMANTIC_LOOP_PROFILES = Object.freeze({
+  thinking: Object.freeze({
+    minBytes: 16_384,
+    checkStepBytes: 4_096,
+    maxTailBytes: 32_768,
+    minPeriodTokens: 6,
+    maxPeriodTokens: 192,
+    minSequenceBytes: 160,
+    minCycles: 5,
+  }),
+  response: Object.freeze({
+    minBytes: 8_192,
+    checkStepBytes: 2_048,
+    maxTailBytes: 24_576,
+    minPeriodTokens: 4,
+    maxPeriodTokens: 128,
+    minSequenceBytes: 128,
+    minCycles: 4,
+  }),
+});
+
+function semanticLoopError(kind, details) {
+  const label = kind === 'thinking' ? 'thinking' : 'visible response';
+  return new HttpError(502, `vLLM ${label} entered a repetitive generation loop.`, {
+    code: kind === 'thinking' ? 'vllm_thinking_loop_detected' : 'vllm_response_loop_detected',
+    retryable: true,
+    details: { stream_kind: kind, ...details },
+  });
+}
+
+function repeatedSemanticCycle(value, profile) {
+  const tail = boundedUtf8Tail(value, profile.maxTailBytes);
+  const tokens = loopTokens(tail);
+  const maxPeriod = Math.min(profile.maxPeriodTokens, Math.floor(tokens.length / profile.minCycles));
+  for (let period = profile.minPeriodTokens; period <= maxPeriod; period += 1) {
+    const span = period * profile.minCycles;
+    const start = tokens.length - span;
+    let same = true;
+    for (let cycle = 1; cycle < profile.minCycles && same; cycle += 1) {
+      for (let offset = 0; offset < period; offset += 1) {
+        if (tokens[start + offset] !== tokens[start + (cycle * period) + offset]) {
+          same = false;
+          break;
+        }
+      }
+    }
+    if (!same) continue;
+    const sequence = tokens.slice(tokens.length - period).join(' ');
+    const sequenceBytes = Buffer.byteLength(sequence, 'utf8');
+    if (sequenceBytes < profile.minSequenceBytes) continue;
+    return {
+      repeated_period_tokens: period,
+      repeated_sequence_bytes: sequenceBytes,
+      repeated_cycles: profile.minCycles,
+    };
+  }
+  return null;
+}
+
+function detectSemanticLoop(kind, value, detectorState) {
+  const profile = SEMANTIC_LOOP_PROFILES[kind];
+  if (!profile) return null;
+  const bytes = Buffer.byteLength(String(value || ''), 'utf8');
+  if (bytes < profile.minBytes) return null;
+  if (bytes - Number(detectorState?.last_checked_bytes || 0) < profile.checkStepBytes) return null;
+  if (detectorState) detectorState.last_checked_bytes = bytes;
+  const cycle = repeatedSemanticCycle(value, profile);
+  return cycle ? { ...cycle, accumulated_bytes: bytes } : null;
+}
+
 function boundedUtf8Tail(value, maxBytes = 1024) {
   const buffer = Buffer.from(String(value || ''), 'utf8');
   if (buffer.byteLength <= maxBytes) return buffer.toString('utf8');
@@ -95,6 +212,8 @@ export async function collectAnthropicMessageFromSse(upstream, {
   let message = null;
   const blocks = new Map();
   const toolJson = new Map();
+  const toolLoopState = new Map();
+  const semanticLoopState = new Map();
   let sawMessageStop = false;
   let deferredMalformedToolError = null;
   let firstModelEventObserved = false;
@@ -187,7 +306,12 @@ export async function collectAnthropicMessageFromSse(upstream, {
         try { await onFirstEvent({ event: parsed.name, type: payload?.type || '', block_type: block.type || '' }); } catch {}
       }
       await notifyStreamPhase({ event: parsed.name, blockType: block.type || '' });
-      if (block.type === 'tool_use' || block.type === 'server_tool_use') toolJson.set(index, '');
+      if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+        toolJson.set(index, '');
+        toolLoopState.set(index, { last_checked_bytes: 0 });
+      } else if (block.type === 'thinking' || block.type === 'text') {
+        semanticLoopState.set(index, { last_checked_bytes: 0 });
+      }
       await notifyCheckpoint();
       return;
     }
@@ -227,7 +351,34 @@ export async function collectAnthropicMessageFromSse(upstream, {
       });
       const holder = { value: toolJson.get(index) || '' };
       applyDelta(block, payload?.delta, holder);
-      if (toolJson.has(index)) toolJson.set(index, holder.value);
+      if (toolJson.has(index)) {
+        toolJson.set(index, holder.value);
+        if (delta.type === 'input_json_delta') {
+          const loop = detectToolInputLoop(holder.value, toolLoopState.get(index));
+          if (loop) {
+            await notifyCheckpoint();
+            throw toolInputLoopError({
+              index,
+              tool_name: String(block?.name || ''),
+              ...loop,
+              partial_json_tail: boundedUtf8Tail(holder.value),
+            });
+          }
+        }
+      }
+      if (delta.type === 'thinking_delta' || delta.type === 'text_delta') {
+        const kind = delta.type === 'thinking_delta' ? 'thinking' : 'response';
+        const accumulated = kind === 'thinking' ? String(block.thinking || '') : String(block.text || '');
+        const loop = detectSemanticLoop(kind, accumulated, semanticLoopState.get(index));
+        if (loop) {
+          await notifyCheckpoint();
+          throw semanticLoopError(kind, {
+            index,
+            ...loop,
+            repeated_tail: boundedUtf8Tail(accumulated),
+          });
+        }
+      }
       return;
     }
 
@@ -244,7 +395,9 @@ export async function collectAnthropicMessageFromSse(upstream, {
           malformedToolInput = true;
         }
         toolJson.delete(index);
+        toolLoopState.delete(index);
       }
+      semanticLoopState.delete(index);
       if (!malformedToolInput) {
         completedIndexes.add(index);
         if (openIndex === index) openIndex = null;

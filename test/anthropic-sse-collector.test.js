@@ -320,3 +320,134 @@ test('V0.29.39 malformed tool input never becomes a completed recovery checkpoin
   assert.equal(checkpoints.some((snapshot) => snapshot.completed_blocks.some((block) => block.id === 'tool-39-checkpoint')), false);
   assert.equal(checkpoints.at(-1)?.partial_block?.id, 'tool-39-checkpoint');
 });
+
+test('V0.29.49 collector aborts a repetitive tool-input cycle before max_tokens truncation', async () => {
+  const cycle = 'docs/10-quality/TIME_SYNC.md docs/10-quality/BACKUP_RESTORE.md docs/10-quality/CONFIGURATION_VERSIONING.md docs/10-quality/OBSERVABILITY.md docs/10-quality/OTA_ARCHITECTURE.md docs/10-quality/NFR.md docs/10-quality/FAULT_TOLERANCE.md docs/10-quality/OFFLINE_OPERATION.md ';
+  const loopingJson = `{"command":"${cycle.repeat(48)}`;
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm49-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 2, content_block: {
+      type: 'tool_use', id: 'tool-49-loop', name: 'Bash', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: {
+      type: 'input_json_delta', partial_json: loopingJson,
+    } }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_tool_input_loop_detected');
+    assert.equal(error.details.index, 2);
+    assert.equal(error.details.tool_name, 'Bash');
+    assert.ok(error.details.partial_json_bytes >= 8192);
+    assert.ok(error.details.repeated_period_tokens >= 4);
+    assert.ok(error.details.repeated_sequence_bytes >= 128);
+    return true;
+  });
+});
+
+test('V0.29.49 collector does not classify a bounded fourfold repeated tool payload as a generation loop', async () => {
+  const longTokens = Array.from({ length: 16 }, (_, i) => `segment_${i}_${'x'.repeat(180)}`).join(' ');
+  const command = `${longTokens} ${longTokens} ${longTokens} ${longTokens}`;
+  const json = JSON.stringify({ command });
+  assert.ok(Buffer.byteLength(json, 'utf8') >= 8192);
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm49-bounded-repeat', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'tool_use', id: 'tool-49-bounded-repeat', name: 'Bash', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: json,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 3000 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
+  assert.equal(result.content[0].name, 'Bash');
+  assert.equal(result.content[0].input.command, command);
+});
+
+test('V0.29.49 collector aborts a sustained thinking repetition loop before max_tokens', async () => {
+  const cycle = 'I need to inspect the state, compare the evidence, decide the next action, and verify the result. ';
+  const thinking = cycle.repeat(220);
+  assert.ok(Buffer.byteLength(thinking, 'utf8') >= 16000);
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm49-thinking-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'thinking', thinking: '',
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'thinking_delta', thinking,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6000 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_thinking_loop_detected');
+    assert.equal(error.details.index, 0);
+    assert.equal(error.details.stream_kind, 'thinking');
+    assert.ok(error.details.accumulated_bytes >= 16000);
+    assert.ok(error.details.repeated_period_tokens >= 4);
+    return true;
+  });
+});
+
+test('V0.29.49 collector aborts a sustained visible response repetition loop before max_tokens', async () => {
+  const cycle = 'The result is complete. I will now summarize the same conclusion and provide the next step. ';
+  const text = cycle.repeat(140);
+  assert.ok(Buffer.byteLength(text, 'utf8') >= 8000);
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm49-response-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'text', text: '',
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'text_delta', text,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 4000 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_response_loop_detected');
+    assert.equal(error.details.index, 0);
+    assert.equal(error.details.stream_kind, 'response');
+    assert.ok(error.details.accumulated_bytes >= 8000);
+    assert.ok(error.details.repeated_period_tokens >= 4);
+    return true;
+  });
+});
+
+test('V0.29.49 collector does not classify a bounded repeated response template as a loop', async () => {
+  const cycle = Array.from({ length: 18 }, (_, i) => `section_${i}_${'x'.repeat(90)}`).join(' ');
+  const text = `${cycle}\n${cycle}\n${cycle}\n`;
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm49-response-bounded', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'text', text: '',
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'text_delta', text,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1500 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
+  assert.equal(result.content[0].text, text);
+});

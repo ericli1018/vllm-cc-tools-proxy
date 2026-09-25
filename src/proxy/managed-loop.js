@@ -34,11 +34,54 @@ const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
 const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 const DEFAULT_TOOL_STALL_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_STALL_RECOVERY_ROUNDS = 2;
+const DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999;
+const COMPLETION_PROBE_PROMPT = 'Review the original request and your latest response. If required work remains, continue executing it now using tools. Do not restate the plan or repeat completed work. If fully complete, return normally without tool use.';
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableValue(value[key])]));
+}
+
+
+
+function completionCandidateKey(response) {
+  return JSON.stringify({
+    stop_reason: response?.stop_reason ?? null,
+    content: stableValue(Array.isArray(response?.content) ? response.content : []),
+  });
+}
+
+function buildCompletionProbeRequest(request, candidateFinal) {
+  const probe = structuredClone(request);
+  probe.messages = Array.isArray(probe.messages) ? probe.messages : [];
+  probe.messages.push({
+    role: 'assistant',
+    content: structuredClone(Array.isArray(candidateFinal?.content) ? candidateFinal.content : []),
+  });
+  probe.messages.push({
+    role: 'user',
+    content: [{ type: 'text', text: COMPLETION_PROBE_PROMPT }],
+  });
+  return probe;
+}
+
+function normalizedToolUses(response) {
+  if (!Array.isArray(response?.content)) return [];
+  return response.content
+    .map((block) => normalizeManagedToolUseBlock(block))
+    .filter((block) => block?.type === 'tool_use');
+}
+
+function candidateTelemetry(response) {
+  const content = Array.isArray(response?.content) ? response.content : [];
+  let textBytes = 0;
+  let thinkingBytes = 0;
+  for (const block of content) {
+    if (block?.type === 'text') textBytes += Buffer.byteLength(String(block.text || ''));
+    if (block?.type === 'thinking') thinkingBytes += Buffer.byteLength(String(block.thinking || ''));
+  }
+  return { text_bytes: textBytes, thinking_bytes: thinkingBytes };
 }
 
 function managedActionSignature(toolUses) {
@@ -109,6 +152,131 @@ function recoveryCheckpointSummary(blocks, checkpoint, attempt, maxAttempts) {
     lines.length ? 'Preserved completed blocks:\n' + lines.join('\n') : 'No completed non-thinking blocks were preserved; reconstruct only the missing continuation.',
     'Return only the remaining assistant continuation using normal Anthropic content/tool semantics.',
   ].join('\n');
+}
+
+function classifyManagedToolInputFailure(error) {
+  if (!(error instanceof HttpError)) return null;
+  if (error.code === 'vllm_tool_input_loop_detected') return 'loop_detected';
+  if (error.code !== 'vllm_invalid_stream') return null;
+  const details = error.details && typeof error.details === 'object' ? error.details : {};
+  const partialBytes = Number(details.partial_json_bytes);
+  const outputTokens = Number(details.output_tokens);
+  const maxTokens = Number(details.max_tokens);
+  if (!String(details.tool_name || '') || !(partialBytes > 0) || !(maxTokens > 0) || !(outputTokens >= maxTokens)) return null;
+  return 'max_tokens_truncation';
+}
+
+
+function classifyManagedStreamLoopFailure(error) {
+  if (!(error instanceof HttpError)) return null;
+  if (error.code === 'vllm_thinking_loop_detected') return 'thinking';
+  if (error.code === 'vllm_response_loop_detected') return 'response';
+  return null;
+}
+
+function streamLoopRecoverySummary(blocks, checkpoint, kind) {
+  const lines = blocks.map((block, index) => {
+    if (block.type === 'tool_use') {
+      const input = JSON.stringify(block.input ?? {});
+      return `${index + 1}. tool_use ${block.name} ${input.slice(0, 1200)}`;
+    }
+    const text = String(block.text || '');
+    const tail = text.length > 4000 ? text.slice(-4000) : text;
+    return `${index + 1}. text ${JSON.stringify(tail)}`;
+  });
+  const partial = checkpoint?.partial_block || null;
+  const cause = kind === 'thinking'
+    ? 'The previous reasoning stream entered a repetitive loop.'
+    : 'The previous visible response entered a repetitive loop.';
+  const continuation = kind === 'thinking'
+    ? 'Continue the same task from the completed checkpoint without repeating the prior reasoning.'
+    : 'Regenerate only the remaining answer or remaining continuation from the completed checkpoint, concisely and without repeating prior text.';
+  return [
+    '[PROXY_MANAGED_STREAM_LOOP_RECOVERY]',
+    cause,
+    'The unfinished looping block was discarded in full and must not be continued from its partial text.',
+    continuation,
+    'Do not repeat preserved completed actions or preserved completed text.',
+    partial ? `The discarded partial block was ${String(partial.type || 'unknown')}; regenerate it from its beginning only if it is still required.` : 'No partial block metadata was available.',
+    lines.length ? 'Preserved completed blocks:\n' + lines.join('\n') : 'No completed non-thinking blocks were preserved.',
+    'Return only the remaining assistant continuation using normal Anthropic content/tool semantics.',
+  ].join('\n');
+}
+
+function buildManagedStreamLoopRecoveryRequest(originalRequest, blocks, checkpoint, kind) {
+  const recovered = structuredClone(originalRequest);
+  recovered.messages = Array.isArray(recovered.messages) ? recovered.messages : [];
+  recovered.messages.push({
+    role: 'user',
+    content: [{ type: 'text', text: streamLoopRecoverySummary(blocks, checkpoint, kind) }],
+  });
+  return recovered;
+}
+
+function exhaustedStreamLoopRecoveryError(kind, error) {
+  return new HttpError(502, `Base model repeated a ${kind} generation loop after one bounded recovery attempt.`, {
+    code: kind === 'thinking'
+      ? 'managed_thinking_loop_recovery_exhausted'
+      : 'managed_response_loop_recovery_exhausted',
+    retryable: false,
+    details: {
+      ...(error?.details && typeof error.details === 'object' ? structuredClone(error.details) : {}),
+      stream_kind: kind,
+      upstream_code: String(error?.code || ''),
+    },
+  });
+}
+
+function toolInputRecoverySummary(blocks, checkpoint, reason) {
+  const lines = blocks.map((block, index) => {
+    if (block.type === 'tool_use') {
+      const input = JSON.stringify(block.input ?? {});
+      return `${index + 1}. tool_use ${block.name} ${input.slice(0, 1200)}`;
+    }
+    const text = String(block.text || '');
+    const tail = text.length > 4000 ? text.slice(-4000) : text;
+    return `${index + 1}. text ${JSON.stringify(tail)}`;
+  });
+  const partial = checkpoint?.partial_block || null;
+  const cause = reason === 'loop_detected'
+    ? 'The previous tool input entered a repetitive generation loop.'
+    : 'The previous tool input reached the output token limit before its JSON arguments completed.';
+  return [
+    '[PROXY_MANAGED_TOOL_INPUT_RECOVERY]',
+    cause,
+    'The unfinished tool call was discarded in full and must never be continued from partial JSON.',
+    'Continue the same task from the completed checkpoint. Do not repeat preserved completed actions.',
+    partial ? `The discarded partial block was ${String(partial.type || 'unknown')}${partial.name ? ` ${partial.name}` : ''}; regenerate that unfinished tool call from its beginning only if it is still needed.` : 'No partial block metadata was available.',
+    'If the tool action is still required, regenerate it with concise arguments and avoid repeated large enumerations or duplicated data.',
+    lines.length ? 'Preserved completed blocks:\n' + lines.join('\n') : 'No completed non-thinking blocks were preserved.',
+    'Return only the remaining assistant continuation using normal Anthropic content/tool semantics.',
+  ].join('\n');
+}
+
+function buildManagedToolInputRecoveryRequest(originalRequest, blocks, checkpoint, reason) {
+  const recovered = structuredClone(originalRequest);
+  recovered.messages = Array.isArray(recovered.messages) ? recovered.messages : [];
+  recovered.messages.push({
+    role: 'user',
+    content: [{ type: 'text', text: toolInputRecoverySummary(blocks, checkpoint, reason) }],
+  });
+  return recovered;
+}
+
+function exhaustedToolInputRecoveryError(reason, error) {
+  return new HttpError(502, 'Base model repeated an invalid tool input after one bounded recovery attempt.', {
+    code: reason === 'loop_detected'
+      ? 'managed_tool_loop_recovery_exhausted'
+      : 'managed_tool_truncation_recovery_exhausted',
+    retryable: false,
+    details: {
+      ...(error?.details && typeof error.details === 'object' ? structuredClone(error.details) : {}),
+      recovery_reason: reason,
+      upstream_code: String(error?.code || ''),
+      tool_name: String(error?.details?.tool_name || ''),
+      partial_json_bytes: Number(error?.details?.partial_json_bytes || 0),
+    },
+  });
 }
 
 function buildManagedStallRecoveryRequest(originalRequest, blocks, checkpoint, attempt, maxAttempts) {
@@ -728,6 +896,8 @@ export async function runManagedLoop(initialRequest, {
   getUpstreamActivity = null,
   onModelRoundState = () => {},
   compressContinuationWindow = null,
+  maxCompletionProbesPerCandidate = DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE,
+  completionProbeEnabled = false,
 } = {}) {
   const request = structuredClone(initialRequest);
   request.stream = false;
@@ -738,6 +908,12 @@ export async function runManagedLoop(initialRequest, {
   const externalServerPrefix = [];
   const serverUsageCounts = { WebSearch: 0, WebFetch: 0 };
   const liveServerEvents = typeof onServerToolEvent === 'function';
+  let candidateFinal = null;
+  const completionProbeAttempts = new Map();
+  const completionProbeLimit = Math.min(
+    DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE,
+    Math.max(1, Math.floor(Number(maxCompletionProbesPerCandidate) || DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE)),
+  );
 
   const publishServerBlock = async (phase, block) => {
     if (liveServerEvents) await onServerToolEvent({ phase, block: structuredClone(block) });
@@ -748,7 +924,8 @@ export async function runManagedLoop(initialRequest, {
   const remainingTaskMs = () => taskDeadlineEnabled
     ? taskTimeoutMs - (Date.now() - taskStartedAt)
     : Number.POSITIVE_INFINITY;
-  const containedUpstream = async (body, upstreamSignal) => {
+  const containedUpstream = async (body, upstreamSignal, containmentOptions = {}) => {
+    const hiddenCompletionProbe = containmentOptions?.hiddenCompletionProbe === true;
     const remaining = remainingTaskMs();
     if (taskDeadlineEnabled && remaining <= 0) {
       throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'model');
@@ -763,6 +940,10 @@ export async function runManagedLoop(initialRequest, {
     });
     const recoveryLimit = Math.max(0, Math.floor(Number(maxStallRecoveryRounds) || 0));
     let recoveryAttempt = 0;
+    let toolInputRecoveryAttempt = 0;
+    let lastToolInputRecoveryReason = null;
+    const streamLoopRecoveryAttempts = { thinking: 0, response: 0 };
+    let lastStreamLoopRecoveryKind = null;
     let attemptRequest = body;
     let preservedBlocks = [];
     let latestCheckpoint = null;
@@ -773,6 +954,7 @@ export async function runManagedLoop(initialRequest, {
       const runModel = (modelSignal) => runModelWithActivityDeadline(
         (boundedSignal) => upstream(attemptRequest, boundedSignal, {
           onCheckpoint: (checkpoint) => { attemptCheckpoint = structuredClone(checkpoint); },
+          ...(hiddenCompletionProbe ? { hiddenCompletionProbe: true } : {}),
         }),
         {
           signal: modelSignal,
@@ -782,7 +964,7 @@ export async function runManagedLoop(initialRequest, {
           toolStallTimeoutMs: modelToolStallTimeoutMs,
           responseMode: modelResponseMode,
           getUpstreamActivity,
-          onRoundState: onModelRoundState,
+          onRoundState: hiddenCompletionProbe ? () => {} : onModelRoundState,
           round: activeRound,
         },
       );
@@ -798,8 +980,11 @@ export async function runManagedLoop(initialRequest, {
             },
           )
           : await runModel(upstreamSignal);
-        if (recoveryAttempt > 0) {
+        if (recoveryAttempt > 0 || toolInputRecoveryAttempt > 0
+          || streamLoopRecoveryAttempts.thinking > 0 || streamLoopRecoveryAttempts.response > 0) {
           rawResponse = mergeManagedStallRecoveryResponse(preservedBlocks, rawResponse);
+        }
+        if (recoveryAttempt > 0) {
           await onDiagnostic('managed_model_stall_recovery_completed', {
             round: activeRound,
             recovery_attempt: recoveryAttempt,
@@ -807,10 +992,74 @@ export async function runManagedLoop(initialRequest, {
             final_block_types: Array.isArray(rawResponse?.content) ? rawResponse.content.map((block) => String(block?.type || 'unknown')) : [],
           });
         }
+        if (toolInputRecoveryAttempt > 0) {
+          await onDiagnostic('managed_tool_input_recovery_completed', {
+            round: activeRound,
+            recovery_attempt: toolInputRecoveryAttempt,
+            reason: lastToolInputRecoveryReason,
+            preserved_block_count: preservedBlocks.length,
+            final_block_types: Array.isArray(rawResponse?.content) ? rawResponse.content.map((block) => String(block?.type || 'unknown')) : [],
+          });
+        }
+        if (lastStreamLoopRecoveryKind) {
+          await onDiagnostic('managed_stream_loop_recovery_completed', {
+            round: activeRound,
+            kind: lastStreamLoopRecoveryKind,
+            recovery_attempt: streamLoopRecoveryAttempts[lastStreamLoopRecoveryKind],
+            preserved_block_count: preservedBlocks.length,
+            final_block_types: Array.isArray(rawResponse?.content) ? rawResponse.content.map((block) => String(block?.type || 'unknown')) : [],
+          });
+        }
         break;
       } catch (error) {
-        const stall = error instanceof HttpError && error.code === 'managed_model_stall_timeout';
         const semanticCheckpointAvailable = Boolean(attemptCheckpoint || latestCheckpoint);
+        const streamLoopFailure = classifyManagedStreamLoopFailure(error);
+        if (streamLoopFailure) {
+          if (streamLoopRecoveryAttempts[streamLoopFailure] >= 1) throw exhaustedStreamLoopRecoveryError(streamLoopFailure, error);
+          if (!semanticCheckpointAvailable || upstreamSignal?.aborted) throw error;
+          latestCheckpoint = attemptCheckpoint || latestCheckpoint;
+          preservedBlocks = mergeRecoveryBlocks(preservedBlocks, recoverableCheckpointBlocks(attemptCheckpoint));
+          streamLoopRecoveryAttempts[streamLoopFailure] += 1;
+          lastStreamLoopRecoveryKind = streamLoopFailure;
+          attemptRequest = buildManagedStreamLoopRecoveryRequest(body, preservedBlocks, latestCheckpoint, streamLoopFailure);
+          await onDiagnostic('managed_stream_loop_recovery_started', {
+            round: activeRound,
+            kind: streamLoopFailure,
+            recovery_attempt: streamLoopRecoveryAttempts[streamLoopFailure],
+            recovery_limit: 1,
+            preserved_block_count: preservedBlocks.length,
+            preserved_tool_count: preservedBlocks.filter((block) => block?.type === 'tool_use').length,
+            partial_block_type: latestCheckpoint?.partial_block?.type || '',
+            accumulated_bytes: Number(error?.details?.accumulated_bytes || 0),
+            repeated_period_tokens: Number(error?.details?.repeated_period_tokens || 0),
+          });
+          continue;
+        }
+        const toolInputFailure = classifyManagedToolInputFailure(error);
+        if (toolInputFailure) {
+          if (toolInputRecoveryAttempt >= 1) throw exhaustedToolInputRecoveryError(toolInputFailure, error);
+          if (!semanticCheckpointAvailable || upstreamSignal?.aborted) throw error;
+          latestCheckpoint = attemptCheckpoint || latestCheckpoint;
+          preservedBlocks = mergeRecoveryBlocks(preservedBlocks, recoverableCheckpointBlocks(attemptCheckpoint));
+          toolInputRecoveryAttempt += 1;
+          lastToolInputRecoveryReason = toolInputFailure;
+          attemptRequest = buildManagedToolInputRecoveryRequest(body, preservedBlocks, latestCheckpoint, toolInputFailure);
+          await onDiagnostic('managed_tool_input_recovery_started', {
+            round: activeRound,
+            recovery_attempt: toolInputRecoveryAttempt,
+            recovery_limit: 1,
+            reason: toolInputFailure,
+            preserved_block_count: preservedBlocks.length,
+            preserved_tool_count: preservedBlocks.filter((block) => block?.type === 'tool_use').length,
+            partial_block_type: latestCheckpoint?.partial_block?.type || '',
+            partial_tool_name: latestCheckpoint?.partial_block?.name || error?.details?.tool_name || '',
+            partial_json_bytes: Number(error?.details?.partial_json_bytes || 0),
+            output_tokens: Number.isFinite(Number(error?.details?.output_tokens)) ? Number(error.details.output_tokens) : null,
+            max_tokens: Number.isFinite(Number(error?.details?.max_tokens)) ? Number(error.details.max_tokens) : null,
+          });
+          continue;
+        }
+        const stall = error instanceof HttpError && error.code === 'managed_model_stall_timeout';
         if (!stall || !semanticCheckpointAvailable || recoveryAttempt >= recoveryLimit || upstreamSignal?.aborted) throw error;
         latestCheckpoint = attemptCheckpoint || latestCheckpoint;
         preservedBlocks = mergeRecoveryBlocks(preservedBlocks, recoverableCheckpointBlocks(attemptCheckpoint));
@@ -958,7 +1207,82 @@ export async function runManagedLoop(initialRequest, {
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
-    if (toolUses.length === 0) return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+    if (completionProbeEnabled && response?.stop_reason === 'end_turn' && toolUses.length === 0) {
+      candidateFinal = structuredClone(response);
+      const candidateKey = completionCandidateKey(candidateFinal);
+      const probeAttempt = (completionProbeAttempts.get(candidateKey) || 0) + 1;
+      if (probeAttempt > completionProbeLimit) {
+        const error = new HttpError(422, 'Completion probe limit reached for the same candidate final.', {
+          code: 'completion_probe_limit',
+          retryable: false,
+          details: { probe_limit: completionProbeLimit },
+        });
+        await onDiagnostic('completion_probe_failed', {
+          round: round + 1,
+          probe_attempt: probeAttempt,
+          probe_limit: completionProbeLimit,
+          code: error.code,
+          ...candidateTelemetry(candidateFinal),
+        });
+        candidateFinal = null;
+        throw error;
+      }
+      completionProbeAttempts.set(candidateKey, probeAttempt);
+      const probeRequest = buildCompletionProbeRequest(request, candidateFinal);
+      await onDiagnostic('completion_probe_started', {
+        round: round + 1,
+        probe_attempt: probeAttempt,
+        probe_limit: completionProbeLimit,
+        ...candidateTelemetry(candidateFinal),
+      });
+      let probeResponse;
+      try {
+        probeResponse = await containedUpstream(probeRequest, signal, { hiddenCompletionProbe: true });
+      } catch (error) {
+        await onDiagnostic('completion_probe_failed', {
+          round: round + 1,
+          probe_attempt: probeAttempt,
+          probe_limit: completionProbeLimit,
+          code: String(error?.code || error?.name || 'completion_probe_failed'),
+          ...candidateTelemetry(candidateFinal),
+        });
+        candidateFinal = null;
+        throw error;
+      }
+      if (Array.isArray(probeResponse?.content)) {
+        const normalizedContent = probeResponse.content.map((block) => normalizeManagedToolUseBlock(block));
+        if (normalizedContent.some((block, index) => block !== probeResponse.content[index])) {
+          probeResponse = { ...probeResponse, content: normalizedContent };
+        }
+      }
+      const probeToolUses = normalizedToolUses(probeResponse);
+      if (probeToolUses.length === 0) {
+        await onDiagnostic('completion_probe_confirmed_final', {
+          round: round + 1,
+          probe_attempt: probeAttempt,
+          probe_limit: completionProbeLimit,
+          probe_stop_reason: probeResponse?.stop_reason ?? null,
+          ...candidateTelemetry(candidateFinal),
+        });
+        const confirmed = candidateFinal;
+        candidateFinal = null;
+        return withExternalServerPrefix(confirmed, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+      }
+      await onDiagnostic('completion_probe_continuation', {
+        round: round + 1,
+        probe_attempt: probeAttempt,
+        probe_limit: completionProbeLimit,
+        tool_use_count: probeToolUses.length,
+        tool_names: probeToolUses.map((block) => String(block?.name || '')),
+        ...candidateTelemetry(candidateFinal),
+      });
+      request.messages = structuredClone(probeRequest.messages);
+      candidateFinal = null;
+      response = probeResponse;
+      toolUses = probeToolUses;
+    } else if (toolUses.length === 0) {
+      return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+    }
 
     const toolSearchUses = localToolSearch?.enabled
       ? toolUses.filter((block) => isToolSearchToolName(block?.name))
