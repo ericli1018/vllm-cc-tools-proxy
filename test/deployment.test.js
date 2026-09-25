@@ -903,3 +903,18 @@ test('V0.29.50 completion probe is request-local bounded and enabled only on pro
   assert.ok(changeLogEntries.includes('V0.29.50-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.50-實作與驗證報告.md'));
 });
+
+test('V0.29.51 uses sustained loop confirmation and conservative generated-content tool profiles', async () => {
+  const collectorSource = await fs.readFile(new URL('../src/proxy/anthropic-sse-collector.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(collectorSource, /confirmation_stage: 'sustained'/);
+  assert.match(collectorSource, /confirmGrowthBytes/);
+  assert.match(collectorSource, /generated_content/);
+  assert.match(collectorSource, /GENERATED_CONTENT_TOOLS/);
+  assert.match(collectorSource, /Write.*Edit.*NotebookEdit.*MultiEdit/);
+  assert.match(collectorSource, /rotationsEqual/);
+  assert.match(readme, /V0\.29\.51 Sustained Loop Confirmation \+ Tool-Aware Profiles/);
+  assert.ok(changeLogEntries.includes('V0.29.51-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.51-實作與驗證報告.md'));
+});

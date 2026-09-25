@@ -1,11 +1,36 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.50 adds an End-Turn Completion Probe to the existing managed execution loop: an apparent `end_turn` with no tool use is held as a request-local candidate final, silently reviewed once in the full current context, and only released after the hidden probe confirms that no required work remains. If the probe emits tools, the candidate stays hidden and execution continues. Existing V0.29.49 phase-specific stream-loop detection and V0.29.48 Directed Vision behavior remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.51 hardens the existing stream-loop detector against false positives during code/web generation by requiring two-stage sustained repetition before aborting and by applying tool-aware profiles. Bash stays relatively sensitive, while Write/Edit/NotebookEdit use conservative thresholds so repeated HTML/CSS/JS/template structures can complete normally. V0.29.50 End-Turn Completion Probe and the existing recovery architecture remain unchanged.
 
 
 
 
 
+
+
+## V0.29.51 Sustained Loop Confirmation + Tool-Aware Profiles
+
+Stream-loop detection now distinguishes a **repeated pattern** from a **confirmed generation loop**. A repeated cycle observed once is recorded only as a request-local suspicion. The Proxy aborts only when later SSE growth still ends in the same repeated cycle after the profile-specific confirmation-growth threshold. If the stream moves on to different content, the suspicion is cleared and generation continues normally.
+
+The detector remains split across thinking, visible response, and tool-input channels, but the thresholds are no longer uniform:
+
+- **Thinking**: conservative semantic profile; one repeated reasoning pattern is not enough to abort.
+- **Visible response**: requires sustained repeated growth, reducing false positives when producing HTML, CSS, JavaScript, JSON, tables, SVG, or repeated UI components.
+- **Bash tool input**: keeps the most aggressive tool profile because a runaway command/list loop is executable intent and can waste large output budgets.
+- **Write / Edit / NotebookEdit / MultiEdit**: use a `generated_content` profile with substantially larger minimum bytes, more repeated cycles, a larger repeated-sequence floor, and at least 8 KiB of additional same-cycle growth before confirmation.
+- **Other tools**: use a middle-ground default tool profile.
+
+Detection is phase-aware and stateful only inside the current SSE content block. It does not persist across requests or sessions. A suspicious cycle that disappears before confirmation is discarded silently. A confirmed loop keeps the existing V0.29.49/V0.29.50 checkpoint recovery semantics: the unfinished block is discarded, completed semantic blocks are preserved, and each loop kind still has its existing bounded one-recovery policy.
+
+Regression coverage includes:
+
+- large repeated HTML response followed by a unique footer must complete;
+- large repeated thinking followed by genuinely new reasoning must complete;
+- large repeated Write/Edit/NotebookEdit payloads that terminate normally must complete;
+- sustained Bash repetition across later stream growth must still abort early;
+- sustained Write repetition must still abort once the conservative generated-content threshold is actually confirmed.
+
+V0.29.50 Completion Probe, Directed Vision, PDF/Native Vision, Web/ToolSearch, Compact, startup CARD, runtime clock, max-token truncation recovery, and managed-loop architecture are otherwise unchanged.
 
 
 ## V0.29.50 End-Turn Completion Probe

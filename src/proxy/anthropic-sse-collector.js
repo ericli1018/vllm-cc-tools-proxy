@@ -62,12 +62,50 @@ function applyDelta(block, delta, toolJson) {
   }
 }
 
-const TOOL_INPUT_LOOP_MIN_BYTES = 8192;
-const TOOL_INPUT_LOOP_CHECK_STEP_BYTES = 2048;
-const TOOL_INPUT_LOOP_MAX_TAIL_BYTES = 16384;
-const TOOL_INPUT_LOOP_MIN_PERIOD_TOKENS = 4;
-const TOOL_INPUT_LOOP_MAX_PERIOD_TOKENS = 128;
-const TOOL_INPUT_LOOP_MIN_SEQUENCE_BYTES = 128;
+const TOOL_INPUT_LOOP_PROFILES = Object.freeze({
+  aggressive: Object.freeze({
+    name: 'aggressive',
+    minBytes: 8_192,
+    checkStepBytes: 2_048,
+    maxTailBytes: 24_576,
+    minPeriodTokens: 4,
+    maxPeriodTokens: 128,
+    minSequenceBytes: 128,
+    minCycles: 3,
+    confirmGrowthBytes: 4_096,
+  }),
+  default: Object.freeze({
+    name: 'default',
+    minBytes: 12_288,
+    checkStepBytes: 3_072,
+    maxTailBytes: 32_768,
+    minPeriodTokens: 4,
+    maxPeriodTokens: 160,
+    minSequenceBytes: 160,
+    minCycles: 4,
+    confirmGrowthBytes: 6_144,
+  }),
+  generated_content: Object.freeze({
+    name: 'generated_content',
+    minBytes: 32_768,
+    checkStepBytes: 4_096,
+    maxTailBytes: 65_536,
+    minPeriodTokens: 4,
+    maxPeriodTokens: 256,
+    minSequenceBytes: 256,
+    minCycles: 8,
+    confirmGrowthBytes: 8_192,
+  }),
+});
+
+const GENERATED_CONTENT_TOOLS = new Set(['Write', 'Edit', 'NotebookEdit', 'MultiEdit']);
+
+function toolInputLoopProfile(toolName) {
+  const name = String(toolName || '');
+  if (GENERATED_CONTENT_TOOLS.has(name)) return TOOL_INPUT_LOOP_PROFILES.generated_content;
+  if (name === 'Bash') return TOOL_INPUT_LOOP_PROFILES.aggressive;
+  return TOOL_INPUT_LOOP_PROFILES.default;
+}
 
 function toolInputLoopError(details) {
   return new HttpError(502, 'vLLM tool input entered a repetitive generation loop.', {
@@ -79,67 +117,23 @@ function loopTokens(value) {
   return String(value || '').match(/[A-Za-z0-9_./:@%+=~-]+|[^\s]/g) || [];
 }
 
-function repeatedTokenCycle(value) {
-  const tail = boundedUtf8Tail(value, TOOL_INPUT_LOOP_MAX_TAIL_BYTES);
-  const tokens = loopTokens(tail);
-  const maxPeriod = Math.min(TOOL_INPUT_LOOP_MAX_PERIOD_TOKENS, Math.floor(tokens.length / 3));
-  for (let period = TOOL_INPUT_LOOP_MIN_PERIOD_TOKENS; period <= maxPeriod; period += 1) {
-    const start = tokens.length - (period * 3);
+function rotationsEqual(left = [], right = []) {
+  if (left.length !== right.length || !left.length) return false;
+  for (let shift = 0; shift < left.length; shift += 1) {
+    if (left[shift] !== right[0]) continue;
     let same = true;
-    for (let offset = 0; offset < period && same; offset += 1) {
-      const expected = tokens[start + offset];
-      if (tokens[start + period + offset] !== expected || tokens[start + (period * 2) + offset] !== expected) same = false;
+    for (let index = 0; index < left.length; index += 1) {
+      if (left[(shift + index) % left.length] !== right[index]) {
+        same = false;
+        break;
+      }
     }
-    if (!same) continue;
-    const sequence = tokens.slice(tokens.length - period).join(' ');
-    const sequenceBytes = Buffer.byteLength(sequence, 'utf8');
-    if (sequenceBytes < TOOL_INPUT_LOOP_MIN_SEQUENCE_BYTES) continue;
-    return { repeated_period_tokens: period, repeated_sequence_bytes: sequenceBytes };
+    if (same) return true;
   }
-  return null;
+  return false;
 }
 
-function detectToolInputLoop(partialJson, detectorState) {
-  const bytes = Buffer.byteLength(String(partialJson || ''), 'utf8');
-  if (bytes < TOOL_INPUT_LOOP_MIN_BYTES) return null;
-  if (bytes - Number(detectorState?.last_checked_bytes || 0) < TOOL_INPUT_LOOP_CHECK_STEP_BYTES) return null;
-  if (detectorState) detectorState.last_checked_bytes = bytes;
-  const cycle = repeatedTokenCycle(partialJson);
-  return cycle ? { ...cycle, partial_json_bytes: bytes } : null;
-}
-
-
-const SEMANTIC_LOOP_PROFILES = Object.freeze({
-  thinking: Object.freeze({
-    minBytes: 16_384,
-    checkStepBytes: 4_096,
-    maxTailBytes: 32_768,
-    minPeriodTokens: 6,
-    maxPeriodTokens: 192,
-    minSequenceBytes: 160,
-    minCycles: 5,
-  }),
-  response: Object.freeze({
-    minBytes: 8_192,
-    checkStepBytes: 2_048,
-    maxTailBytes: 24_576,
-    minPeriodTokens: 4,
-    maxPeriodTokens: 128,
-    minSequenceBytes: 128,
-    minCycles: 4,
-  }),
-});
-
-function semanticLoopError(kind, details) {
-  const label = kind === 'thinking' ? 'thinking' : 'visible response';
-  return new HttpError(502, `vLLM ${label} entered a repetitive generation loop.`, {
-    code: kind === 'thinking' ? 'vllm_thinking_loop_detected' : 'vllm_response_loop_detected',
-    retryable: true,
-    details: { stream_kind: kind, ...details },
-  });
-}
-
-function repeatedSemanticCycle(value, profile) {
+function repeatedCycle(value, profile) {
   const tail = boundedUtf8Tail(value, profile.maxTailBytes);
   const tokens = loopTokens(tail);
   const maxPeriod = Math.min(profile.maxPeriodTokens, Math.floor(tokens.length / profile.minCycles));
@@ -156,27 +150,114 @@ function repeatedSemanticCycle(value, profile) {
       }
     }
     if (!same) continue;
-    const sequence = tokens.slice(tokens.length - period).join(' ');
+    const sequenceTokens = tokens.slice(tokens.length - period);
+    const sequence = sequenceTokens.join(' ');
     const sequenceBytes = Buffer.byteLength(sequence, 'utf8');
     if (sequenceBytes < profile.minSequenceBytes) continue;
     return {
       repeated_period_tokens: period,
       repeated_sequence_bytes: sequenceBytes,
       repeated_cycles: profile.minCycles,
+      sequence_tokens: sequenceTokens,
     };
   }
   return null;
 }
 
-function detectSemanticLoop(kind, value, detectorState) {
-  const profile = SEMANTIC_LOOP_PROFILES[kind];
-  if (!profile) return null;
+function confirmSustainedLoop(value, detectorState, profile) {
   const bytes = Buffer.byteLength(String(value || ''), 'utf8');
   if (bytes < profile.minBytes) return null;
   if (bytes - Number(detectorState?.last_checked_bytes || 0) < profile.checkStepBytes) return null;
   if (detectorState) detectorState.last_checked_bytes = bytes;
-  const cycle = repeatedSemanticCycle(value, profile);
-  return cycle ? { ...cycle, accumulated_bytes: bytes } : null;
+
+  const cycle = repeatedCycle(value, profile);
+  if (!cycle) {
+    if (detectorState) detectorState.suspicion = null;
+    return null;
+  }
+
+  const previous = detectorState?.suspicion || null;
+  const sameCycle = previous
+    && previous.repeated_period_tokens === cycle.repeated_period_tokens
+    && rotationsEqual(previous.sequence_tokens, cycle.sequence_tokens);
+
+  if (!sameCycle) {
+    if (detectorState) {
+      detectorState.suspicion = {
+        first_observed_bytes: bytes,
+        repeated_period_tokens: cycle.repeated_period_tokens,
+        repeated_sequence_bytes: cycle.repeated_sequence_bytes,
+        sequence_tokens: cycle.sequence_tokens,
+      };
+    }
+    return null;
+  }
+
+  const growthBytes = bytes - Number(previous.first_observed_bytes || bytes);
+  if (growthBytes < profile.confirmGrowthBytes) return null;
+
+  return {
+    repeated_period_tokens: cycle.repeated_period_tokens,
+    repeated_sequence_bytes: cycle.repeated_sequence_bytes,
+    repeated_cycles: cycle.repeated_cycles,
+    first_observed_bytes: previous.first_observed_bytes,
+    confirmed_growth_bytes: growthBytes,
+    confirmation_stage: 'sustained',
+    detector_profile: profile.name,
+  };
+}
+
+function detectToolInputLoop(partialJson, detectorState, toolName) {
+  const profile = toolInputLoopProfile(toolName);
+  const confirmed = confirmSustainedLoop(partialJson, detectorState, profile);
+  return confirmed ? {
+    ...confirmed,
+    partial_json_bytes: Buffer.byteLength(String(partialJson || ''), 'utf8'),
+  } : null;
+}
+
+const SEMANTIC_LOOP_PROFILES = Object.freeze({
+  thinking: Object.freeze({
+    name: 'thinking',
+    minBytes: 16_384,
+    checkStepBytes: 4_096,
+    maxTailBytes: 32_768,
+    minPeriodTokens: 6,
+    maxPeriodTokens: 192,
+    minSequenceBytes: 160,
+    minCycles: 5,
+    confirmGrowthBytes: 4_096,
+  }),
+  response: Object.freeze({
+    name: 'response',
+    minBytes: 12_288,
+    checkStepBytes: 4_096,
+    maxTailBytes: 32_768,
+    minPeriodTokens: 4,
+    maxPeriodTokens: 192,
+    minSequenceBytes: 160,
+    minCycles: 6,
+    confirmGrowthBytes: 4_096,
+  }),
+});
+
+function semanticLoopError(kind, details) {
+  const label = kind === 'thinking' ? 'thinking' : 'visible response';
+  return new HttpError(502, `vLLM ${label} entered a repetitive generation loop.`, {
+    code: kind === 'thinking' ? 'vllm_thinking_loop_detected' : 'vllm_response_loop_detected',
+    retryable: true,
+    details: { stream_kind: kind, ...details },
+  });
+}
+
+function detectSemanticLoop(kind, value, detectorState) {
+  const profile = SEMANTIC_LOOP_PROFILES[kind];
+  if (!profile) return null;
+  const confirmed = confirmSustainedLoop(value, detectorState, profile);
+  return confirmed ? {
+    ...confirmed,
+    accumulated_bytes: Buffer.byteLength(String(value || ''), 'utf8'),
+  } : null;
 }
 
 function boundedUtf8Tail(value, maxBytes = 1024) {
@@ -354,7 +435,7 @@ export async function collectAnthropicMessageFromSse(upstream, {
       if (toolJson.has(index)) {
         toolJson.set(index, holder.value);
         if (delta.type === 'input_json_delta') {
-          const loop = detectToolInputLoop(holder.value, toolLoopState.get(index));
+          const loop = detectToolInputLoop(holder.value, toolLoopState.get(index), block?.name);
           if (loop) {
             await notifyCheckpoint();
             throw toolInputLoopError({

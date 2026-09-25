@@ -321,18 +321,22 @@ test('V0.29.39 malformed tool input never becomes a completed recovery checkpoin
   assert.equal(checkpoints.at(-1)?.partial_block?.id, 'tool-39-checkpoint');
 });
 
-test('V0.29.49 collector aborts a repetitive tool-input cycle before max_tokens truncation', async () => {
+test('V0.29.51 collector aborts a sustained Bash tool-input cycle before max_tokens truncation', async () => {
   const cycle = 'docs/10-quality/TIME_SYNC.md docs/10-quality/BACKUP_RESTORE.md docs/10-quality/CONFIGURATION_VERSIONING.md docs/10-quality/OBSERVABILITY.md docs/10-quality/OTA_ARCHITECTURE.md docs/10-quality/NFR.md docs/10-quality/FAULT_TOLERANCE.md docs/10-quality/OFFLINE_OPERATION.md ';
-  const loopingJson = `{"command":"${cycle.repeat(48)}`;
+  const first = `{"command":"${cycle.repeat(36)}`;
+  const second = cycle.repeat(24);
   const wire = [
     event('message_start', { type: 'message_start', message: {
-      id: 'm49-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+      id: 'm51-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
     } }),
     event('content_block_start', { type: 'content_block_start', index: 2, content_block: {
-      type: 'tool_use', id: 'tool-49-loop', name: 'Bash', input: {},
+      type: 'tool_use', id: 'tool-51-loop', name: 'Bash', input: {},
     } }),
     event('content_block_delta', { type: 'content_block_delta', index: 2, delta: {
-      type: 'input_json_delta', partial_json: loopingJson,
+      type: 'input_json_delta', partial_json: first,
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 2, delta: {
+      type: 'input_json_delta', partial_json: second,
     } }),
   ].join('');
 
@@ -340,9 +344,9 @@ test('V0.29.49 collector aborts a repetitive tool-input cycle before max_tokens 
     assert.equal(error.code, 'vllm_tool_input_loop_detected');
     assert.equal(error.details.index, 2);
     assert.equal(error.details.tool_name, 'Bash');
+    assert.equal(error.details.confirmation_stage, 'sustained');
+    assert.ok(error.details.confirmed_growth_bytes >= 4096);
     assert.ok(error.details.partial_json_bytes >= 8192);
-    assert.ok(error.details.repeated_period_tokens >= 4);
-    assert.ok(error.details.repeated_sequence_bytes >= 128);
     return true;
   });
 });
@@ -372,60 +376,62 @@ test('V0.29.49 collector does not classify a bounded fourfold repeated tool payl
   assert.equal(result.content[0].input.command, command);
 });
 
-test('V0.29.49 collector aborts a sustained thinking repetition loop before max_tokens', async () => {
+test('V0.29.51 collector aborts a sustained thinking repetition loop before max_tokens', async () => {
   const cycle = 'I need to inspect the state, compare the evidence, decide the next action, and verify the result. ';
-  const thinking = cycle.repeat(220);
-  assert.ok(Buffer.byteLength(thinking, 'utf8') >= 16000);
+  const first = cycle.repeat(180);
+  const second = cycle.repeat(80);
+  assert.ok(Buffer.byteLength(first, 'utf8') >= 16000);
   const wire = [
     event('message_start', { type: 'message_start', message: {
-      id: 'm49-thinking-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+      id: 'm51-thinking-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
     } }),
     event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
       type: 'thinking', thinking: '',
     } }),
     event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
-      type: 'thinking_delta', thinking,
+      type: 'thinking_delta', thinking: first,
     } }),
-    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
-    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6000 } }),
-    event('message_stop', { type: 'message_stop' }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'thinking_delta', thinking: second,
+    } }),
   ].join('');
 
   await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
     assert.equal(error.code, 'vllm_thinking_loop_detected');
     assert.equal(error.details.index, 0);
     assert.equal(error.details.stream_kind, 'thinking');
-    assert.ok(error.details.accumulated_bytes >= 16000);
-    assert.ok(error.details.repeated_period_tokens >= 4);
+    assert.equal(error.details.confirmation_stage, 'sustained');
+    assert.ok(error.details.confirmed_growth_bytes >= 4096);
     return true;
   });
 });
 
-test('V0.29.49 collector aborts a sustained visible response repetition loop before max_tokens', async () => {
+test('V0.29.51 collector aborts a sustained visible response repetition loop before max_tokens', async () => {
   const cycle = 'The result is complete. I will now summarize the same conclusion and provide the next step. ';
-  const text = cycle.repeat(140);
-  assert.ok(Buffer.byteLength(text, 'utf8') >= 8000);
+  const first = cycle.repeat(150);
+  const second = cycle.repeat(70);
+  assert.ok(Buffer.byteLength(first, 'utf8') >= 12000);
   const wire = [
     event('message_start', { type: 'message_start', message: {
-      id: 'm49-response-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+      id: 'm51-response-loop', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
     } }),
     event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
       type: 'text', text: '',
     } }),
     event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
-      type: 'text_delta', text,
+      type: 'text_delta', text: first,
     } }),
-    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
-    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 4000 } }),
-    event('message_stop', { type: 'message_stop' }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'text_delta', text: second,
+    } }),
   ].join('');
 
   await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
     assert.equal(error.code, 'vllm_response_loop_detected');
     assert.equal(error.details.index, 0);
     assert.equal(error.details.stream_kind, 'response');
-    assert.ok(error.details.accumulated_bytes >= 8000);
-    assert.ok(error.details.repeated_period_tokens >= 4);
+    assert.equal(error.details.confirmation_stage, 'sustained');
+    assert.ok(error.details.confirmed_growth_bytes >= 4096);
     return true;
   });
 });
@@ -450,4 +456,152 @@ test('V0.29.49 collector does not classify a bounded repeated response template 
 
   const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
   assert.equal(result.content[0].text, text);
+});
+
+test('V0.29.51 response repetition is only suspicious until the same cycle keeps growing', async () => {
+  const card = `<section><h2>Feature Card</h2><p>${'x'.repeat(180)}</p></section>`;
+  const repeatedHtml = card.repeat(60);
+  assert.ok(Buffer.byteLength(repeatedHtml, 'utf8') >= 12000);
+  const footer = '<footer>Finished rendering the page.</footer>';
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm51-response-suspicious', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'text', text: '',
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'text_delta', text: repeatedHtml,
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'text_delta', text: footer,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5000 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
+  assert.equal(result.content[0].text, repeatedHtml + footer);
+});
+
+test('V0.29.51 thinking repetition is only suspicious until sustained growth confirms the loop', async () => {
+  const cycle = `Inspect the state, compare the evidence, choose the next action, and verify it carefully ${'x'.repeat(120)}. `;
+  const suspicious = cycle.repeat(100);
+  assert.ok(Buffer.byteLength(suspicious, 'utf8') >= 16000);
+  const uniqueConclusion = 'The evidence now differs, so I will proceed with the implementation instead of repeating the analysis.';
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm51-thinking-suspicious', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'thinking', thinking: '',
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'thinking_delta', thinking: suspicious,
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'thinking_delta', thinking: uniqueConclusion,
+    } }),
+    event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+    event('message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 6000 } }),
+    event('message_stop', { type: 'message_stop' }),
+  ].join('');
+
+  const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
+  assert.equal(result.content[0].thinking, suspicious + uniqueConclusion);
+});
+
+for (const toolName of ['Write', 'Edit', 'NotebookEdit']) {
+  test(`V0.29.51 ${toolName} allows large repeated generated content when repetition stops`, async () => {
+    const card = `<section><h2>Feature Card</h2><p>${'x'.repeat(180)}</p></section>`;
+    const generated = card.repeat(160);
+    assert.ok(Buffer.byteLength(generated, 'utf8') >= 32000);
+    const prefix = '{"file_path":"/tmp/page.html","content":"';
+    const suffix = '<footer>unique-finish</footer>"}';
+    const fullJson = prefix + generated + suffix;
+    const wire = [
+      event('message_start', { type: 'message_start', message: {
+        id: `m51-${toolName}`, type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+      } }),
+      event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+        type: 'tool_use', id: `tool-51-${toolName}`, name: toolName, input: {},
+      } }),
+      event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+        type: 'input_json_delta', partial_json: prefix + generated,
+      } }),
+      event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+        type: 'input_json_delta', partial_json: suffix,
+      } }),
+      event('content_block_stop', { type: 'content_block_stop', index: 0 }),
+      event('message_delta', { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 12000 } }),
+      event('message_stop', { type: 'message_stop' }),
+    ].join('');
+
+    const result = await collectAnthropicMessageFromSse(upstreamFromChunks([wire]));
+    assert.equal(result.content[0].name, toolName);
+    assert.deepEqual(result.content[0].input, JSON.parse(fullJson));
+  });
+}
+
+test('V0.29.51 Bash aborts only after the same repeated cycle persists across later stream growth', async () => {
+  const cycle = `docs/10-quality/TIME_SYNC.md docs/10-quality/BACKUP_RESTORE.md docs/10-quality/CONFIGURATION_VERSIONING.md docs/10-quality/OBSERVABILITY.md docs/10-quality/OTA_ARCHITECTURE.md docs/10-quality/NFR.md docs/10-quality/FAULT_TOLERANCE.md docs/10-quality/OFFLINE_OPERATION.md `;
+  const prefix = '{"command":"';
+  const first = prefix + cycle.repeat(36);
+  const second = cycle.repeat(24);
+  assert.ok(Buffer.byteLength(first, 'utf8') >= 8192);
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm51-bash-sustained', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'tool_use', id: 'tool-51-bash-sustained', name: 'Bash', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: first,
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: second,
+    } }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_tool_input_loop_detected');
+    assert.equal(error.details.tool_name, 'Bash');
+    assert.equal(error.details.confirmation_stage, 'sustained');
+    assert.ok(error.details.confirmed_growth_bytes >= 2048);
+    return true;
+  });
+});
+
+test('V0.29.51 Write still aborts when generated-content repetition keeps growing after suspicion', async () => {
+  const card = `<section><h2>Feature Card</h2><p>${'x'.repeat(180)}</p></section>`;
+  const prefix = '{"file_path":"/tmp/page.html","content":"';
+  const first = prefix + card.repeat(160);
+  const second = card.repeat(45);
+  assert.ok(Buffer.byteLength(first, 'utf8') >= 32768);
+  assert.ok(Buffer.byteLength(second, 'utf8') >= 8192);
+  const wire = [
+    event('message_start', { type: 'message_start', message: {
+      id: 'm51-write-sustained', type: 'message', role: 'assistant', model: 'm', content: [], usage: {},
+    } }),
+    event('content_block_start', { type: 'content_block_start', index: 0, content_block: {
+      type: 'tool_use', id: 'tool-51-write-sustained', name: 'Write', input: {},
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: first,
+    } }),
+    event('content_block_delta', { type: 'content_block_delta', index: 0, delta: {
+      type: 'input_json_delta', partial_json: second,
+    } }),
+  ].join('');
+
+  await assert.rejects(collectAnthropicMessageFromSse(upstreamFromChunks([wire])), (error) => {
+    assert.equal(error.code, 'vllm_tool_input_loop_detected');
+    assert.equal(error.details.tool_name, 'Write');
+    assert.equal(error.details.detector_profile, 'generated_content');
+    assert.equal(error.details.confirmation_stage, 'sustained');
+    assert.ok(error.details.confirmed_growth_bytes >= 8192);
+    return true;
+  });
 });
