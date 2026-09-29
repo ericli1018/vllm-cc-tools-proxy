@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.51', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.52', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3168,7 +3168,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.51/);
+  assert.match(first, /VERSION\s+0\.29\.52/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3270,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.51');
+  assert.equal(payload.version, '0.29.52');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.51/);
+  assert.match(payload.display, /CCTP 0\.29\.52/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4679,11 +4679,13 @@ test('V0.29.50 managed completion probe runs before final language repair and pr
     assert.equal(probeMessages.at(-2).role, 'assistant');
     assert.match(JSON.stringify(probeMessages.at(-2).content), /The candidate final answer is complete/);
     assert.equal(probeMessages.at(-1).role, 'user');
-    assert.match(JSON.stringify(probeMessages.at(-1).content), /Review the original request and your latest response/);
+    assert.match(JSON.stringify(probeMessages.at(-1).content), /Do not perform any work/);
+    assert.deepEqual(payload.tools.map((tool) => tool.name), ['SubmitCompletionDecision']);
+    assert.equal(payload.tool_choice?.name, 'SubmitCompletionDecision');
     res.end(JSON.stringify({
       id: 'probe-confirm', type: 'message', role: 'assistant', model: 'm',
-      content: [{ type: 'text', text: 'No further work remains.' }],
-      stop_reason: 'end_turn', usage: { input_tokens: 30, output_tokens: 5 },
+      content: [{ type: 'tool_use', id: 'decision-complete', name: 'SubmitCompletionDecision', input: { decision: 'complete' } }],
+      stop_reason: 'tool_use', usage: { input_tokens: 30, output_tokens: 5 },
     }));
   });
   const processor = await startJsonServer(async (req, res) => {
@@ -4720,7 +4722,7 @@ test('V0.29.50 managed completion probe runs before final language repair and pr
   assert.equal(processorBodies.length, 1);
   const processorSerialized = JSON.stringify(processorBodies[0]);
   assert.match(processorSerialized, /The candidate final answer is complete/);
-  assert.doesNotMatch(processorSerialized, /No further work remains/);
+  assert.doesNotMatch(processorSerialized, /SubmitCompletionDecision/);
   assert.ok(logs.some((entry) => entry.event === 'completion_probe_started'));
   assert.ok(logs.some((entry) => entry.event === 'completion_probe_confirmed_final'));
   const probeConfirmedIndex = logs.findIndex((entry) => entry.event === 'completion_probe_confirmed_final');

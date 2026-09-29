@@ -1540,9 +1540,11 @@ test('V0.29.50 completion probe confirms candidate final without exposing probe 
       assert.equal(request.messages[1].role, 'assistant');
       assert.deepEqual(request.messages[1].content, candidate.content);
       assert.equal(request.messages[2].role, 'user');
-      assert.match(JSON.stringify(request.messages[2].content), /Review the original request and your latest response/);
-      assert.match(JSON.stringify(request.messages[2].content), /If required work remains, continue executing it now using tools/);
-      return response([{ type: 'text', text: 'Probe says fully complete.' }], 'end_turn');
+      assert.deepEqual(request.tools.map((tool) => tool.name), ['SubmitCompletionDecision']);
+      assert.equal(request.tool_choice?.name, 'SubmitCompletionDecision');
+      assert.match(JSON.stringify(request.messages[2].content), /Do not perform any work/);
+      assert.match(JSON.stringify(request.messages[2].content), /Could do does not mean must do/);
+      return response([{ type: 'tool_use', id: 'decision-complete', name: 'SubmitCompletionDecision', input: { decision: 'complete' } }], 'tool_use');
     },
     executeTool: async () => assert.fail('confirmed final probe must not execute tools'),
     completionProbeEnabled: true,
@@ -1553,7 +1555,7 @@ test('V0.29.50 completion probe confirms candidate final without exposing probe 
   assert.equal(requests.length, 2);
   assert.deepEqual(roundStates, ['start', 'end']);
   assert.deepEqual(result.content, candidate.content);
-  assert.equal(result.content.some((block) => block?.text === 'Probe says fully complete.'), false);
+  assert.equal(result.content.some((block) => block?.name === 'SubmitCompletionDecision'), false);
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_started'));
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_confirmed_final'));
   assert.equal(diagnostics.some((entry) => entry.event === 'completion_probe_continuation'), false);
@@ -1568,9 +1570,10 @@ test('V0.29.50 completion probe hides candidate A and continues managed tools un
       { type: 'thinking', thinking: 'I think I am done.' },
       { type: 'text', text: 'Candidate final A must stay hidden.' },
     ], 'end_turn'),
+    response([{ type: 'tool_use', id: 'decision-continue', name: 'SubmitCompletionDecision', input: { decision: 'continue', remaining_work: 'Search for the missing evidence requested by the user.' } }], 'tool_use'),
     response([{ type: 'tool_use', id: 'search-more', name: 'WebSearch', input: { query: 'missing evidence' } }], 'tool_use'),
     response([{ type: 'text', text: 'True final B.' }], 'end_turn'),
-    response([{ type: 'text', text: 'Probe confirms B.' }], 'end_turn'),
+    response([{ type: 'tool_use', id: 'decision-complete', name: 'SubmitCompletionDecision', input: { decision: 'complete' } }], 'tool_use'),
   ];
 
   const result = await runManagedLoop({
@@ -1596,9 +1599,11 @@ test('V0.29.50 completion probe hides candidate A and continues managed tools un
   assert.equal(executions[0].id, 'search-more');
   assert.equal(result.content.at(-1)?.text, 'True final B.');
   assert.doesNotMatch(JSON.stringify(result), /Candidate final A must stay hidden/);
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 5);
   assert.match(JSON.stringify(requests[2].messages), /Candidate final A must stay hidden/);
-  assert.match(JSON.stringify(requests[2].messages), /Review the original request and your latest response/);
+  assert.match(JSON.stringify(requests[2].messages), /Continue only the unfinished work required by the original request/);
+  assert.deepEqual(requests[1].tools.map((tool) => tool.name), ['SubmitCompletionDecision']);
+  assert.equal(requests[2].tools[0].name, 'WebSearch');
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_continuation'));
   assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_started').length, 2);
   assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_confirmed_final').length, 1);
@@ -1638,9 +1643,9 @@ test('V0.29.50 completion probe count is bounded per repeated candidate final', 
     upstream: async () => {
       calls += 1;
       if (calls % 2 === 1) return response([{ type: 'text', text: 'Same candidate final.' }], 'end_turn');
-      return response([{ type: 'tool_use', id: `search-${calls}`, name: 'WebSearch', input: { query: `q-${calls}` } }], 'tool_use');
+      return response([{ type: 'tool_use', id: `decision-${calls}`, name: 'SubmitCompletionDecision', input: { decision: 'continue', remaining_work: 'The explicitly requested work is still unfinished.' } }], 'tool_use');
     },
-    executeTool: async () => ({ results: [] }),
+    executeTool: async () => assert.fail('decision probe must not execute tools'),
     maxRounds: 10,
     completionProbeEnabled: true,
     maxCompletionProbesPerCandidate: 2,
@@ -1672,12 +1677,13 @@ test('V0.29.50 completion probe state is request-local and does not leak into a 
       laterRequests.push(structuredClone(request));
       laterCalls += 1;
       if (laterCalls === 1) return response([{ type: 'text', text: 'Second candidate.' }], 'end_turn');
-      return response([{ type: 'text', text: 'Second confirmed.' }], 'end_turn');
+      return response([{ type: 'tool_use', id: 'decision-complete-second', name: 'SubmitCompletionDecision', input: { decision: 'complete' } }], 'tool_use');
     },
     executeTool: async () => ({}),
     completionProbeEnabled: true,
   });
 
   assert.equal(result.content[0].text, 'Second candidate.');
-  assert.doesNotMatch(JSON.stringify(laterRequests), /First candidate|Review the original request.*First/);
+  assert.doesNotMatch(JSON.stringify(laterRequests), /First candidate/);
+  assert.match(JSON.stringify(laterRequests[1]), /SubmitCompletionDecision/);
 });

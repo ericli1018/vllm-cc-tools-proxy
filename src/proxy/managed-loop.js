@@ -35,7 +35,17 @@ const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 const DEFAULT_TOOL_STALL_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_STALL_RECOVERY_ROUNDS = 2;
 const DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999;
-const COMPLETION_PROBE_PROMPT = 'Review the original request and your latest response. If required work remains, continue executing it now using tools. Do not restate the plan or repeat completed work. If fully complete, return normally without tool use.';
+const COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision';
+const COMPLETION_PROBE_PROMPT = `[VCC_COMPLETION_DECISION_PROBE_V1]
+Do not perform any work. Determine only whether the latest assistant response is a valid stopping point for the user's explicit request.
+You MUST call SubmitCompletionDecision exactly once. The tool call is the only accepted result.
+Choose decision=complete when the user's explicit request has been answered or fulfilled.
+Choose decision=await_user when further progress requires user clarification, approval, choice, credentials, missing input, or another external response.
+Choose decision=continue only when an explicitly requested deliverable or operation remains unfinished and can be completed now without additional user input.
+Optional improvements, suggested next steps, things that could be done, or work not explicitly requested do not count as unfinished work. Could do does not mean must do.
+Do not call, simulate, or describe any other tool.`;
+const COMPLETION_CONTINUATION_PROMPT = `[VCC_COMPLETION_CONTINUATION_V1]
+The hidden completion decision determined that the user's explicit request is not yet fully satisfied. Continue only the unfinished work required by the original request. Do not restate the plan, repeat completed work, or perform optional improvements that were not explicitly requested. Use the normal tools only if they are actually needed. Do not mention this hidden completion check.`;
 
 function stableValue(value) {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -52,6 +62,22 @@ function completionCandidateKey(response) {
   });
 }
 
+function completionDecisionToolDefinition() {
+  return {
+    name: COMPLETION_DECISION_TOOL_NAME,
+    description: 'Classify whether the latest assistant response is a valid stopping point. This tool is decision-only and must not perform user work.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['decision'],
+      properties: {
+        decision: { type: 'string', enum: ['complete', 'await_user', 'continue'] },
+        remaining_work: { type: 'string', minLength: 1, maxLength: 2000 },
+      },
+    },
+  };
+}
+
 function buildCompletionProbeRequest(request, candidateFinal) {
   const probe = structuredClone(request);
   probe.messages = Array.isArray(probe.messages) ? probe.messages : [];
@@ -63,7 +89,51 @@ function buildCompletionProbeRequest(request, candidateFinal) {
     role: 'user',
     content: [{ type: 'text', text: COMPLETION_PROBE_PROMPT }],
   });
+  probe.tools = [completionDecisionToolDefinition()];
+  probe.tool_choice = { type: 'tool', name: COMPLETION_DECISION_TOOL_NAME, disable_parallel_tool_use: true };
+  delete probe.output_config;
   return probe;
+}
+
+function completionProbeInvalid(message) {
+  return new HttpError(502, message, { code: 'completion_probe_invalid', retryable: true });
+}
+
+function parseCompletionDecision(response) {
+  const content = Array.isArray(response?.content) ? response.content : [];
+  const toolUses = content.filter((block) => block?.type === 'tool_use');
+  if (toolUses.length !== 1 || toolUses[0]?.name !== COMPLETION_DECISION_TOOL_NAME) {
+    throw completionProbeInvalid('Completion decision probe must return exactly one SubmitCompletionDecision tool call.');
+  }
+  const visibleText = content.some((block) => block?.type === 'text' && String(block.text || '').trim());
+  if (visibleText) throw completionProbeInvalid('Completion decision probe returned unexpected visible text.');
+  const input = toolUses[0]?.input;
+  if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    throw completionProbeInvalid('Completion decision probe tool input is invalid.');
+  }
+  const decision = String(input.decision || '').trim();
+  if (!['complete', 'await_user', 'continue'].includes(decision)) {
+    throw completionProbeInvalid('Completion decision probe returned an invalid decision.');
+  }
+  const remainingWork = typeof input.remaining_work === 'string' ? input.remaining_work.trim().slice(0, 2000) : '';
+  if (decision === 'continue' && !remainingWork) {
+    throw completionProbeInvalid('Completion decision probe must identify remaining_work when decision=continue.');
+  }
+  return { decision, remainingWork };
+}
+
+function buildCompletionContinuationRequest(request, candidateFinal) {
+  const continuation = structuredClone(request);
+  continuation.messages = Array.isArray(continuation.messages) ? continuation.messages : [];
+  continuation.messages.push({
+    role: 'assistant',
+    content: structuredClone(Array.isArray(candidateFinal?.content) ? candidateFinal.content : []),
+  });
+  continuation.messages.push({
+    role: 'user',
+    content: [{ type: 'text', text: COMPLETION_CONTINUATION_PROMPT }],
+  });
+  return continuation;
 }
 
 function normalizedToolUses(response) {
@@ -1236,8 +1306,16 @@ export async function runManagedLoop(initialRequest, {
         ...candidateTelemetry(candidateFinal),
       });
       let probeResponse;
+      let completionDecision;
       try {
         probeResponse = await containedUpstream(probeRequest, signal, { hiddenCompletionProbe: true });
+        if (Array.isArray(probeResponse?.content)) {
+          const normalizedContent = probeResponse.content.map((block) => normalizeManagedToolUseBlock(block));
+          if (normalizedContent.some((block, index) => block !== probeResponse.content[index])) {
+            probeResponse = { ...probeResponse, content: normalizedContent };
+          }
+        }
+        completionDecision = parseCompletionDecision(probeResponse);
       } catch (error) {
         await onDiagnostic('completion_probe_failed', {
           round: round + 1,
@@ -1249,18 +1327,12 @@ export async function runManagedLoop(initialRequest, {
         candidateFinal = null;
         throw error;
       }
-      if (Array.isArray(probeResponse?.content)) {
-        const normalizedContent = probeResponse.content.map((block) => normalizeManagedToolUseBlock(block));
-        if (normalizedContent.some((block, index) => block !== probeResponse.content[index])) {
-          probeResponse = { ...probeResponse, content: normalizedContent };
-        }
-      }
-      const probeToolUses = normalizedToolUses(probeResponse);
-      if (probeToolUses.length === 0) {
+      if (completionDecision.decision === 'complete' || completionDecision.decision === 'await_user') {
         await onDiagnostic('completion_probe_confirmed_final', {
           round: round + 1,
           probe_attempt: probeAttempt,
           probe_limit: completionProbeLimit,
+          decision: completionDecision.decision,
           probe_stop_reason: probeResponse?.stop_reason ?? null,
           ...candidateTelemetry(candidateFinal),
         });
@@ -1272,14 +1344,13 @@ export async function runManagedLoop(initialRequest, {
         round: round + 1,
         probe_attempt: probeAttempt,
         probe_limit: completionProbeLimit,
-        tool_use_count: probeToolUses.length,
-        tool_names: probeToolUses.map((block) => String(block?.name || '')),
+        decision: completionDecision.decision,
+        remaining_work_bytes: Buffer.byteLength(completionDecision.remainingWork),
         ...candidateTelemetry(candidateFinal),
       });
-      request.messages = structuredClone(probeRequest.messages);
+      request.messages = buildCompletionContinuationRequest(request, candidateFinal).messages;
       candidateFinal = null;
-      response = probeResponse;
-      toolUses = probeToolUses;
+      continue;
     } else if (toolUses.length === 0) {
       return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
     }

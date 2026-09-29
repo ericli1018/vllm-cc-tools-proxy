@@ -1,11 +1,28 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.51 hardens the existing stream-loop detector against false positives during code/web generation by requiring two-stage sustained repetition before aborting and by applying tool-aware profiles. Bash stays relatively sensitive, while Write/Edit/NotebookEdit use conservative thresholds so repeated HTML/CSS/JS/template structures can complete normally. V0.29.50 End-Turn Completion Probe and the existing recovery architecture remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.52 changes the End-Turn Completion Probe from an execution-capable follow-up into a decision-only hidden classifier. The probe sees the full managed context plus candidate final, but it receives only a forced `SubmitCompletionDecision` tool and cannot access Bash/Read/Edit/WebSearch or other execution tools. `complete` and `await_user` release the original candidate; only `continue` creates a hidden normal-Main continuation with the original Claude Code tools. V0.29.51 sustained loop detection remains unchanged.
 
 
 
 
 
+
+
+## V0.29.52 Decision-Only End-Turn Completion Probe
+
+The End-Turn Completion Probe no longer performs work. When a managed Main response ends with `stop_reason=end_turn` and zero tool calls, the Proxy still preserves that response as request-local `candidate_final`, but the hidden probe request replaces the original Claude Code tool set with exactly one forced internal tool: `SubmitCompletionDecision`.
+
+The decision contract is:
+
+- `complete`: the user's explicit request has already been answered or fulfilled. The probe response is discarded and the original candidate is released to the existing language-repair/final-delivery path.
+- `await_user`: progress now requires clarification, approval, a choice, credentials, missing input, or another external response. This is also a valid stopping point, so the original candidate is released unchanged.
+- `continue`: an explicitly requested deliverable or operation remains unfinished and can be completed without additional user input. The candidate remains hidden, and a new normal Main round is created with the original Claude Code tools restored. The decision tool itself is never executed as a client/server tool.
+
+The probe prompt explicitly distinguishes **required work** from optional improvements: things that *could* be done, suggested next steps, or work the user did not explicitly request do not justify continuation. The probe cannot see Bash, Read, Edit, Write, WebSearch, Agent, or other execution tools, so it cannot accidentally turn a simple question into autonomous work.
+
+`candidate_final`, probe counters, and hidden continuation messages remain request-local. The existing per-candidate maximum of 999 probes, diagnostics (`completion_probe_started`, `completion_probe_confirmed_final`, `completion_probe_continuation`, `completion_probe_failed`), final-language repair ordering, and managed task/round bounds remain in place. Probe output itself is never exposed to Claude Code.
+
+V0.29.51 sustained loop confirmation, Directed Vision, PDF/Native Vision, Web/ToolSearch, Compact, startup CARD, runtime clock, and existing recovery paths are unchanged.
 
 
 ## V0.29.51 Sustained Loop Confirmation + Tool-Aware Profiles

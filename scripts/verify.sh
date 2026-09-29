@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.51'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.51'
+test "$(node -p "require('./package.json').version")" = '0.29.52'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.52'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.51'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.52'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1297,3 +1297,16 @@ grep -Fq 'confirmGrowthBytes' src/proxy/anthropic-sse-collector.js
 grep -Fq 'generated_content' src/proxy/anthropic-sse-collector.js
 grep -Fq 'GENERATED_CONTENT_TOOLS' src/proxy/anthropic-sse-collector.js
 node --test --test-name-pattern='V0.29.51' test/anthropic-sse-collector.test.js test/deployment.test.js
+
+# V0.29.52 decision-only End-Turn Completion Probe contract
+test -f change_log/V0.29.52-更新說明.md
+test -f change_log/V0.29.52-實作與驗證報告.md
+grep -Fq 'V0.29.52 Decision-Only End-Turn Completion Probe' README.md
+grep -Fq "COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision'" src/proxy/managed-loop.js
+grep -Fq 'Could do does not mean must do' src/proxy/managed-loop.js
+grep -Fq 'probe.tools = [completionDecisionToolDefinition()]' src/proxy/managed-loop.js
+grep -Fq "probe.tool_choice = { type: 'tool', name: COMPLETION_DECISION_TOOL_NAME, disable_parallel_tool_use: true }" src/proxy/managed-loop.js
+grep -Fq 'buildCompletionContinuationRequest' src/proxy/managed-loop.js
+node --test test/v02952-completion-decision-probe.test.js
+node --test --test-name-pattern='V0.29.52 completion probe is decision-only' test/deployment.test.js
+node --test --test-name-pattern='V0.29.50 completion probe' test/managed-loop.test.js test/proxy-server.test.js

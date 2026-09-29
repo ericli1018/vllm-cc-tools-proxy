@@ -918,3 +918,20 @@ test('V0.29.51 uses sustained loop confirmation and conservative generated-conte
   assert.ok(changeLogEntries.includes('V0.29.51-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.51-實作與驗證報告.md'));
 });
+
+test('V0.29.52 completion probe is decision-only and separates classification from execution', async () => {
+  const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(managedLoopSource, /COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision'/);
+  assert.match(managedLoopSource, /decision.*complete.*await_user.*continue/s);
+  assert.match(managedLoopSource, /Could do does not mean must do/);
+  assert.match(managedLoopSource, /probe\.tools = \[completionDecisionToolDefinition\(\)\]/);
+  assert.match(managedLoopSource, /probe\.tool_choice = \{ type: 'tool', name: COMPLETION_DECISION_TOOL_NAME, disable_parallel_tool_use: true \}/);
+  assert.match(managedLoopSource, /buildCompletionContinuationRequest/);
+  assert.match(managedLoopSource, /Continue only the unfinished work required by the original request/);
+  assert.match(managedLoopSource, /decision: completionDecision\.decision/);
+  assert.match(readme, /V0\.29\.52 Decision-Only End-Turn Completion Probe/);
+  assert.ok(changeLogEntries.includes('V0.29.52-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.52-實作與驗證報告.md'));
+});
