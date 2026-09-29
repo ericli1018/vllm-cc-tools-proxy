@@ -1041,6 +1041,8 @@ export function createProxyServer(config, dependencies = {}) {
     );
 
     const applyFinalPresentationLanguage = async (response, sourceRequest) => {
+      if (!config.langProcessor?.enabled) return response;
+
       let externalLanguageRepairFailed = false;
       const onLanguageEvent = async (event, fields = {}) => {
         const level = event.endsWith('_failed') ? 'warn' : 'info';

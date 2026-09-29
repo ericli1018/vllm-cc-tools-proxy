@@ -1,12 +1,17 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.52 changes the End-Turn Completion Probe from an execution-capable follow-up into a decision-only hidden classifier. The probe sees the full managed context plus candidate final, but it receives only a forced `SubmitCompletionDecision` tool and cannot access Bash/Read/Edit/WebSearch or other execution tools. `complete` and `await_user` release the original candidate; only `continue` creates a hidden normal-Main continuation with the original Claude Code tools. V0.29.51 sustained loop detection remains unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.53 makes `LANG_PROCESSOR_ENABLED` authoritative for the entire final-language repair pipeline: `false` now returns the model's final answer unchanged without External or Base language-repair calls, while `true` keeps the existing External Processor path and Base fallback if that enabled processor fails. V0.29.52 decision-only Completion Probe and V0.29.51 sustained loop detection remain unchanged.
 
 
 
+## V0.29.53 Authoritative LANG_PROCESSOR_ENABLED
 
+`LANG_PROCESSOR_ENABLED` now controls the entire Final Language Repair pipeline rather than only the dedicated external backend.
 
+- `LANG_PROCESSOR_ENABLED=false`: the final response is delivered unchanged after the normal managed/completion flow. The Proxy does **not** run Final Language Gate classification, does not call the external Language Processor, and does not issue isolated Base-model language-repair requests.
+- `LANG_PROCESSOR_ENABLED=true`: Final Language Gate remains active. A non-compliant final answer is sent to the configured external Language Processor; if that enabled processor fails, the existing isolated Base repair remains the bounded fallback before the original response is used.
 
+This change removes the previous surprising behavior where `LANG_PROCESSOR_ENABLED=false` could still generate one or more additional Base-model calls for language repair. It does not change `MODEL_RESPONSE_LANGUAGE`, progress/status localization, Completion Probe, loop detection, Directed Vision, Web/ToolSearch, or Compact behavior.
 
 ## V0.29.52 Decision-Only End-Turn Completion Probe
 
@@ -1170,7 +1175,7 @@ LANG_PROCESSOR_API_KEY=ollama
 LANG_PROCESSOR_THINK=false
 ```
 
-`LANG_PROCESSOR_ENABLED=true` enables the dedicated external repair backend. If it is disabled or its repair fails, the existing isolated Base repair remains the fallback before the original successful response is used. Ollama uses its native `/api/chat` contract with `think=true|false`; vLLM uses `/v1/chat/completions` with `chat_template_kwargs.enable_thinking=true|false`. `WEB_FETCH_PROCESSOR_*`, `CONTEXT_COMPACT_*`, and `VLLM_VISION_*` remain independent resource/configuration domains.
+As of V0.29.53, `LANG_PROCESSOR_ENABLED=false` disables the entire Final Language Repair pipeline, including isolated Base-model repair. `LANG_PROCESSOR_ENABLED=true` enables the Final Language Gate and dedicated external repair backend; if that enabled external repair fails, the existing isolated Base repair remains the fallback before the original successful response is used. Ollama uses its native `/api/chat` contract with `think=true|false`; vLLM uses `/v1/chat/completions` with `chat_template_kwargs.enable_thinking=true|false`. `WEB_FETCH_PROCESSOR_*`, `CONTEXT_COMPACT_*`, and `VLLM_VISION_*` remain independent resource/configuration domains.
 
 The first real streaming `/v1/messages` request for each Claude Code session also receives a Proxy-owned transient runtime banner such as:
 

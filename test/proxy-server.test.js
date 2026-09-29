@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.52', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.53', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -2308,8 +2308,14 @@ test('V0.2.28.6 final language gate uses direct external translation for a manag
   assert.doesNotMatch(JSON.stringify(baseBodies[0]), /若使用者未明確要求其他語言|在 think 思考區塊之外/);
 });
 
-test('V0.2.28.6 missing external processor falls back to isolated direct Base language repair', async (t) => {
+test('V0.29.53 enabled external processor failure falls back to isolated direct Base language repair', async (t) => {
   const bodies = [];
+  let processorCalls = 0;
+  const processor = await startJsonServer(async (_req, res) => {
+    processorCalls += 1;
+    res.writeHead(500, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error: 'processor unavailable' }));
+  });
   const base = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
     bodies.push(payload);
@@ -2324,8 +2330,10 @@ test('V0.2.28.6 missing external processor falls back to isolated direct Base la
     vllmBaseUrl: base.url,
     responseLanguage: 'zh-TW',
     webFetchProcessor: { enabled:true, provider:'ollama', url:'http://127.0.0.1:1/v1/chat/completions', model:'', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    langProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/api/chat`, model:'lang-model', apiKey:'', think:false, timeoutMs:5000 },
   }));
   const proxyUrl = await listen(proxy);
+  t.after(() => processor.server.close());
   t.after(() => base.server.close()); t.after(() => proxy.close());
 
   const response = await fetch(`${proxyUrl}/v1/messages`, {
@@ -2334,6 +2342,7 @@ test('V0.2.28.6 missing external processor falls back to isolated direct Base la
   });
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, '答案已完成並準備就緒。');
+  assert.equal(processorCalls, 1);
   assert.equal(bodies.length, 2);
   assert.equal(bodies[1].messages.length, 1);
   assert.equal(bodies[1].tools, undefined);
@@ -2370,8 +2379,14 @@ test('V0.2.26.4 compliant Traditional Chinese final answer bypasses both repair 
   assert.equal(processorCalls, 0);
 });
 
-test('V0.2.28.6 non-managed streaming final answer uses direct Base repair before Anthropic SSE emission', async (t) => {
+test('V0.29.53 enabled external processor failure uses direct Base repair before non-managed Anthropic SSE emission', async (t) => {
   let baseCalls = 0;
+  let processorCalls = 0;
+  const processor = await startJsonServer(async (_req, res) => {
+    processorCalls += 1;
+    res.writeHead(500, { 'content-type':'application/json' });
+    res.end(JSON.stringify({ error: 'processor unavailable' }));
+  });
   const base = await startJsonServer(async (req, res) => {
     const payload = JSON.parse((await read(req)).toString());
     baseCalls += 1;
@@ -2389,14 +2404,17 @@ test('V0.2.28.6 non-managed streaming final answer uses direct Base repair befor
   const proxy = createProxyServer(config({
     vllmBaseUrl: base.url, responseLanguage:'zh-TW',
     webFetchProcessor: { enabled:false, provider:'ollama', url:'', model:'', apiKey:'', think:false, timeoutMs:5000, concurrency:1 },
+    langProcessor: { enabled:true, provider:'ollama', url:`${processor.url}/api/chat`, model:'lang-model', apiKey:'', think:false, timeoutMs:5000 },
   }));
   const proxyUrl = await listen(proxy);
+  t.after(() => processor.server.close());
   t.after(() => base.server.close()); t.after(() => proxy.close());
   const response = await fetch(`${proxyUrl}/v1/messages`, {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({model:'m',stream:true,messages:[{role:'user',content:'請回答'}]})});
   assert.equal(response.status, 200);
   const sse = await response.text();
   assert.match(sse, /直接回答已準備完成/);
   assert.doesNotMatch(sse, /The direct answer is ready/);
+  assert.equal(processorCalls, 1);
   assert.equal(baseCalls, 2);
 });
 
@@ -3168,7 +3186,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.52/);
+  assert.match(first, /VERSION\s+0\.29\.53/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3270,10 +3288,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.52');
+  assert.equal(payload.version, '0.29.53');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.52/);
+  assert.match(payload.display, /CCTP 0\.29\.53/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4653,6 +4671,49 @@ test('V0.29.47 multiple fresh images are defensively perceived one image at a ti
   assert.equal(response.status, 200);
   assert.equal((await response.json()).content[0].text, 'MULTI_OK');
   assert.deepEqual(sequence, ['planning-1','vision-1','planning-2','vision-2','final']);
+});
+
+test('V0.29.53 LANG_PROCESSOR_ENABLED=false disables all final language repair including Base fallback', async (t) => {
+  const baseBodies = [];
+  const logs = [];
+  const base = await startJsonServer(async (req, res) => {
+    const payload = JSON.parse((await read(req)).toString());
+    baseBodies.push(payload);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    if (baseBodies.length === 1) {
+      res.end(JSON.stringify({
+        id: 'plain-answer', type: 'message', role: 'assistant', model: 'm',
+        content: [{ type: 'text', text: 'This answer should be returned unchanged.' }],
+        stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 8 },
+      }));
+      return;
+    }
+    res.end(JSON.stringify({
+      id: 'unexpected-language-repair', type: 'message', role: 'assistant', model: 'm',
+      content: [{ type: 'text', text: '不應呼叫 Base language repair。' }],
+      stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 8 },
+    }));
+  });
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: base.url,
+    responseLanguage: 'zh-TW',
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    langProcessor: { enabled: false, provider: 'vllm', url: '', model: '', apiKey: '', think: false, timeoutMs: 300000 },
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => base.server.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'm', stream: false, messages: [{ role: 'user', content: 'Answer this question.' }] }),
+  });
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.content.find((block) => block?.type === 'text')?.text, 'This answer should be returned unchanged.');
+  assert.equal(baseBodies.length, 1, 'disabled language processor must not fall back to Base repair');
+  assert.equal(logs.some((entry) => entry.event === 'final_language_repair_started'), false);
 });
 
 test('V0.29.50 managed completion probe runs before final language repair and probe text is never exposed', async (t) => {

@@ -935,3 +935,17 @@ test('V0.29.52 completion probe is decision-only and separates classification fr
   assert.ok(changeLogEntries.includes('V0.29.52-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.52-實作與驗證報告.md'));
 });
+
+
+test('V0.29.53 LANG_PROCESSOR_ENABLED=false disables the entire final language repair pipeline', async () => {
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const envExample = await fs.readFile(new URL('../.env.example', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(serverSource, /if \(!config\.langProcessor\?\.enabled\) return response;/);
+  assert.match(readme, /V0\.29\.53 Authoritative LANG_PROCESSOR_ENABLED/);
+  assert.match(readme, /LANG_PROCESSOR_ENABLED=false.*disables the entire Final Language Repair pipeline/s);
+  assert.match(envExample, /false disables both external and Base-model language repair/);
+  assert.ok(changeLogEntries.includes('V0.29.53-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.53-實作與驗證報告.md'));
+});
