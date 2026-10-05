@@ -1543,7 +1543,7 @@ test('V0.29.50 completion probe confirms candidate final without exposing probe 
       assert.deepEqual(request.tools.map((tool) => tool.name), ['SubmitCompletionDecision']);
       assert.equal(request.tool_choice?.name, 'SubmitCompletionDecision');
       assert.match(JSON.stringify(request.messages[2].content), /Do not perform any work/);
-      assert.match(JSON.stringify(request.messages[2].content), /Could do does not mean must do/);
+      assert.match(JSON.stringify(request.messages[2].content), /Could do more is not unfinished work/);
       return response([{ type: 'tool_use', id: 'decision-complete', name: 'SubmitCompletionDecision', input: { decision: 'complete' } }], 'tool_use');
     },
     executeTool: async () => assert.fail('confirmed final probe must not execute tools'),
@@ -1632,9 +1632,11 @@ test('V0.29.50 completion probe failure is logged and propagated without returni
   assert.equal(diagnostics.some((entry) => entry.event === 'completion_probe_confirmed_final'), false);
 });
 
-test('V0.29.50 completion probe count is bounded per repeated candidate final', async () => {
+test('V0.29.50 completion probe count remains bounded per repeated candidate after real tool progress', async () => {
   let calls = 0;
+  let toolRound = 0;
   const diagnostics = [];
+  const candidate = response([{ type: 'text', text: 'Same candidate final.' }], 'end_turn');
   await assert.rejects(runManagedLoop({
     model: 'm',
     tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
@@ -1642,17 +1644,27 @@ test('V0.29.50 completion probe count is bounded per repeated candidate final', 
   }, {
     upstream: async () => {
       calls += 1;
-      if (calls % 2 === 1) return response([{ type: 'text', text: 'Same candidate final.' }], 'end_turn');
-      return response([{ type: 'tool_use', id: `decision-${calls}`, name: 'SubmitCompletionDecision', input: { decision: 'continue', remaining_work: 'The explicitly requested work is still unfinished.' } }], 'tool_use');
+      if ([1, 4, 7].includes(calls)) return structuredClone(candidate);
+      if ([2, 5].includes(calls)) {
+        return response([{ type: 'tool_use', id: `decision-${calls}`, name: 'SubmitCompletionDecision', input: {
+          decision: 'continue', remaining_work: 'The explicitly requested work is still unfinished.'
+        } }], 'tool_use');
+      }
+      if ([3, 6].includes(calls)) {
+        toolRound += 1;
+        return response([{ type: 'tool_use', id: `search-${toolRound}`, name: 'WebSearch', input: { query: `evidence-${toolRound}` } }], 'tool_use');
+      }
+      assert.fail('unexpected extra upstream call');
     },
-    executeTool: async () => assert.fail('decision probe must not execute tools'),
+    executeTool: async () => ({ results: [{ title: 'Evidence' }] }),
     maxRounds: 10,
     completionProbeEnabled: true,
     maxCompletionProbesPerCandidate: 2,
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
   }), (error) => error.code === 'completion_probe_limit');
 
-  assert.ok(calls >= 5);
+  assert.equal(calls, 7);
+  assert.equal(toolRound, 2);
   assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_started').length, 2);
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed'
     && entry.details.code === 'completion_probe_limit'));

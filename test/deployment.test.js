@@ -925,7 +925,8 @@ test('V0.29.52 completion probe is decision-only and separates classification fr
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
   assert.match(managedLoopSource, /COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision'/);
   assert.match(managedLoopSource, /decision.*complete.*await_user.*continue/s);
-  assert.match(managedLoopSource, /Could do does not mean must do/);
+  assert.match(managedLoopSource, /Default to COMPLETE/);
+  assert.match(managedLoopSource, /Could do more is not unfinished work/);
   assert.match(managedLoopSource, /probe\.tools = \[completionDecisionToolDefinition\(\)\]/);
   assert.match(managedLoopSource, /probe\.tool_choice = \{ type: 'tool', name: COMPLETION_DECISION_TOOL_NAME, disable_parallel_tool_use: true \}/);
   assert.match(managedLoopSource, /buildCompletionContinuationRequest/);
@@ -948,4 +949,21 @@ test('V0.29.53 LANG_PROCESSOR_ENABLED=false disables the entire final language r
   assert.match(envExample, /false disables both external and Base-model language repair/);
   assert.ok(changeLogEntries.includes('V0.29.53-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.53-實作與驗證報告.md'));
+});
+
+test('V0.29.54 completion probe is conservative one-shot and round-budget safe', async () => {
+  const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(managedLoopSource, /Default to COMPLETE/);
+  assert.match(managedLoopSource, /clearly a transitional response/);
+  assert.match(managedLoopSource, /Could do more is not unfinished work/);
+  assert.match(managedLoopSource, /completionContinuationPending/);
+  assert.match(managedLoopSource, /completion_probe_continuation_declined/);
+  assert.match(managedLoopSource, /main_end_turn_without_tool/);
+  assert.match(managedLoopSource, /completion_probe_continuation_suppressed/);
+  assert.match(managedLoopSource, /reason: 'round_budget'/);
+  assert.match(readme, /V0\.29\.54 Conservative One-Shot Completion Probe/);
+  assert.ok(changeLogEntries.includes('V0.29.54-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.54-實作與驗證報告.md'));
 });

@@ -37,12 +37,13 @@ const DEFAULT_MAX_STALL_RECOVERY_ROUNDS = 2;
 const DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999;
 const COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision';
 const COMPLETION_PROBE_PROMPT = `[VCC_COMPLETION_DECISION_PROBE_V1]
-Do not perform any work. Determine only whether the latest assistant response is a valid stopping point for the user's explicit request.
+Do not perform any work. Determine only whether the latest assistant response is a valid stopping point.
 You MUST call SubmitCompletionDecision exactly once. The tool call is the only accepted result.
-Choose decision=complete when the user's explicit request has been answered or fulfilled.
+Default to COMPLETE.
+Choose decision=complete for a substantive answer, explanation, recommendation, analysis, summary, or other response that reasonably answers the user's request.
 Choose decision=await_user when further progress requires user clarification, approval, choice, credentials, missing input, or another external response.
-Choose decision=continue only when an explicitly requested deliverable or operation remains unfinished and can be completed now without additional user input.
-Optional improvements, suggested next steps, things that could be done, or work not explicitly requested do not count as unfinished work. Could do does not mean must do.
+Choose decision=continue ONLY when the latest assistant response is clearly a transitional response that explicitly commits to performing a concrete operation required by the user's request, but stopped before performing that operation, and that operation can be completed now without additional user input.
+Do not choose CONTINUE merely because the response could be improved, expanded, verified further, researched further, or followed by optional work. Optional improvements, suggested next steps, and work not explicitly requested do not count as unfinished work. Could do more is not unfinished work.
 Do not call, simulate, or describe any other tool.`;
 const COMPLETION_CONTINUATION_PROMPT = `[VCC_COMPLETION_CONTINUATION_V1]
 The hidden completion decision determined that the user's explicit request is not yet fully satisfied. Continue only the unfinished work required by the original request. Do not restate the plan, repeat completed work, or perform optional improvements that were not explicitly requested. Use the normal tools only if they are actually needed. Do not mention this hidden completion check.`;
@@ -979,6 +980,7 @@ export async function runManagedLoop(initialRequest, {
   const serverUsageCounts = { WebSearch: 0, WebFetch: 0 };
   const liveServerEvents = typeof onServerToolEvent === 'function';
   let candidateFinal = null;
+  let completionContinuationPending = false;
   const completionProbeAttempts = new Map();
   const completionProbeLimit = Math.min(
     DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE,
@@ -1277,6 +1279,18 @@ export async function runManagedLoop(initialRequest, {
     let toolUses = Array.isArray(response?.content)
       ? response.content.filter((block) => block?.type === 'tool_use')
       : [];
+    if (completionContinuationPending) {
+      if (response?.stop_reason === 'end_turn' && toolUses.length === 0) {
+        completionContinuationPending = false;
+        await onDiagnostic('completion_probe_continuation_declined', {
+          round: round + 1,
+          reason: 'main_end_turn_without_tool',
+          ...candidateTelemetry(response),
+        });
+        return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+      }
+      if (toolUses.length > 0) completionContinuationPending = false;
+    }
     if (completionProbeEnabled && response?.stop_reason === 'end_turn' && toolUses.length === 0) {
       candidateFinal = structuredClone(response);
       const candidateKey = completionCandidateKey(candidateFinal);
@@ -1348,8 +1362,22 @@ export async function runManagedLoop(initialRequest, {
         remaining_work_bytes: Buffer.byteLength(completionDecision.remainingWork),
         ...candidateTelemetry(candidateFinal),
       });
+      if (round + 1 >= maxRounds) {
+        await onDiagnostic('completion_probe_continuation_suppressed', {
+          round: round + 1,
+          reason: 'round_budget',
+          probe_attempt: probeAttempt,
+          probe_limit: completionProbeLimit,
+          remaining_work_bytes: Buffer.byteLength(completionDecision.remainingWork),
+          ...candidateTelemetry(candidateFinal),
+        });
+        const budgetFinal = candidateFinal;
+        candidateFinal = null;
+        return withExternalServerPrefix(budgetFinal, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
+      }
       request.messages = buildCompletionContinuationRequest(request, candidateFinal).messages;
       candidateFinal = null;
+      completionContinuationPending = true;
       continue;
     } else if (toolUses.length === 0) {
       return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);

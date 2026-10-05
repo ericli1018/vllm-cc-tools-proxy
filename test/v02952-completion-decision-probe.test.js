@@ -39,7 +39,7 @@ test('V0.29.52 completion probe is decision-only and cannot access execution too
       assert.equal(request.messages.at(-2).role, 'assistant');
       assert.deepEqual(request.messages.at(-2).content, candidate.content);
       assert.match(JSON.stringify(request.messages.at(-1).content), /Do not perform any work/);
-      assert.match(JSON.stringify(request.messages.at(-1).content), /Could do does not mean must do/);
+      assert.match(JSON.stringify(request.messages.at(-1).content), /Could do more is not unfinished work/);
       return decisionTool('complete');
     },
     executeTool: async () => assert.fail('decision probe must never execute a tool'),
@@ -102,15 +102,14 @@ test('V0.29.52 continue decision starts a normal hidden Main continuation with o
         assert.doesNotMatch(serialized, /Implement the requested fix and run the tests/);
         return structuredClone(finalB);
       }
-      if (requests.length === 4) return decisionTool('complete');
-      assert.fail('unexpected extra upstream call');
+      assert.fail('one-shot continuation must accept the next no-tool end_turn without another probe');
     },
     executeTool: async () => assert.fail('this fixture does not require executing client tools'),
     completionProbeEnabled: true,
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
   });
 
-  assert.equal(requests.length, 4);
+  assert.equal(requests.length, 3);
   assert.deepEqual(result.content, finalB.content);
   assert.doesNotMatch(JSON.stringify(result), /I found the issue and will modify the file next/);
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_continuation' && entry.details.decision === 'continue'));

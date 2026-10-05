@@ -1,8 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.53 makes `LANG_PROCESSOR_ENABLED` authoritative for the entire final-language repair pipeline: `false` now returns the model's final answer unchanged without External or Base language-repair calls, while `true` keeps the existing External Processor path and Base fallback if that enabled processor fails. V0.29.52 decision-only Completion Probe and V0.29.51 sustained loop detection remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.54 makes the decision-only End-Turn Completion Probe conservative and one-shot: the probe defaults to completion, only continues an explicit unfinished execution commitment, accepts the next no-tool `end_turn` without probing again, and suppresses continuation when no managed-round budget remains. V0.29.53 authoritative `LANG_PROCESSOR_ENABLED` and V0.29.51 sustained loop detection remain unchanged.
 
 
+## V0.29.54 Conservative One-Shot Completion Probe
+
+The decision-only End-Turn Completion Probe is now a narrow safety net for one specific failure mode: a Main response that explicitly commits to performing a concrete operation required by the user, but ends before performing it. It is no longer a general "is there anything else to do?" completeness reviewer.
+
+The hidden decision prompt now **defaults to `complete`**. A substantive answer, explanation, recommendation, analysis, summary, or other response that reasonably answers the user's request is a valid stopping point. `continue` is allowed only when the latest assistant response is clearly transitional, explicitly promises a concrete required operation, and stops before that operation is performed. Optional improvements, extra verification, more research, or follow-up work do not justify continuation: **could do more is not unfinished work**.
+
+Continuation is also one-shot at the Proxy layer:
+
+- `continue` may create exactly one additional normal Main round.
+- If that next Main round produces a real `tool_use`, the one-shot guard is cleared and the existing managed tool flow continues normally. A later final response after real tool progress may be probed again.
+- If that next Main round again returns `stop_reason=end_turn` with zero tool calls, the Proxy accepts it immediately and does **not** launch another completion probe. This is logged as `completion_probe_continuation_declined` with `reason=main_end_turn_without_tool`.
+- If a probe returns `continue` on the last available managed round, the Proxy accepts the current candidate instead of forcing a request-ending `managed_tool_loop_limit`. This is logged as `completion_probe_continuation_suppressed` with `reason=round_budget`.
+
+`SubmitCompletionDecision` remains the probe's only available tool; the probe still cannot execute Bash, Read, Edit, Write, WebSearch, Agent, or any other user-work tool. `candidate_final`, one-shot state, and probe counters remain request-local and are never stored in session memory. The existing 999 per-candidate probe bound remains as a secondary guard for candidates that recur after genuine tool progress.
 
 ## V0.29.53 Authoritative LANG_PROCESSOR_ENABLED
 
