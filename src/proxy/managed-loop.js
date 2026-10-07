@@ -233,8 +233,12 @@ function classifyManagedToolInputFailure(error) {
   const partialBytes = Number(details.partial_json_bytes);
   const outputTokens = Number(details.output_tokens);
   const maxTokens = Number(details.max_tokens);
-  if (!String(details.tool_name || '') || !(partialBytes > 0) || !(maxTokens > 0) || !(outputTokens >= maxTokens)) return null;
-  return 'max_tokens_truncation';
+  const toolName = String(details.tool_name || '');
+  const stopReason = String(details.stop_reason || '');
+  if (!toolName || !(partialBytes > 0) || !(maxTokens > 0) || !Number.isFinite(outputTokens)) return null;
+  if (outputTokens >= maxTokens) return 'max_tokens_truncation';
+  if (stopReason !== 'tool_use') return null;
+  return 'malformed_json';
 }
 
 
@@ -311,14 +315,21 @@ function toolInputRecoverySummary(blocks, checkpoint, reason) {
   const partial = checkpoint?.partial_block || null;
   const cause = reason === 'loop_detected'
     ? 'The previous tool input entered a repetitive generation loop.'
-    : 'The previous tool input reached the output token limit before its JSON arguments completed.';
+    : reason === 'max_tokens_truncation'
+      ? 'The previous tool input reached the output token limit before its JSON arguments completed.'
+      : 'The previous tool input became malformed before its JSON arguments completed.';
+  const partialToolName = String(partial?.name || '');
+  const generatedContentGuidance = reason === 'malformed_json' && ['Write', 'Edit', 'NotebookEdit', 'MultiEdit'].includes(partialToolName)
+    ? 'For generated-content tools, prefer a smaller bounded edit/write when practical instead of another very large single tool payload.'
+    : '';
   return [
     '[PROXY_MANAGED_TOOL_INPUT_RECOVERY]',
     cause,
     'The unfinished tool call was discarded in full and must never be continued from partial JSON.',
     'Continue the same task from the completed checkpoint. Do not repeat preserved completed actions.',
     partial ? `The discarded partial block was ${String(partial.type || 'unknown')}${partial.name ? ` ${partial.name}` : ''}; regenerate that unfinished tool call from its beginning only if it is still needed.` : 'No partial block metadata was available.',
-    'If the tool action is still required, regenerate it with concise arguments and avoid repeated large enumerations or duplicated data.',
+    'If the tool action is still required, regenerate it from the beginning with concise valid arguments and avoid repeated large enumerations or duplicated data.',
+    generatedContentGuidance,
     lines.length ? 'Preserved completed blocks:\n' + lines.join('\n') : 'No completed non-thinking blocks were preserved.',
     'Return only the remaining assistant continuation using normal Anthropic content/tool semantics.',
   ].join('\n');
@@ -338,7 +349,9 @@ function exhaustedToolInputRecoveryError(reason, error) {
   return new HttpError(502, 'Base model repeated an invalid tool input after one bounded recovery attempt.', {
     code: reason === 'loop_detected'
       ? 'managed_tool_loop_recovery_exhausted'
-      : 'managed_tool_truncation_recovery_exhausted',
+      : reason === 'max_tokens_truncation'
+        ? 'managed_tool_truncation_recovery_exhausted'
+        : 'managed_tool_malformed_recovery_exhausted',
     retryable: false,
     details: {
       ...(error?.details && typeof error.details === 'object' ? structuredClone(error.details) : {}),

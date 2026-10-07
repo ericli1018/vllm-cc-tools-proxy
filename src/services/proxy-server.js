@@ -2718,7 +2718,7 @@ export function createProxyServer(config, dependencies = {}) {
       if (abortController.signal.aborted && res.destroyed) return;
       const failureLevel = error?.retryable ? 'warn' : 'error';
       const invalidStreamDetails = error?.details && typeof error.details === 'object'
-        && ['vllm_invalid_stream', 'managed_tool_loop_recovery_exhausted', 'managed_tool_truncation_recovery_exhausted'].includes(String(error?.code || ''))
+        && ['vllm_invalid_stream', 'managed_tool_loop_recovery_exhausted', 'managed_tool_truncation_recovery_exhausted', 'managed_tool_malformed_recovery_exhausted'].includes(String(error?.code || ''))
         ? {
             tool_index: Number.isInteger(error.details.index) ? error.details.index : null,
             tool_name: typeof error.details.tool_name === 'string' ? error.details.tool_name : '',

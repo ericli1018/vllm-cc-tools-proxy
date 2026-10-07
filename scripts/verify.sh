@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.54'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.54'
+test "$(node -p "require('./package.json').version")" = '0.29.55'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.55'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.54'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.55'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1334,3 +1334,13 @@ grep -Fq 'completion_probe_continuation_suppressed' src/proxy/managed-loop.js
 grep -Fq "reason: 'round_budget'" src/proxy/managed-loop.js
 node --test test/v02954-completion-probe-one-shot.test.js
 node --test --test-name-pattern='V0.29.54' test/deployment.test.js test/version.test.js
+
+
+# V0.29.55 malformed tool-input bounded recovery contract
+test -f change_log/V0.29.55-更新說明.md
+test -f change_log/V0.29.55-實作與驗證報告.md
+grep -Fq 'V0.29.55 Malformed Tool-Input Bounded Recovery' README.md
+grep -Fq "return 'malformed_json'" src/proxy/managed-loop.js
+grep -Fq 'managed_tool_malformed_recovery_exhausted' src/proxy/managed-loop.js
+grep -Fq 'managed_tool_malformed_recovery_exhausted' src/services/proxy-server.js
+node --test --test-name-pattern='V0.29.55' test/managed-loop.test.js test/proxy-server.test.js test/deployment.test.js test/version.test.js

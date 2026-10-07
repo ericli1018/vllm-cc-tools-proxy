@@ -1,6 +1,25 @@
 # VLLM-CC-TOOLS-PROXY
 
-`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.54 makes the decision-only End-Turn Completion Probe conservative and one-shot: the probe defaults to completion, only continues an explicit unfinished execution commitment, accepts the next no-tool `end_turn` without probing again, and suppresses continuation when no managed-round budget remains. V0.29.53 authoritative `LANG_PROCESSOR_ENABLED` and V0.29.51 sustained loop detection remain unchanged.
+`VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.55 adds bounded recovery for malformed model-generated tool JSON that collapses before `max_tokens`: the unfinished tool call is discarded in full and regenerated once from the semantic checkpoint. Existing loop/truncation recovery, V0.29.54 one-shot Completion Probe, V0.29.53 authoritative `LANG_PROCESSOR_ENABLED`, and V0.29.51 sustained loop detection remain unchanged.
+
+
+## V0.29.55 Malformed Tool-Input Bounded Recovery
+
+Managed execution now recovers one additional class of model-generation failure: a model-generated `tool_use` whose `input_json_delta` becomes malformed **before** reaching the request `max_tokens` ceiling.
+
+The new `malformed_json` classification is intentionally narrow. It requires all of the following: upstream error `vllm_invalid_stream`, a non-empty tool name, non-empty partial JSON, `stop_reason=tool_use`, known `output_tokens` / `max_tokens`, and `output_tokens < max_tokens`. Existing `output_tokens >= max_tokens` failures remain `max_tokens_truncation`, and unrelated invalid streams are not recovered.
+
+Recovery follows the same safety invariant as existing tool-input loop/truncation handling:
+
+- the unfinished tool call is discarded in full;
+- partial JSON is never repaired, closed, sanitized, or executed;
+- already completed semantic checkpoint blocks are preserved;
+- Main may regenerate the required tool call from the beginning exactly once;
+- a second malformed tool-input collapse fails with `managed_tool_malformed_recovery_exhausted`.
+
+For generated-content tools such as `Write`, `Edit`, `NotebookEdit`, and `MultiEdit`, the hidden recovery instruction explicitly prefers a smaller bounded edit/write when practical instead of another very large single payload. This is guidance only; the Proxy never edits the model's arguments itself.
+
+Diagnostics continue to use `managed_tool_input_recovery_started` / `managed_tool_input_recovery_completed`, now with `reason=malformed_json`. Existing `loop_detected` and `max_tokens_truncation` reasons are unchanged.
 
 
 ## V0.29.54 Conservative One-Shot Completion Probe

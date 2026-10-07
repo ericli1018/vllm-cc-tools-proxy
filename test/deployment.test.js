@@ -967,3 +967,19 @@ test('V0.29.54 completion probe is conservative one-shot and round-budget safe',
   assert.ok(changeLogEntries.includes('V0.29.54-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.54-實作與驗證報告.md'));
 });
+
+
+test('V0.29.55 malformed tool JSON uses bounded checkpoint recovery without repairing partial arguments', async () => {
+  const managedLoopSource = await fs.readFile(new URL('../src/proxy/managed-loop.js', import.meta.url), 'utf8');
+  const serverSource = await fs.readFile(new URL('../src/services/proxy-server.js', import.meta.url), 'utf8');
+  const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
+  const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
+  assert.match(managedLoopSource, /return 'malformed_json'/);
+  assert.match(managedLoopSource, /managed_tool_malformed_recovery_exhausted/);
+  assert.match(managedLoopSource, /stopReason !== 'tool_use'/);
+  assert.match(managedLoopSource, /smaller bounded edit\/write/);
+  assert.match(serverSource, /managed_tool_malformed_recovery_exhausted/);
+  assert.match(readme, /V0\.29\.55 Malformed Tool-Input Bounded Recovery/);
+  assert.ok(changeLogEntries.includes('V0.29.55-更新說明.md'));
+  assert.ok(changeLogEntries.includes('V0.29.55-實作與驗證報告.md'));
+});

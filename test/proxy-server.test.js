@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.54', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.55', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3186,7 +3186,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.54/);
+  assert.match(first, /VERSION\s+0\.29\.55/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3288,10 +3288,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.54');
+  assert.equal(payload.version, '0.29.55');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.54/);
+  assert.match(payload.display, /CCTP 0\.29\.55/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4254,6 +4254,73 @@ test('V0.29.39 malformed managed tool JSON logs bounded tail token budget and th
   assert.equal(requestFailed.stop_reason, 'max_tokens');
   assert.equal(requestFailed.output_tokens, 32768);
   assert.equal(requestFailed.max_tokens, 32768);
+});
+
+
+test('V0.29.55 managed SSE recovers once from malformed Write JSON below max_tokens', async (t) => {
+  const logs = [];
+  let calls = 0;
+  const partialJson = `{"file_path":"/tmp/page.html","content":"${'X'.repeat(6000)}<think>format collapse`;
+  const vllm = http.createServer(async (req, res) => {
+    await read(req);
+    calls += 1;
+    res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8' });
+    if (calls === 1) {
+      res.end([
+        'event: message_start\ndata: {"type":"message_start","message":{"id":"m55a","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+        'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"write-55","name":"Write","input":{}}}\n\n',
+        `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: partialJson } })}\n\n`,
+        'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+        'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":16000}}\n\n',
+        'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      ].join(''));
+      return;
+    }
+    res.end([
+      'event: message_start\ndata: {"type":"message_start","message":{"id":"m55b","type":"message","role":"assistant","content":[],"model":"m","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":0}}}\n\n',
+      'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+      'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Recovered without executing the malformed Write."}}\n\n',
+      'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":12}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join(''));
+  });
+  const vllmUrl = await listen(vllm);
+  const proxy = createProxyServer(config({
+    vllmBaseUrl: vllmUrl,
+    logLevel: 'info',
+    logSink: (entry) => logs.push(entry),
+    completionProbeEnabled: false,
+  }));
+  const proxyUrl = await listen(proxy);
+  t.after(() => vllm.close());
+  t.after(() => proxy.close());
+
+  const response = await fetch(`${proxyUrl}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'm', stream: false, max_tokens: 32768,
+      tools: [
+        { name: 'WebSearch', description: 'search', input_schema: { type: 'object' } },
+        { name: 'Write', description: 'write file', input_schema: { type: 'object' } },
+      ],
+      messages: [{ role: 'user', content: 'rewrite the page' }],
+    }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(calls, 2);
+  assert.equal(body.content?.[0]?.text, 'Recovered without executing the malformed Write.');
+
+  const recoveryStarted = logs.find((entry) => entry.event === 'managed_tool_input_recovery_started');
+  assert.ok(recoveryStarted);
+  assert.equal(recoveryStarted.reason, 'malformed_json');
+  assert.equal(recoveryStarted.partial_tool_name, 'Write');
+  assert.equal(recoveryStarted.partial_json_bytes, Buffer.byteLength(partialJson, 'utf8'));
+  assert.equal(recoveryStarted.output_tokens, 16000);
+  assert.equal(recoveryStarted.max_tokens, 32768);
+  assert.ok(logs.some((entry) => entry.event === 'managed_tool_input_recovery_completed'
+    && entry.reason === 'malformed_json'));
 });
 
 test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into the Base-bound request', async (t) => {

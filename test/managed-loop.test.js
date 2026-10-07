@@ -1391,6 +1391,111 @@ test('V0.29.49 recovers once when malformed tool input reaches the request max_t
     && entry.details.reason === 'max_tokens_truncation'));
 });
 
+
+test('V0.29.55 recovers once from malformed tool JSON below max_tokens by discarding the unfinished Write', async () => {
+  let calls = 0;
+  const diagnostics = [];
+  const result = await runManagedLoop({
+    model: 'm', max_tokens: 32768,
+    tools: [{ name: 'Write', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'rewrite the page' }],
+  }, {
+    upstream: async (request, _signal, options = {}) => {
+      calls += 1;
+      if (calls === 1) {
+        await options.onCheckpoint?.({
+          phase: 'tool',
+          completed_blocks: [{ type: 'text', text: 'I identified the file that needs to be rewritten.' }],
+          partial_block: { index: 2, type: 'tool_use', id: 'broken-write', name: 'Write' },
+        });
+        throw new HttpError(502, 'malformed tool input', {
+          code: 'vllm_invalid_stream', retryable: true,
+          details: {
+            tool_name: 'Write', partial_json_bytes: 25761,
+            output_tokens: 16477, max_tokens: 32768, stop_reason: 'tool_use',
+          },
+        });
+      }
+      const recovery = JSON.stringify(request.messages.at(-1));
+      assert.match(recovery, /malformed/i);
+      assert.match(recovery, /discarded.*partial JSON/i);
+      assert.match(recovery, /regenerate.*beginning/i);
+      assert.match(recovery, /smaller bounded (?:edit|write)/i);
+      assert.doesNotMatch(recovery, /broken-write/);
+      return response([{ type: 'tool_use', id: 'clean-write', name: 'Write', input: { file_path: '/tmp/a.html', content: '<main>ok</main>' } }], 'tool_use');
+    },
+    executeTool: async () => ({}),
+    onDiagnostic: (event, details) => diagnostics.push({ event, details }),
+  });
+
+  assert.equal(calls, 2);
+  assert.equal(result.content.find((block) => block.type === 'tool_use')?.id, 'clean-write');
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_tool_input_recovery_started'
+    && entry.details.reason === 'malformed_json'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'managed_tool_input_recovery_completed'
+    && entry.details.reason === 'malformed_json'));
+});
+
+test('V0.29.55 malformed tool-input recovery is bounded to one attempt', async () => {
+  let calls = 0;
+  await assert.rejects(runManagedLoop({
+    model: 'm', max_tokens: 32768,
+    tools: [{ name: 'Write', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'rewrite the page' }],
+  }, {
+    upstream: async (_request, _signal, options = {}) => {
+      calls += 1;
+      await options.onCheckpoint?.({
+        phase: 'tool', completed_blocks: [],
+        partial_block: { index: 0, type: 'tool_use', id: `broken-write-${calls}`, name: 'Write' },
+      });
+      throw new HttpError(502, 'malformed tool input', {
+        code: 'vllm_invalid_stream', retryable: true,
+        details: {
+          tool_name: 'Write', partial_json_bytes: 25000 + calls,
+          output_tokens: 16000, max_tokens: 32768, stop_reason: 'tool_use',
+        },
+      });
+    },
+    executeTool: async () => ({}),
+  }), (error) => {
+    assert.equal(error.code, 'managed_tool_malformed_recovery_exhausted');
+    assert.equal(error.retryable, false);
+    assert.equal(error.details.recovery_reason, 'malformed_json');
+    return true;
+  });
+  assert.equal(calls, 2);
+});
+
+test('V0.29.55 does not recover generic invalid streams that are not malformed tool_use payloads', async () => {
+  let calls = 0;
+  await assert.rejects(runManagedLoop({
+    model: 'm', max_tokens: 32768,
+    tools: [{ name: 'Write', input_schema: { type: 'object' } }],
+    messages: [{ role: 'user', content: 'answer normally' }],
+  }, {
+    upstream: async (_request, _signal, options = {}) => {
+      calls += 1;
+      await options.onCheckpoint?.({
+        phase: 'response', completed_blocks: [],
+        partial_block: { index: 0, type: 'text' },
+      });
+      throw new HttpError(502, 'invalid stream', {
+        code: 'vllm_invalid_stream', retryable: true,
+        details: {
+          tool_name: 'Write', partial_json_bytes: 2048,
+          output_tokens: 1000, max_tokens: 32768, stop_reason: 'end_turn',
+        },
+      });
+    },
+    executeTool: async () => ({}),
+  }), (error) => {
+    assert.equal(error.code, 'vllm_invalid_stream');
+    return true;
+  });
+  assert.equal(calls, 1);
+});
+
 test('V0.29.49 tool-input recovery is bounded to one attempt', async () => {
   let calls = 0;
   await assert.rejects(runManagedLoop({
