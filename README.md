@@ -1,5 +1,9 @@
 # VLLM-CC-TOOLS-PROXY
 
+## v0.29.56 — OpenAI-compatible Base backend (phase 1)
+
+Set `VLLM_BASE_API_PROTOCOL=openai` to use an OpenAI-compatible `/v1/chat/completions` Base endpoint while retaining Claude Code `/v1/messages` frontend. Default `anthropic` preserves the previous Base protocol. **Phase 1 buffering and token-count limitations apply**: see [docs/OPENAI_BASE_BACKEND_v0.29.56.md](docs/OPENAI_BASE_BACKEND_v0.29.56.md).
+
 `VLLM-CC-TOOLS-PROXY` is a transparent Claude Code gateway for local vLLM. V0.29.55 adds bounded recovery for malformed model-generated tool JSON that collapses before `max_tokens`: the unfinished tool call is discarded in full and regenerated once from the semantic checkpoint. Existing loop/truncation recovery, V0.29.54 one-shot Completion Probe, V0.29.53 authoritative `LANG_PROCESSOR_ENABLED`, and V0.29.51 sustained loop detection remain unchanged.
 
 
@@ -2903,3 +2907,22 @@ Each event is a pretty JSON file and `index.jsonl` lists event order. Trace even
 - `client_unmanaged_request`: any non-Messages HTTP route reaching the Proxy, including method/path/query/headers/body, so alternate built-in Web backends are discoverable.
 
 Authorization, API keys, tokens, cookies, passwords and secret-shaped fields are redacted. User/model/tool content is otherwise retained because this build is specifically for protocol diagnosis. Disable the diagnostic flags after one capture.
+## v0.29.62
+
+OpenAI 非串流與跨 Request 邊界測試：詳見 `change_log/V0.29.62-實作與驗證報告.md`。
+
+## v0.29.63
+
+新增單一 Proxy 程序內的 Session-scoped Managed Tool 冪等紀錄（有 Session ID 時啟用）。詳細設計、限制與測試見 `change_log/V0.29.63-實作與驗證報告.md`。
+
+## v0.29.64
+
+增加 OpenAI HTTP 並行 Session (streaming / non-streaming) 測試，以及同 Session 並行 Managed Tool 去重測試。**多 vLLM Model-based Routing 尚未實作**，設計見 `docs/MODEL_ROUTING_PLAN_v0.29.64.md`。
+
+## v0.29.66 多模型後端路由與 Completion Probe
+
+設定說明參見 `docs/MODEL_ROUTING_ENV_v0.29.66.md`。
+
+### v0.29.66
+
+HTTP Request-scoped Model Route 固定及並行隔離測試，詳見 `change_log/V0.29.66-實作與驗證報告.md`。

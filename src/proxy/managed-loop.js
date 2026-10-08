@@ -228,6 +228,7 @@ function recoveryCheckpointSummary(blocks, checkpoint, attempt, maxAttempts) {
 function classifyManagedToolInputFailure(error) {
   if (!(error instanceof HttpError)) return null;
   if (error.code === 'vllm_tool_input_loop_detected') return 'loop_detected';
+  if (error.code === 'vllm_invalid_tool_json') return 'malformed_json';
   if (error.code !== 'vllm_invalid_stream') return null;
   const details = error.details && typeof error.details === 'object' ? error.details : {};
   const partialBytes = Number(details.partial_json_bytes);
@@ -955,6 +956,7 @@ function deferMixedServerTools(response) {
 export async function runManagedLoop(initialRequest, {
   upstream,
   executeTool,
+  sessionToolLedger = null,
   maxRounds = 6,
   onProgress = () => {},
   onDiagnostic = () => {},
@@ -989,6 +991,30 @@ export async function runManagedLoop(initialRequest, {
   const taskStartedAt = Date.now();
   let activeRound = 0;
   let previousManagedActionSignature = null;
+  // Request-scoped, single-flight execution ledger. A model retry must not re-run
+  // a tool_use id, even when duplicate calls occur concurrently within one round.
+  const toolExecutionLedger = sessionToolLedger || new Map();
+  const executeToolOnce = (toolUse, toolSignal) => {
+    const id = typeof toolUse?.id === 'string' ? toolUse.id : '';
+    // Missing IDs cannot be correlated safely: reject instead of executing twice.
+    if (!id) throw new HttpError(422, 'Managed tool call has no stable id.', {
+      code: 'managed_tool_missing_id', retryable: false,
+    });
+    const signature = JSON.stringify({
+      name: normalizeManagedToolName(toolUse.name),
+      input: stableValue(toolUse.input ?? {}),
+    });
+    const previous = toolExecutionLedger.get(id);
+    if (previous) {
+      if (previous.signature !== signature) throw new HttpError(422, 'Managed tool id reused with different arguments.', {
+        code: 'managed_tool_id_conflict', retryable: false,
+      });
+      return previous.promise;
+    }
+    const promise = Promise.resolve().then(() => executeTool(toolUse, toolSignal));
+    toolExecutionLedger.set(id, { signature, promise });
+    return promise;
+  };
   const externalServerPrefix = [];
   const serverUsageCounts = { WebSearch: 0, WebFetch: 0 };
   const liveServerEvents = typeof onServerToolEvent === 'function';
@@ -1215,10 +1241,10 @@ export async function runManagedLoop(initialRequest, {
         if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
         output = taskDeadlineEnabled
           ? await runWithBoundedTime(
-            (boundedSignal) => executeTool(internalToolUse, boundedSignal),
+            (boundedSignal) => executeToolOnce(internalToolUse, boundedSignal),
             { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
           )
-          : await executeTool(internalToolUse, signal);
+          : await executeToolOnce(internalToolUse, signal);
         serverUsageCounts[canonical] += 1;
       } catch (caught) {
         if (caught instanceof HttpError && caught.code === 'managed_task_timeout') throw caught;
@@ -1496,6 +1522,21 @@ export async function runManagedLoop(initialRequest, {
       }
       return withExternalServerPrefix(response, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
     }
+    // Reject ambiguous duplicate IDs before any parallel dispatch.
+    const roundToolIds = new Map();
+    for (const toolUse of toolUses) {
+      const id = typeof toolUse?.id === 'string' ? toolUse.id : '';
+      if (!id) throw new HttpError(422, 'Managed tool call has no stable id.', {
+        code: 'managed_tool_missing_id', retryable: false,
+      });
+      const signature = JSON.stringify({ name: normalizeManagedToolName(toolUse.name), input: stableValue(toolUse.input ?? {}) });
+      if (roundToolIds.has(id) && roundToolIds.get(id) !== signature) {
+        throw new HttpError(422, 'Managed tool id reused with different arguments.', {
+          code: 'managed_tool_id_conflict', retryable: false,
+        });
+      }
+      roundToolIds.set(id, signature);
+    }
     const actionSignature = managedActionSignature(toolUses);
     if (previousManagedActionSignature === actionSignature) {
       await onDiagnostic('managed_no_progress_detected', {
@@ -1532,10 +1573,10 @@ export async function runManagedLoop(initialRequest, {
         if (taskDeadlineEnabled && remaining <= 0) throw managedTimeoutError('managed_task_timeout', taskTimeoutMs, 'tool');
         const output = taskDeadlineEnabled
           ? await runWithBoundedTime(
-            (boundedSignal) => executeTool(toolUse, boundedSignal),
+            (boundedSignal) => executeToolOnce(toolUse, boundedSignal),
             { signal, timeoutMs: Math.max(1, remaining), timeoutCode: 'managed_task_timeout', phase: 'tool' },
           )
-          : await executeTool(toolUse, signal);
+          : await executeToolOnce(toolUse, signal);
         const inventory = inventoryProtocolTags(output);
         if (inventory.total > 0) {
           await onDiagnostic('managed_tool_result_protocol_inventory', {

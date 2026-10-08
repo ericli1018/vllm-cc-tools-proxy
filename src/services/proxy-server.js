@@ -1,5 +1,6 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { HttpError, readBody, sendError, sendJson, writeChunk } from '../lib/http.js';
 import { adaptMessages } from '../proxy/content-blocks.js';
 import { hasProgressHistory, stripProgressHistory, ProgressStream, formatSseEvent } from '../proxy/progress.js';
@@ -17,6 +18,7 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
+import { resolveModelRoute } from '../proxy/model-router.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
@@ -31,6 +33,7 @@ import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { observeImagePayloads } from '../proxy/image-payload-observer.js';
 import { requestBaseUpstream } from './base-upstream.js';
+import { toOpenAIRequest, adaptOpenAIResponse, approximateTokenCount } from './openai-upstream-adapter.js';
 import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
@@ -68,8 +71,10 @@ function currentInteractionStartIndex(messages) {
 function upstreamEndpoint(baseUrl, path) {
   const base = new URL(baseUrl);
   const clean = base.pathname.replace(/\/$/, '');
-  if (clean.endsWith('/v1/messages')) {
-    base.pathname = path === '/v1/messages' ? clean : clean.replace(/\/messages$/, '/messages/count_tokens');
+  if (clean.endsWith('/v1/chat/completions')) {
+    base.pathname = path === '/v1/chat/completions' ? clean : clean.replace(/\/chat\/completions$/, path.replace('/v1', ''));
+  } else if (clean.endsWith('/v1/messages')) {
+    base.pathname = path === '/v1/messages' ? clean : path === '/v1/messages/count_tokens' ? clean.replace(/\/messages$/, '/messages/count_tokens') : clean.replace(/\/messages$/, '/chat/completions');
   } else if (clean.endsWith('/v1')) {
     base.pathname = `${clean}${path.replace('/v1', '')}`;
   } else {
@@ -102,12 +107,21 @@ function bufferedUpstreamResponse(response, text) {
   };
 }
 
+// Each HTTP request pins one backend for its complete asynchronous managed workflow.
+const baseRouteContext = new AsyncLocalStorage();
+
 async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages', {
   onResponseChunk = null,
   onBusyEvent = null,
 } = {}) {
+  const selectedRoute = baseRouteContext.getStore()?.route ?? resolveModelRoute(request?.model, config);
+  const openaiBackend = selectedRoute.protocol === 'openai';
+  if (openaiBackend && path === '/v1/messages/count_tokens') {
+    const body = JSON.stringify(approximateTokenCount(request));
+    return bufferedUpstreamResponse({ status: 200, ok: true, headers: { get: () => 'application/json' } }, body);
+  }
   const retryBusy = path === '/v1/messages';
-  const selectedBaseModel = selectBaseModel(request?.model, config.vllmBaseModel);
+  const selectedBaseModel = selectBaseModel(request?.model, selectedRoute.model);
   const clockEligiblePath = path === '/v1/messages' || path === '/v1/messages/count_tokens';
   const runtimeRequest = clockEligiblePath
     ? injectRuntimeClockReminder(request, {
@@ -115,12 +129,13 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
         timeZone: config.runtimeClockTimezone || 'Asia/Taipei',
       })
     : request;
-  const upstreamRequest = rewriteBaseRequest(runtimeRequest, config.vllmBaseModel);
+  const upstreamRequest = rewriteBaseRequest(runtimeRequest, selectedRoute.model);
   log(config, 'info', 'base_model_selected', {
     client_model: String(request?.model || ''),
     upstream_model: selectedBaseModel.model,
     source: selectedBaseModel.source,
     path,
+    route_alias: selectedRoute.alias,
   });
   const retryIntervalMs = Number.isFinite(Number(config.vllmBusyRetryIntervalMs))
     ? Math.max(1, Number(config.vllmBusyRetryIntervalMs))
@@ -134,10 +149,10 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
     let forwardChunks = false;
     let response;
     try {
-      response = await requestBaseUpstream(upstreamEndpoint(config.vllmBaseUrl, path), {
+      response = await requestBaseUpstream(openaiBackend ? upstreamEndpoint(selectedRoute.url, '/v1/chat/completions') : upstreamEndpoint(selectedRoute.url, path), {
         method: 'POST',
-        headers: upstreamHeaders(incomingHeaders, config),
-        body: JSON.stringify(upstreamRequest),
+        headers: openaiBackend ? { 'content-type': 'application/json', ...(selectedRoute.apiKey ? { authorization: `Bearer ${selectedRoute.apiKey}` } : {}) } : upstreamHeaders(incomingHeaders, { ...config, vllmBaseApiKey: selectedRoute.apiKey }),
+        body: JSON.stringify(openaiBackend ? toOpenAIRequest(upstreamRequest) : upstreamRequest),
         signal,
         onResponseChunk: typeof onResponseChunk === 'function'
           ? (bytes) => { if (forwardChunks) onResponseChunk(bytes); }
@@ -152,6 +167,7 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
 
     if (!retryBusy || ![429, 503].includes(response.status)) {
       forwardChunks = true;
+      if (openaiBackend && response.ok) response = await adaptOpenAIResponse(response, upstreamRequest);
       if (hadBusyRejection && typeof onBusyEvent === 'function') {
         await onBusyEvent('accepted', {
           attempt,
@@ -618,6 +634,29 @@ function defaultConcurrency(config) {
 export function createProxyServer(config, dependencies = {}) {
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
+  // Session-local, process-memory only; bounded to avoid unbounded tool-result retention.
+  const sessionToolLedgers = new Map();
+  const sessionLedgerTtlMs = 30 * 60 * 1000;
+  const sessionLedgerMaxSessions = 128;
+  const sessionLedgerMaxTools = 256;
+  function getSessionToolLedger(sessionId) {
+    if (!sessionId) return null;
+    const now = Date.now();
+    for (const [key, entry] of sessionToolLedgers) {
+      if (entry.expiresAt <= now) sessionToolLedgers.delete(key);
+    }
+    let entry = sessionToolLedgers.get(sessionId);
+    if (!entry) entry = { ledger: new Map() };
+    sessionToolLedgers.delete(sessionId);
+    entry.expiresAt = now + sessionLedgerTtlMs;
+    sessionToolLedgers.set(sessionId, entry);
+    while (sessionToolLedgers.size > sessionLedgerMaxSessions) sessionToolLedgers.delete(sessionToolLedgers.keys().next().value);
+    // Do not evict individual tool IDs: doing so would silently compromise idempotency.
+    if (entry.ledger.size >= sessionLedgerMaxTools) {
+      throw new HttpError(429, 'Session tool ledger capacity reached. Start a new session.', { code: 'managed_session_tool_ledger_full', retryable: false });
+    }
+    return entry.ledger;
+  }
   const mediaCache = dependencies.mediaCache || new MediaCache(config.cache || { rootDir: '', maxBytes: 0 });
   const mediaContinuationCache = dependencies.mediaContinuationCache || new MediaContinuationCache();
   const progressStreamFactory = dependencies.progressStreamFactory || ((response, options) => new ProgressStream(response, options));
@@ -1248,6 +1287,10 @@ export function createProxyServer(config, dependencies = {}) {
         return;
       }
 
+      // Pin the selected backend before preflight, recovery, completion probes, and managed rounds.
+      // AsyncLocalStorage isolates overlapping client HTTP requests without mutating global config.
+      const pinnedBaseRoute = resolveModelRoute(original.model, config);
+      baseRouteContext.enterWith({ route: pinnedBaseRoute });
       clientSessionId = claudeCodeSessionId(req.headers, original);
       if (messagesPath === '/v1/messages') {
         const serverCapabilityInventory = inspectAnthropicServerCapabilities(original);
@@ -2466,6 +2509,7 @@ export function createProxyServer(config, dependencies = {}) {
         : null;
       if (hasManagedLoop) {
         let result = await runManagedLoop(request, {
+          sessionToolLedger: getSessionToolLedger(clientSessionId),
           upstream,
           executeTool: (toolUse, signal) => {
             return executeManagedTool(toolUse, config, signal, {

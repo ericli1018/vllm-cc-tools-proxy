@@ -897,7 +897,7 @@ test('V0.29.50 completion probe is request-local bounded and enabled only on pro
   assert.match(managedLoopSource, /completion_probe_continuation/);
   assert.match(managedLoopSource, /completion_probe_failed/);
   assert.match(managedLoopSource, /completionProbeEnabled = false/);
-  assert.match(configSource, /completionProbeEnabled: true/);
+  assert.match(configSource, /completionProbeEnabled: booleanValue\(env\.COMPLETION_PROBE_ENABLED/);
   assert.match(serverSource, /completionProbeEnabled: config\.completionProbeEnabled === true/);
   assert.match(readme, /V0\.29\.50 End-Turn Completion Probe/);
   assert.ok(changeLogEntries.includes('V0.29.50-更新說明.md'));

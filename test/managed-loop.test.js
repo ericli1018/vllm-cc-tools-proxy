@@ -37,7 +37,7 @@ test('V0.2.20 defers mixed server web tools while preserving Claude Code client 
     { type: 'tool_use', id: 'b', name: 'Read', input: { file_path: '/x' } },
   ], 'tool_use');
   let executeCount = 0;
-  const result = await runManagedLoop({ messages: [] }, {
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => mixed,
     executeTool: async () => { executeCount += 1; },
     maxRounds: 6,
@@ -133,7 +133,7 @@ test('V0.2.20 removes completed server web lifecycle blocks from later Base-mode
 test('runManagedLoop rejects an unbounded managed-tool loop', async () => {
   let sequence = 0;
   await assert.rejects(
-    runManagedLoop({ messages: [] }, {
+    runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
       upstream: async () => response([{ type: 'tool_use', id: `t${sequence}`, name: 'WebSearch', input: { query: `loop-${sequence++}` } }], 'tool_use'),
       executeTool: async () => ({ results: [] }),
       maxRounds: 2,
@@ -184,7 +184,7 @@ test('runManagedLoop returns recoverable WebFetch errors as correlated tool resu
 
 test('runManagedLoop does not hide unexpected programming errors', async () => {
   await assert.rejects(
-    runManagedLoop({ messages: [] }, {
+    runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
       upstream: async () => response([{ type: 'tool_use', id: 'fetch-1', name: 'WebFetch', input: { url: 'https://example.com/a' } }], 'tool_use'),
       executeTool: async () => { throw new TypeError('programming bug'); },
     }),
@@ -256,7 +256,7 @@ test('runManagedLoop repairs a final answer that stayed in thinking with functio
 test('runManagedLoop rejects a final response that remains malformed after one repair', async () => {
   let calls = 0;
   await assert.rejects(
-    runManagedLoop({ messages: [] }, {
+    runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
       upstream: async () => {
         calls += 1;
         return response([{ type: 'thinking', thinking: `bad </function_results> attempt ${calls}` }]);
@@ -271,7 +271,7 @@ test('runManagedLoop rejects a final response that remains malformed after one r
 
 test('runManagedLoop can defer initial visible progress until a real tool call', async () => {
   const finalProgress = [];
-  await runManagedLoop({ messages: [] }, {
+  await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => response([{ type: 'text', text: 'direct final' }]),
     executeTool: async () => ({}),
     showInitialModelProgress: false,
@@ -281,7 +281,7 @@ test('runManagedLoop can defer initial visible progress until a real tool call',
 
   const toolProgress = [];
   let calls = 0;
-  await runManagedLoop({ messages: [] }, {
+  await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       calls += 1;
       return calls === 1
@@ -380,7 +380,7 @@ test('runManagedLoop writes complete protocol diagnostics to a file callback wit
 test('runManagedLoop writes original and failed-repair diagnostics separately and stays quiet when disabled', async () => {
   const disabled = [];
   let disabledCalls = 0;
-  await assert.rejects(runManagedLoop({ messages: [] }, {
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       disabledCalls += 1;
       return response([{ type: 'thinking', thinking: `bad </function_results> ${disabledCalls}` }]);
@@ -393,7 +393,7 @@ test('runManagedLoop writes original and failed-repair diagnostics separately an
   const enabled = [];
   const files = [];
   let enabledCalls = 0;
-  await assert.rejects(runManagedLoop({ messages: [] }, {
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       enabledCalls += 1;
       return response([{ type: 'thinking', thinking: `bad </function_results> ${enabledCalls}` }]);
@@ -419,7 +419,7 @@ test('runManagedLoop writes original and failed-repair diagnostics separately an
 test('runManagedLoop continues repair when protocol diagnostic file writing fails', async () => {
   const diagnostics = [];
   let calls = 0;
-  const result = await runManagedLoop({ messages: [] }, {
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       calls += 1;
       return calls === 1
@@ -779,7 +779,7 @@ test('V0.2.19 continuation recovery carries bounded sanitized prior state with t
 test('V0.2.19 stops an exact repeated managed action as no progress before executing it twice', async () => {
   let calls = 0;
   let executions = 0;
-  await assert.rejects(runManagedLoop({ messages: [] }, {
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       calls += 1;
       return response([{ type: 'tool_use', id: `same-${calls}`, name: 'WebSearch', input: { query: 'same query' } }], 'tool_use');
@@ -792,7 +792,7 @@ test('V0.2.19 stops an exact repeated managed action as no progress before execu
 });
 
 test('V0.2.19 bounds one stalled model round independently of the Base upstream timeout', async () => {
-  await assert.rejects(runManagedLoop({ messages: [] }, {
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async (_request, signal) => new Promise((resolve, reject) => {
       signal.addEventListener('abort', () => reject(signal.reason || new Error('aborted')), { once: true });
     }),
@@ -804,7 +804,7 @@ test('V0.2.19 bounds one stalled model round independently of the Base upstream 
 
 test('V0.2.19 bounds the entire managed task across otherwise progressing rounds', async () => {
   let call = 0;
-  await assert.rejects(runManagedLoop({ messages: [] }, {
+  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => {
       await new Promise((resolve) => setTimeout(resolve, 18));
       call += 1;
@@ -861,7 +861,7 @@ test('V0.2.19.1 executes independent managed tool calls concurrently while prese
 
 
 test('V0.2.19.1 normalizes mixed WebSearch domain arguments before Claude Code handoff', async () => {
-  const result = await runManagedLoop({ messages: [] }, {
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => response([
       {
         type: 'tool_use', id: 'search-mixed', name: 'WebSearch',
@@ -944,7 +944,7 @@ test('diagnostic passthrough returns ordinary WebSearch tool_use unchanged befor
   const modelResponse = response([
     { type: 'tool_use', id: 'web-search-native-ui-1', name: 'WebSearch', input: { query: 'diagnostic native UI' } },
   ], 'tool_use');
-  const result = await runManagedLoop({ messages: [] }, {
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
     upstream: async () => modelResponse,
     executeTool: async () => { executed += 1; return {}; },
     diagnosticPassthroughWebTools: async ({ toolUses }) => ({
@@ -1803,4 +1803,99 @@ test('V0.29.50 completion probe state is request-local and does not leak into a 
   assert.equal(result.content[0].text, 'Second candidate.');
   assert.doesNotMatch(JSON.stringify(laterRequests), /First candidate/);
   assert.match(JSON.stringify(laterRequests[1]), /SubmitCompletionDecision/);
+});
+
+
+test('V0.29.61 duplicate tool ids are single-flight within the same managed round', async () => {
+  let calls = 0;
+  let round = 0;
+  const tool = { type: 'tool_use', id: 'same-id', name: 'WebSearch', input: { query: 'same' } };
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    upstream: async () => ++round === 1
+      ? response([structuredClone(tool), structuredClone(tool)], 'tool_use')
+      : response([{ type: 'text', text: 'done' }]),
+    executeTool: async () => { calls++; return { results: [] }; },
+    maxRounds: 3,
+  });
+  assert.equal(result.content[0].text, 'done');
+  assert.equal(calls, 1);
+});
+
+test('V0.29.61 conflicting reuse of tool id fails closed without second execution', async () => {
+  let calls = 0;
+  const result = runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    upstream: async () => response([
+      { type: 'tool_use', id: 'same-id', name: 'WebSearch', input: { query: 'a' } },
+      { type: 'tool_use', id: 'same-id', name: 'WebSearch', input: { query: 'b' } },
+    ], 'tool_use'),
+    executeTool: async () => { calls++; return { results: [] }; },
+    maxRounds: 2,
+  });
+  await assert.rejects(result, (error) => error?.code === 'managed_tool_id_conflict');
+  assert.equal(calls, 0);
+});
+
+test('V0.29.62 managed ledger is request-scoped, not process-global', async () => {
+  let executions = 0;
+  const oneRequest = () => runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    upstream: (() => { let turn = 0; return async () => ++turn === 1
+      ? response([{ type: 'tool_use', id: 'repeated-cross-request-id', name: 'WebSearch', input: { query: 'same' } }], 'tool_use')
+      : response([{ type: 'text', text: 'done' }]); })(),
+    executeTool: async () => { executions++; return { results: [] }; },
+    maxRounds: 3,
+  });
+  assert.equal((await oneRequest()).content[0].text, 'done');
+  assert.equal((await oneRequest()).content[0].text, 'done');
+  assert.equal(executions, 2);
+});
+
+
+test('V0.29.63 session ledger replays matching result without executing twice', async () => {
+  const sessionToolLedger = new Map();
+  let calls = 0;
+  const run = (id = 'id') => runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    sessionToolLedger,
+    upstream: (() => { let turn = 0; return async () => ++turn === 1
+      ? response([{ type: 'tool_use', id, name: 'WebSearch', input: { query: 'same' } }], 'tool_use')
+      : response([{ type: 'text', text: 'done' }]); })(),
+    executeTool: async () => { calls++; return { results: [{ title: 'cached' }] }; },
+    maxRounds: 3,
+  });
+  assert.equal((await run()).content[0].text, 'done');
+  assert.equal((await run()).content[0].text, 'done');
+  assert.equal(calls, 1);
+});
+
+test('V0.29.63 session ledger rejects conflicting ID across requests', async () => {
+  const sessionToolLedger = new Map();
+  let calls = 0;
+  const run = (query) => runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    sessionToolLedger,
+    upstream: (() => { let turn = 0; return async () => ++turn === 1
+      ? response([{ type: 'tool_use', id: 'fixed', name: 'WebSearch', input: { query } }], 'tool_use')
+      : response([{ type: 'text', text: 'done' }]); })(),
+    executeTool: async () => { calls++; return { results: [] }; },
+    maxRounds: 3,
+  });
+  await run('one');
+  // Managed loop returns the tool error to the model; it must never re-execute.
+  await run('two');
+  assert.equal(calls, 1);
+});
+
+test('V0.29.65 concurrent managed requests share pending execution only inside the same session ledger', async () => {
+  const sessionA = new Map();
+  const sessionB = new Map();
+  let calls = 0;
+  const run = ledger => runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'search' }] }, {
+    sessionToolLedger: ledger,
+    upstream: (() => { let turn = 0; return async () => ++turn === 1
+      ? response([{ type: 'tool_use', id: 'shared-tool-id', name: 'WebSearch', input: { query: 'same' } }], 'tool_use')
+      : response([{ type: 'text', text: 'done' }]); })(),
+    executeTool: async () => { calls++; await new Promise(resolve => setTimeout(resolve, 20)); return { results: [] }; },
+    maxRounds: 3,
+  });
+  const results = await Promise.all([run(sessionA), run(sessionA), run(sessionB)]);
+  assert.equal(calls, 2);
+  assert.ok(results.every(r => r.content[0].text === 'done'));
 });

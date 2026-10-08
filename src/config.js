@@ -1,6 +1,7 @@
 import { resolveResponseLanguage } from './i18n/response-language.js';
 import os from 'node:os';
 import path from 'node:path';
+import { configureModelRoutes } from './proxy/model-router.js';
 
 const MiB = 1024 * 1024;
 
@@ -121,6 +122,7 @@ export function loadConfig(env = process.env) {
 
   const vllmBaseUrl = normalizedUrl(env.VLLM_BASE_URL, '', 'VLLM_BASE_URL', { required: true });
   const vllmBaseApiKey = env.VLLM_BASE_API_KEY || '';
+  const vllmBaseApiProtocol = enumValue(env.VLLM_BASE_API_PROTOCOL, 'anthropic', 'VLLM_BASE_API_PROTOCOL', ['anthropic', 'openai']);
   const vllmBaseModel = String(env.VLLM_BASE_MODEL || '').trim();
   const vllmBaseResponseMode = enumValue(env.VLLM_BASE_RESPONSE_MODE, 'auto', 'VLLM_BASE_RESPONSE_MODE', ['auto', 'streaming', 'buffered']);
   const vllmBaseVisionEnabled = booleanValue(env.VLLM_BASE_VISION_ENABLED, false, 'VLLM_BASE_VISION_ENABLED');
@@ -233,7 +235,9 @@ export function loadConfig(env = process.env) {
     limits,
     concurrency,
     cache,
+    modelRouting: configureModelRoutes(env),
     vllmBaseUrl,
+    vllmBaseApiProtocol,
     vllmBaseModel,
     vllmBaseResponseMode,
     vllmBaseApiKey,
@@ -267,7 +271,7 @@ export function loadConfig(env = process.env) {
     protocolDiagnosticsDir: path.join(os.tmpdir(), 'vllm-cc-tools-proxy', 'protocol-snippets'),
     usagePreflightEnabled: true,
     maxToolRounds: intValue(env.MAX_TOOL_ROUNDS, 6, 'MAX_TOOL_ROUNDS', { min: 1, max: 12 }),
-    completionProbeEnabled: true,
+    completionProbeEnabled: booleanValue(env.COMPLETION_PROBE_ENABLED, true, 'COMPLETION_PROBE_ENABLED'),
     managedTaskTimeoutMs: optionalTimeoutValue(env.MANAGED_TASK_TIMEOUT_MS, 'MANAGED_TASK_TIMEOUT_MS'),
     managedModelRoundTimeoutMs: intValue(env.MANAGED_MODEL_ROUND_TIMEOUT_MS, 360000, 'MANAGED_MODEL_ROUND_TIMEOUT_MS', { min: 60000, max: 3600000 }),
     managedModelStallTimeoutMs: optionalTimeoutValue(env.MANAGED_MODEL_STALL_TIMEOUT_MS === undefined ? '90000' : env.MANAGED_MODEL_STALL_TIMEOUT_MS, 'MANAGED_MODEL_STALL_TIMEOUT_MS', { min: 1000, max: 3600000 }),
