@@ -1,5 +1,27 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.71 MODEL_RESPONSE_TIMEZONE — Progress Clock
+
+`MODEL_RESPONSE_TIMEZONE` independently controls the `HH:mm:ss` at the start of the **existing** compact single-line timeline. It uses Node.js `Intl.DateTimeFormat` with an IANA time zone, so it works when the Docker container itself uses UTC and correctly follows DST changes.
+
+```yaml
+environment:
+  MODEL_RESPONSE_LANGUAGE: zh-TW
+  MODEL_RESPONSE_TIMEZONE: Asia/Taipei
+  # Independent: optional clock reminder injected into Main model prompts.
+  PROXY_RUNTIME_TIMEZONE: Asia/Taipei
+```
+
+Example: an event occurring at `2026-10-25T05:45:20Z` renders `處理中 · 13:45:20 ○ ...` in `Asia/Taipei` instead of `05:45:20`. The model start timestamp is converted; cumulative elapsed seconds remain unchanged.
+
+- `MODEL_RESPONSE_TIMEZONE=` or omitted: **preserve Node process-local time** (backward compatible).
+- Invalid IANA value: **start with a warning** (`model_response_timezone_invalid`) and fall back to process-local time. The Proxy does not change `TZ` globally.
+- Only the Proxy's *visible* timeline clock is affected. ISO UTC diagnostics, elapsed durations, SSE protocol, locale, model routing, `PROXY_RUNTIME_TIMEZONE`, media/PDF work, and Compact routing are not changed.
+- Per-request `ProgressStream` receives the validated value: managed/unmanaged streaming, cache, media, and PDF paths use the same timezone; subagents remain progress-silent and non-streaming requests remain JSON.
+
+See [design and verification notes](docs/MODEL_RESPONSE_TIMEZONE_v0.29.71.md) and [release verification](change_log/V0.29.71-進度顯示時區_實作與驗證報告.md). Real vLLM + Claude Code UI verification remains outstanding; this archive does not update GitHub `main` or a running container.
+
+
 ## V0.29.70 Timeline-Only Visible Progress
 
 The retired `模型處理中 · HH:mm:ss` / `正在請模型規劃下一步…` preamble is no longer emitted. All Proxy-owned progress uses the existing compact, single-line timeline. This fixes native `Read(image)` and `Read(PDF)` page images with managed tools, where the legacy planning callback arrived before the authoritative model-round start.

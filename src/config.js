@@ -54,6 +54,18 @@ function timeZoneValue(value, fallback, name) {
   return candidate;
 }
 
+// An invalid *display* timezone must not prevent the gateway from starting.
+// Empty means: preserve the Node.js process-local clock used before v0.29.71.
+function optionalProgressTimeZone(value) {
+  const candidate = String(value ?? '').trim();
+  if (!candidate) return { timeZone: '', invalid: false };
+  try {
+    return { timeZone: timeZoneValue(candidate, '', 'MODEL_RESPONSE_TIMEZONE'), invalid: false };
+  } catch {
+    return { timeZone: '', invalid: true };
+  }
+}
+
 
 function derivedChatCompletionsUrl(baseValue) {
   const url = new URL(baseValue);
@@ -227,11 +239,14 @@ export function loadConfig(env = process.env) {
     evidenceContractVersion: 'evidence-v14',
   });
 
+  const progressTimeZone = optionalProgressTimeZone(env.MODEL_RESPONSE_TIMEZONE);
   return Object.freeze({
     port: intValue(env.PORT || env.PROXY_PORT, 8080, 'PORT', { min: 1, max: 65535 }),
     host: env.HOST || '0.0.0.0',
     resourceProfile: profileName,
     responseLanguage: resolveResponseLanguage(env.MODEL_RESPONSE_LANGUAGE),
+    modelResponseTimezone: progressTimeZone.timeZone,
+    modelResponseTimezoneInvalid: progressTimeZone.invalid,
     limits,
     concurrency,
     cache,

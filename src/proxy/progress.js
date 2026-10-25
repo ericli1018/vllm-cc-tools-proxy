@@ -111,7 +111,7 @@ function event(name, data) {
 export class ProgressStream {
   constructor(res, {
     model = 'proxy', pingIntervalMs = 5000, visibleAfterMs = 1500, messageId,
-    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, onBeforeFirstVisible = null, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text', visibleProgressEnabled = true,
+    heartbeatIntervalMs = 30000, drainTimeoutMs = 10000, initialUsage = {}, onWrite = () => {}, onStateChange = () => {}, onBeforeFirstVisible = null, locale = 'zh-TW', getReceivedBytes = null, carrier = 'text', visibleProgressEnabled = true, modelResponseTimezone = '',
   } = {}) {
     this.res = res;
     this.model = model;
@@ -127,6 +127,7 @@ export class ProgressStream {
     this.beforeFirstVisibleDone = false;
     this.beforeFirstVisiblePromise = null;
     this.locale = locale;
+    this.modelResponseTimezone = modelResponseTimezone;
     this.getReceivedBytes = typeof getReceivedBytes === 'function' ? getReceivedBytes : null;
     this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
     this.visibleProgressEnabled = visibleProgressEnabled !== false;
@@ -379,7 +380,10 @@ export class ProgressStream {
       const startedAt = Number(details.model_started_at);
       this.modelTimeline.active = true;
       this.modelTimeline.startedAt = Number.isFinite(startedAt) && startedAt > 0 ? startedAt : changedAt;
-      this.timelineHeader = modelTimelineHeader(this.locale, { timestampMs: this.modelTimeline.startedAt });
+      this.timelineHeader = modelTimelineHeader(this.locale, {
+        timestampMs: this.modelTimeline.startedAt,
+        timeZone: this.modelResponseTimezone,
+      });
       this.modelTimeline.phase = 'waiting';
       this.modelTimeline.round = round;
       this.modelTimeline.content = ' ○';

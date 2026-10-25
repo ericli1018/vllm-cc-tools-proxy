@@ -1417,6 +1417,7 @@ export function createProxyServer(config, dependencies = {}) {
             visibleAfterMs: config.progressVisibleAfterMs,
             visibleProgressEnabled: claudeAgentRequestContext?.context !== 'subagent',
             locale: config.responseLanguage,
+            modelResponseTimezone: config.modelResponseTimezone,
             onWrite: observeProgressWrite,
           });
           await progress.open();
@@ -1552,6 +1553,7 @@ export function createProxyServer(config, dependencies = {}) {
               pingIntervalMs: config.progressPingIntervalMs,
               drainTimeoutMs: config.sseDrainTimeoutMs,
               visibleProgressEnabled: false,
+              modelResponseTimezone: config.modelResponseTimezone,
             });
             if (!res.headersSent) await progress.open();
             else {
@@ -1837,6 +1839,7 @@ export function createProxyServer(config, dependencies = {}) {
               ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
               : null,
             locale: config.responseLanguage,
+            modelResponseTimezone: config.modelResponseTimezone,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -2225,6 +2228,7 @@ export function createProxyServer(config, dependencies = {}) {
               ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
               : null,
             locale: config.responseLanguage,
+            modelResponseTimezone: config.modelResponseTimezone,
             getReceivedBytes: getBaseResponseBytes,
             onWrite: observeProgressWrite,
           });
@@ -2299,6 +2303,7 @@ export function createProxyServer(config, dependencies = {}) {
             ? () => maybeShowStartupBanner(progress, { deliveryMode: 'progress_fallback' })
             : null,
           locale: config.responseLanguage,
+          modelResponseTimezone: config.modelResponseTimezone,
           getReceivedBytes: getBaseResponseBytes,
           onStateChange: (entry) => {
             log(config, 'info', 'progress_state_changed', {

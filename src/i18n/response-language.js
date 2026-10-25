@@ -605,23 +605,30 @@ export function mediaText(locale, key, values = {}) {
   return '';
 }
 
-export function formatProgressClock(timestampMs = Date.now()) {
+export function formatProgressClock(timestampMs = Date.now(), timeZone = '') {
   const date = new Date(Number.isFinite(Number(timestampMs)) ? Number(timestampMs) : Date.now());
+  if (timeZone) {
+    // Explicit IANA timezone, 24-hour clock; never mutate process.env.TZ.
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+    }).format(date);
+  }
+  // Preserve the pre-v0.29.71 process-local clock if ENV is omitted/invalid.
   const hh = String(date.getHours()).padStart(2, '0');
   const mm = String(date.getMinutes()).padStart(2, '0');
   const ss = String(date.getSeconds()).padStart(2, '0');
   return `${hh}:${mm}:${ss}`;
 }
 
-export function progressBlockHeader(locale, { timeText = '', timestampMs } = {}) {
+export function progressBlockHeader(locale, { timeText = '', timestampMs, timeZone = '' } = {}) {
   const label = languageProfile(resolveResponseLanguage(locale)).progressHeader;
-  const clock = String(timeText || formatProgressClock(timestampMs)).trim();
+  const clock = String(timeText || formatProgressClock(timestampMs, timeZone)).trim();
   return `${label} · ${clock}`;
 }
 
-export function modelTimelineHeader(locale, { timeText = '', timestampMs } = {}) {
+export function modelTimelineHeader(locale, { timeText = '', timestampMs, timeZone = '' } = {}) {
   const label = languageProfile(resolveResponseLanguage(locale)).timelineHeader;
-  const clock = String(timeText || formatProgressClock(timestampMs)).trim();
+  const clock = String(timeText || formatProgressClock(timestampMs, timeZone)).trim();
   return `${label} · ${clock}`;
 }
 
