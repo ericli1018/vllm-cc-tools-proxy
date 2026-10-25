@@ -1,12 +1,12 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { parsePdfPageScope } from './pdf-page-scope.js';
-import { languageProfile, mediaText, statusText } from '../i18n/response-language.js';
+import { languageProfile, mediaText, mediaTimelineLabels, statusText } from '../i18n/response-language.js';
 import { enterRequestStructure } from '../lib/structure-guard.js';
 
 function safeBasename(value, fallback = '') {
   if (typeof value !== 'string' || !value.trim()) return fallback;
-  const normalized = value.replaceAll('\\', '/').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  const normalized = value.replaceAll('\\', '/').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
   const base = path.posix.basename(normalized).slice(0, 160);
   return base && base !== '.' && base !== '/' ? base : fallback;
 }
@@ -142,6 +142,38 @@ function percent(completed, total) {
   return Math.max(0, Math.min(100, Math.round((completed / total) * 100)));
 }
 
+
+const MEDIA_TIMELINE_STAGES = Object.freeze({
+  media_cache_miss: 'preparing', media_ready: 'ready',
+  pdf_start: 'parsing', pdf_metadata: 'extracting', pdf_classify: 'classifying',
+  pdf_document_map_start: 'mapping', pdf_document_map: 'mapping',
+  pdf_visual_prepare: 'rendering', pdf_visual_plan: 'planning', pdf_visual_batch: 'analyzing',
+  pdf_visual_progress: 'analyzing', pdf_complete: 'merging',
+  pdf_schematic_overview: 'rendering', pdf_schematic_merge: 'merging',
+  image_start: 'preparing', image_vision: 'analyzing', image_complete: 'complete',
+  image_vision_unavailable: 'failed', vision_crop: 'cropping', vision_needs_zoom: 'zooming',
+  vision_crop_rejected: 'rejected', vision_crop_budget_exhausted: 'limited', vision_quality_retry: 'retrying',
+  directed_visual_registered: 'preparing', directed_perception_planning: 'planning',
+  directed_perception_wait: 'waiting', directed_perception_started: 'analyzing',
+  directed_perception_completed: 'complete', directed_perception_failed: 'failed',
+  directed_perception_planning_failed: 'failed',
+});
+
+function mediaStage(details) {
+  const phase = String(details.phase || '');
+  if (!/^(?:media_|pdf_|image_|vision_|directed_(?:visual|perception)_)/.test(phase)) return '';
+  if (phase === 'directed_perception_completed' && ['partial', 'unreadable'].includes(details.status)) return details.status;
+  if (MEDIA_TIMELINE_STAGES[phase]) return MEDIA_TIMELINE_STAGES[phase];
+  if (phase.endsWith('_failed')) return 'failed';
+  if (phase.endsWith('_budget_exhausted')) return 'limited';
+  if (phase.endsWith('_tile_render')) return 'rendering';
+  if (phase.endsWith('_tile_analyze')) return 'analyzing';
+  if (phase.endsWith('_tile')) return 'zooming';
+  return 'processing';
+}
+
+function progressCounter(value) { return Number.isInteger(value) && value >= 0 ? value : null; }
+
 export class MediaProgressTracker {
   constructor(messages, { now = () => Date.now(), locale = 'zh-TW', excludePaths = new Set() } = {}) {
     this.now = now;
@@ -162,6 +194,58 @@ export class MediaProgressTracker {
     return entry.fileCount > 1
       ? mediaText(this.locale, 'fileMultiple', { index: entry.fileIndex, count: entry.fileCount, filename: entry.filename })
       : mediaText(this.locale, 'fileSingle', { filename: entry.filename });
+  }
+
+  // Keep full sentences in diagnostic render(); the visible SSE uses these bounded fields.
+  timelineDetails(details = {}) {
+    const stage = mediaStage(details);
+    if (!stage) return details;
+    const phase = String(details.phase);
+    const labels = mediaTimelineLabels(this.locale);
+    const global = ['media_cache_miss', 'media_ready'].includes(phase);
+    const entry = global ? null : (details.path ? this.contextForPath(details.path) : this.current);
+    const context = [];
+    if (entry) {
+      this.current = entry;
+      context.push(this.#fileLabel(entry));
+      if (entry.kind === 'image') {
+        context.push(`${entry.sourceKind === 'read_pdf_image' ? labels.pdfImage : labels.image} ${entry.mediaIndex}/${entry.mediaCount}`);
+        // Only assign absolute pages when the explicit scope and returned images agree.
+        if (entry.sourceKind === 'read_pdf_image' && entry.pageScope?.pages?.length === entry.mediaCount) {
+          context.push(`${labels.page} ${entry.pageScope.pages[entry.mediaIndex - 1]}`);
+        }
+      } else {
+        if (entry.mediaCount > 1) context.push(`${labels.segment} ${entry.mediaIndex}/${entry.mediaCount}`);
+        if (entry.pageScope?.canonical) context.push(`${labels.page} ${entry.pageScope.canonical}`);
+      }
+    }
+    const parts = [labels[stage]];
+    const isTile = /_(?:zoom|schematic)_tile/.test(phase) || phase === 'image_zoom_budget_exhausted';
+    const completed = progressCounter(details.completed ?? details.processed_pdf_pages);
+    const total = progressCounter(details.total ?? details.received_pdf_pages);
+    const page = progressCounter(details.page);
+    if (page !== null && page > 0) parts.push(`${labels.page} ${page}`);
+    if (isTile) {
+      const tile = progressCounter(details.tile) ?? completed;
+      if (tile !== null) parts.push(`${labels.tile} ${tile}${total > 0 ? `/${total}` : ''}`);
+    } else if (phase.startsWith('pdf_') && total > 0) {
+      const kind = phase === 'pdf_document_map' ? labels.sample : labels.page;
+      parts.push(`${kind} ${completed !== null ? `${completed}/` : ''}${total}`);
+    }
+    if (progressCounter(details.batch) !== null && details.batch > 0 && progressCounter(details.batches) !== null && details.batches > 0) {
+      parts.push(`${labels.batch} ${details.batch}/${details.batches}`);
+    }
+    if (phase === 'vision_quality_retry' && progressCounter(details.attempt) !== null) parts.push(String(details.attempt));
+    const mediaContext = context.join(' · ');
+    const label = parts.join(' · ');
+    return {
+      ...details,
+      media_timeline: true,
+      media_context: mediaContext,
+      media_label: label,
+      media_key: JSON.stringify([entry?.pathKey || '', phase, mediaContext, label, details.status || '']),
+      media_warning: ['partial', 'unreadable', 'failed', 'limited', 'rejected'].includes(stage),
+    };
   }
 
   render(message, details = {}) {

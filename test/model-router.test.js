@@ -6,7 +6,7 @@ const base = { VLLM_BASE_URL: 'http://fallback:8000/v1' };
 const routes = JSON.stringify({ 'claude-sonnet-5': { url: 'http://a:8000/v1', protocol: 'openai', model: 'qwen-local', api_key: 'secret' }, 'claude-opus-5': { url: 'http://b:8000/v1', protocol: 'anthropic', upstream_model: 'ornith' } });
 test('ENV routes resolve exact alias, protocol, key and model', () => {
  const config = loadConfig({ ...base, VLLM_MODEL_ROUTES: routes });
- assert.deepEqual({ ...resolveModelRoute('claude-sonnet-5', config) }, { url: 'http://a:8000/v1', protocol: 'openai', model: 'qwen-local', apiKey: 'secret', alias: 'claude-sonnet-5' });
+ assert.deepEqual({ ...resolveModelRoute('claude-sonnet-5', config) }, { url: 'http://a:8000/v1', protocol: 'openai', model: 'qwen-local', apiKey: 'secret', alias: 'claude-sonnet-5', compactUseRoute: true, visualUseRoute: true });
  assert.equal(resolveModelRoute('claude-opus-5', config).model, 'ornith');
  assert.throws(() => resolveModelRoute('unknown', config), /Unknown model alias/);
 });

@@ -111,8 +111,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.59'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.59'
+test "$(node -p "require('./package.json').version")" = '0.29.69'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.69'
 
 
 test -f src/i18n/response-language.js
@@ -541,7 +541,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.59'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.69'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1233,7 +1233,7 @@ grep -Fq 'currentInteractionStartIndex' src/services/proxy-server.js
 ! grep -Rq 'DIRECTED_VISUAL_TOOL_NAME\|executeDirectedVisualInspect\|isDirectedVisualToolName\|PROXY_HISTORICAL_VISUAL' src
 node --test --test-name-pattern='V0.29.46 directed historical images|V0.29.46 directed fresh image may precede|V0.29.46 directed count_tokens' test/proxy-server.test.js
 
-# V0.29.47 forced planning tool + silent directed Read contract
+# V0.29.47 forced planning contract; v0.29.68 replaces silent UI with safe short stages
 test -f change_log/V0.29.47-更新說明.md
 test -f change_log/V0.29.47-實作與驗證報告.md
 grep -Fq 'V0.29.47 Forced Planning Tool + Silent Directed Read' README.md
@@ -1242,7 +1242,7 @@ grep -Fq "PLANNING_TOOL_NAME = 'SubmitVisualPlan'" src/visual/directed-vision.js
 grep -Fq "tool_choice = { type: 'tool', name: PLANNING_TOOL_NAME, disable_parallel_tool_use: true }" src/visual/directed-vision.js
 grep -Fq 'const hasVisibleActiveMedia = visibleActiveMediaCount > 0' src/services/proxy-server.js
 node --test test/v02947-directed-tool-planning.test.js
-node --test --test-name-pattern='V0.29.47 directed image performs forced|V0.29.47 directed image keeps planning|V0.29.47 multiple fresh images' test/proxy-server.test.js
+node --test --test-name-pattern='V0.29.47 directed image performs forced|V0.29.68 directed image shows short planning|V0.29.47 multiple fresh images' test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.47 directed image planning uses forced' test/deployment.test.js
 
 
@@ -1278,12 +1278,20 @@ node --test --test-name-pattern='V0.29.49 detects thinking response and tool-inp
 test -f change_log/V0.29.50-更新說明.md
 test -f change_log/V0.29.50-實作與驗證報告.md
 grep -Fq 'V0.29.50 End-Turn Completion Probe' README.md
-grep -Fq 'DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999' src/proxy/managed-loop.js
+grep -Fq 'DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 2' src/proxy/managed-loop.js
 grep -Fq 'completion_probe_started' src/proxy/managed-loop.js
 grep -Fq 'completion_probe_confirmed_final' src/proxy/managed-loop.js
 grep -Fq 'completion_probe_continuation' src/proxy/managed-loop.js
 grep -Fq 'completion_probe_failed' src/proxy/managed-loop.js
-grep -Fq 'completionProbeEnabled: true' src/config.js
+# The default is still true, but v0.29.65+ allows an explicit ENV override.
+node --input-type=module <<'NODE'
+import assert from 'node:assert/strict';
+import { loadConfig } from './src/config.js';
+const base = { VLLM_BASE_URL: 'http://127.0.0.1:8000' };
+assert.equal(loadConfig(base).completionProbeEnabled, true);
+assert.equal(loadConfig({ ...base, COMPLETION_PROBE_ENABLED: 'false' }).completionProbeEnabled, false);
+assert.equal(loadConfig({ ...base, COMPLETION_PROBE_ENABLED: 'true' }).completionProbeEnabled, true);
+NODE
 grep -Fq 'completionProbeEnabled: config.completionProbeEnabled === true' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.50 completion probe' test/managed-loop.test.js test/proxy-server.test.js
 node --test --test-name-pattern='V0.29.50 completion probe is request-local' test/deployment.test.js
@@ -1344,3 +1352,16 @@ grep -Fq "return 'malformed_json'" src/proxy/managed-loop.js
 grep -Fq 'managed_tool_malformed_recovery_exhausted' src/proxy/managed-loop.js
 grep -Fq 'managed_tool_malformed_recovery_exhausted' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.55' test/managed-loop.test.js test/proxy-server.test.js test/deployment.test.js test/version.test.js
+
+
+# V0.29.68 shared media/model progress timeline contract
+grep -Fq 'V0.29.68 Unified Image/PDF Progress Timeline' README.md
+grep -Fq 'timelineDetails(details = {})' src/proxy/media-progress.js
+grep -Fq 'details.media_timeline === true' src/proxy/progress.js
+node --test test/v02968-media-timeline.test.js test/v02968-media-http.test.js
+
+# V0.29.69 per-route compact/visual policies and protocol boundary
+test -f docs/MODEL_ROUTE_POLICIES_v0.29.69.md
+test -f change_log/V0.29.69-實作與驗證報告.md
+grep -Fq 'V0.29.69 Per-Route Compact and Visual Policies' README.md
+node --test test/v02969-route-policies.test.js test/v02969-route-http.test.js

@@ -115,10 +115,10 @@ test('V0.29.52 continue decision starts a normal hidden Main continuation with o
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_continuation' && entry.details.decision === 'continue'));
 });
 
-test('V0.29.52 completion probe rejects free text instead of treating no tool use as complete', async () => {
+test('V0.29.67 completion probe rejects free text as a decision and returns the valid candidate after bounded retry', async () => {
   let calls = 0;
   const diagnostics = [];
-  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'answer this question' }] }, {
+  const result = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'answer this question' }] }, {
     upstream: async () => {
       calls += 1;
       if (calls === 1) return response([{ type: 'text', text: 'Candidate A.' }], 'end_turn');
@@ -127,8 +127,10 @@ test('V0.29.52 completion probe rejects free text instead of treating no tool us
     executeTool: async () => ({}),
     completionProbeEnabled: true,
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
-  }), (error) => error.code === 'completion_probe_invalid');
+  });
 
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
+  assert.equal(result.content[0].text, 'Candidate A.');
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed' && entry.details.code === 'completion_probe_invalid'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_fallback'));
 });

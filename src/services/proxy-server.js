@@ -18,7 +18,7 @@ import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
-import { resolveModelRoute } from '../proxy/model-router.js';
+import { resolveModelRoute, selectCompactRoute, mediaConfigForRoute } from '../proxy/model-router.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
 import { buildMediaUsageBootstrapRequest } from '../proxy/media-usage-bootstrap.js';
 import { injectEvidenceContract } from '../proxy/evidence-contract.js';
@@ -116,6 +116,11 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
 } = {}) {
   const selectedRoute = baseRouteContext.getStore()?.route ?? resolveModelRoute(request?.model, config);
   const openaiBackend = selectedRoute.protocol === 'openai';
+  const isolatedHeaders = config.modelRouting?.enabled
+    ? Object.fromEntries(Object.entries(incomingHeaders || {}).filter(([name]) => !['authorization', 'x-api-key'].includes(name.toLowerCase())))
+    : incomingHeaders;
+  const anthropicHeaders = upstreamHeaders(isolatedHeaders, { ...config, vllmBaseApiKey: selectedRoute.apiKey });
+  if (config.modelRouting?.enabled && selectedRoute.apiKey) anthropicHeaders['x-api-key'] = selectedRoute.apiKey;
   if (openaiBackend && path === '/v1/messages/count_tokens') {
     const body = JSON.stringify(approximateTokenCount(request));
     return bufferedUpstreamResponse({ status: 200, ok: true, headers: { get: () => 'application/json' } }, body);
@@ -133,7 +138,7 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
   log(config, 'info', 'base_model_selected', {
     client_model: String(request?.model || ''),
     upstream_model: selectedBaseModel.model,
-    source: selectedBaseModel.source,
+    source: selectedRoute.alias ? 'model_route' : selectedBaseModel.source,
     path,
     route_alias: selectedRoute.alias,
   });
@@ -151,7 +156,7 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
     try {
       response = await requestBaseUpstream(openaiBackend ? upstreamEndpoint(selectedRoute.url, '/v1/chat/completions') : upstreamEndpoint(selectedRoute.url, path), {
         method: 'POST',
-        headers: openaiBackend ? { 'content-type': 'application/json', ...(selectedRoute.apiKey ? { authorization: `Bearer ${selectedRoute.apiKey}` } : {}) } : upstreamHeaders(incomingHeaders, { ...config, vllmBaseApiKey: selectedRoute.apiKey }),
+        headers: openaiBackend ? { 'content-type': 'application/json', ...(selectedRoute.apiKey ? { authorization: `Bearer ${selectedRoute.apiKey}` } : {}) } : anthropicHeaders,
         body: JSON.stringify(openaiBackend ? toOpenAIRequest(upstreamRequest) : upstreamRequest),
         signal,
         onResponseChunk: typeof onResponseChunk === 'function'
@@ -281,7 +286,8 @@ function isNativeVisionCapabilityRejection(error) {
   ].join(' ').toLowerCase();
   const mentionsVisualInput = /(?:\bimage(?:s)?\b|\bvision\b|\bvisual\b|multimodal|multi-modal)/.test(text);
   const explicitlyUnsupported = /(?:not\s+support(?:ed)?|does\s+not\s+support|doesn't\s+support|unsupported|not\s+allowed|cannot\s+(?:accept|process|handle)|can't\s+(?:accept|process|handle)|not\s+capable)/.test(text);
-  return mentionsVisualInput && explicitlyUnsupported;
+  const zeroImageLimit = /\bat\s+most\s+0\s+image(?:\(s\)|s)?\b/.test(text);
+  return mentionsVisualInput && (explicitlyUnsupported || zeroImageLimit);
 }
 
 async function preflightManagedUsage(request, config, incomingHeaders, signal, onDiagnostic = () => {}, {
@@ -1290,6 +1296,7 @@ export function createProxyServer(config, dependencies = {}) {
       // Pin the selected backend before preflight, recovery, completion probes, and managed rounds.
       // AsyncLocalStorage isolates overlapping client HTTP requests without mutating global config.
       const pinnedBaseRoute = resolveModelRoute(original.model, config);
+      const mediaConfig = mediaConfigForRoute(pinnedBaseRoute, config, { countOnly: messagesPath === '/v1/messages/count_tokens' });
       baseRouteContext.enterWith({ route: pinnedBaseRoute });
       clientSessionId = claudeCodeSessionId(req.headers, original);
       if (messagesPath === '/v1/messages') {
@@ -1509,7 +1516,7 @@ export function createProxyServer(config, dependencies = {}) {
         });
         const compactRequest = prepareClaudeCodeCompactRequest(original);
         const removedToolCount = Array.isArray(original.tools) ? original.tools.length : 0;
-        const externalCompactEnabled = Boolean(config.contextCompact?.enabled);
+        const externalCompactEnabled = !pinnedBaseRoute.alias && Boolean(config.contextCompact?.enabled);
         log(config, 'info', 'context_compact_request_detected', {
           requestId,
           family: compactClassification.family,
@@ -1524,6 +1531,62 @@ export function createProxyServer(config, dependencies = {}) {
             compact_think: Boolean(config.contextCompact.think),
           } : {}),
         });
+
+        const forwardSelectedCompact = async () => {
+          const compactRoute = selectCompactRoute(pinnedBaseRoute, config);
+          log(config, 'info', 'context_compact_route_selected', {
+            requestId, route_alias: pinnedBaseRoute.alias, upstream_model: compactRoute.model,
+            protocol: compactRoute.protocol, compact_use_route: pinnedBaseRoute.compactUseRoute !== false,
+            reason: compactRoute === pinnedBaseRoute ? 'request_route' : 'base_fallback',
+            dedicated_compact_overridden: Boolean(pinnedBaseRoute.alias && config.contextCompact?.enabled),
+          });
+          runtimeTelemetry.updateRequest(requestId, { phase: 'compact', detail: compactRoute.model || original.model || '' });
+          await baseRouteContext.run({ route: compactRoute }, async () => {
+            if (compactRequest.stream !== true) {
+              const payload = await callUpstreamJson(compactRequest, config, req.headers, abortController.signal);
+              sendJson(res, 200, payload);
+              return;
+            }
+            progress = progressStreamFactory(res, {
+              model: compactRequest.model || compactRoute.model,
+              pingIntervalMs: config.progressPingIntervalMs,
+              drainTimeoutMs: config.sseDrainTimeoutMs,
+              visibleProgressEnabled: false,
+            });
+            if (!res.headersSent) await progress.open();
+            else {
+              // A failed dedicated compact attempt may already have emitted ping-only SSE.
+              await progress.writeRaw(formatSseEvent('message_start', { type: 'message_start', message: {
+                id: progress.messageId, type: 'message', role: 'assistant', model: progress.model,
+                content: [], stop_reason: null, stop_sequence: null, usage: progress.initialUsage,
+              } }));
+            }
+            const upstream = await fetchUpstream(compactRequest, config, req.headers, abortController.signal);
+            if (!upstream.ok) {
+              // Never include the upstream response body (which can echo private input) in this error.
+              await upstream.text();
+              throw new HttpError(upstream.status >= 500 ? 502 : upstream.status, 'Compact upstream rejected the request.', {
+                code: 'compact_upstream_error', retryable: upstream.status >= 500,
+              });
+            }
+            if ((upstream.headers.get('content-type') || '').includes('text/event-stream')) {
+              await pipeAnthropicUpstreamStream(progress, upstream, {
+                onUsage: async ({ stage, usage }) => { if (stage === 'message_start') await progress.updateUsage(usage); },
+              });
+            } else {
+              let payload;
+              try { payload = JSON.parse(await upstream.text()); }
+              catch { throw new HttpError(502, 'Compact upstream returned invalid JSON.', { code: 'vllm_invalid_response' }); }
+              await progress.updateUsage(payload.usage || {});
+              await emitFinalAnthropicResponse(progress, payload);
+            }
+          });
+        };
+        if (pinnedBaseRoute.alias || (!externalCompactEnabled && pinnedBaseRoute.protocol === 'openai')) {
+          await forwardSelectedCompact();
+          completed = true;
+          return;
+        }
 
         if (externalCompactEnabled) {
           log(config, 'info', 'route_decision', {
@@ -1573,6 +1636,11 @@ export function createProxyServer(config, dependencies = {}) {
 
         await compactLiveness?.stop('base_compact_fallback');
         compactLiveness = null;
+        if (pinnedBaseRoute.protocol === 'openai') {
+          await forwardSelectedCompact();
+          completed = true;
+          return;
+        }
         log(config, 'info', 'route_decision', {
           requestId, method: req.method, path: url.pathname,
           decision: 'context_compact_bypass',
@@ -1734,7 +1802,7 @@ export function createProxyServer(config, dependencies = {}) {
 
       if (!initiallyManaged) {
         if (messagesPath === '/v1/messages/count_tokens') {
-          if (requestRewritten) {
+          if (requestRewritten || config.modelRouting?.enabled || pinnedBaseRoute.protocol === 'openai') {
             log(config, 'info', 'route_decision', {
               requestId, method: req.method, path: url.pathname,
               decision: 'protocol_sanitize',
@@ -1905,14 +1973,16 @@ export function createProxyServer(config, dependencies = {}) {
       let directedVisionEligibleCount = 0;
       let directedVisionPaths = new Set();
       let directedHistoricalPaths = new Set();
+      const directedProgressPaths = new Map();
 
       if (hasMedia) {
         requestStage = 'media_observation';
         const imagePayloadObservations = observeImagePayloads(request.messages);
         const imageObservationByPath = new Map(imagePayloadObservations.map((entry) => [JSON.stringify(entry.path), entry]));
         const mediaInventory = createMediaProgressTracker(request.messages, { locale: config.responseLanguage });
-        const nativeVisionEligible = config.vllmBaseVisionEnabled === true && config.visionNativePassthrough === true
-          ? mediaInventory.descriptors.filter((entry) => entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind))
+        const nativeVisionEligible = mediaConfig.vllmBaseVisionEnabled === true && mediaConfig.visionNativePassthrough === true
+          ? mediaInventory.descriptors.filter((entry) => mediaConfig.nativePdfPassthrough === true
+            || (entry.kind === 'image' && ['direct_image', 'read_image'].includes(entry.sourceKind)))
           : [];
         nativeVisionEligibleCount = nativeVisionEligible.length;
         nativeVisionPassthroughPaths = new Set(nativeVisionEligible.map((entry) => entry.pathKey));
@@ -1928,12 +1998,20 @@ export function createProxyServer(config, dependencies = {}) {
         mediaProgress = directedHistoricalPaths.size > 0
           ? createMediaProgressTracker(request.messages, { locale: config.responseLanguage, excludePaths: directedHistoricalPaths })
           : mediaInventory;
-        const directedUiExcludedPaths = new Set([...directedHistoricalPaths, ...directedVisionPaths]);
-        uiMediaProgress = directedUiExcludedPaths.size > 0
-          ? createMediaProgressTracker(request.messages, { locale: config.responseLanguage, excludePaths: directedUiExcludedPaths })
-          : mediaProgress;
+        // Fresh directed images now use the shared timeline; historical images stay excluded.
+        uiMediaProgress = mediaProgress;
         nativeVisionRawOnly = nativeVisionEligibleCount > 0
+          && nativeVisionEligible.every(entry => entry.kind === 'image')
           && nativeVisionEligibleCount === mediaProgress.descriptors.length;
+        if (pinnedBaseRoute.alias) log(config, 'info', 'visual_route_policy_selected', {
+          requestId, route_alias: pinnedBaseRoute.alias,
+          visual_use_route: pinnedBaseRoute.visualUseRoute !== false,
+          vision_enabled: mediaConfig.vllmBaseVisionEnabled,
+          backend: mediaConfig.nativePdfPassthrough ? 'request_route' : 'dedicated_vision',
+          upstream_model: mediaConfig.nativePdfPassthrough ? pinnedBaseRoute.model : config.vllmVisionModel,
+          native_pdf_count: nativeVisionEligible.filter(entry => entry.kind === 'document').length,
+          count_only: mediaConfig.mediaCountOnly === true,
+        });
         if (directedHistoricalPaths.size > 0) {
           // Historical directed images must bypass media preflight just like raw Native Vision images;
           // classification above is already complete, so extending this request-local set is safe.
@@ -1960,7 +2038,8 @@ export function createProxyServer(config, dependencies = {}) {
           nativeVisionFallbackRequest = { ...request, messages: structuredClone(request.messages) };
           log(config, 'info', 'native_vision_route_selected', {
             requestId,
-            eligible_image_count: nativeVisionEligibleCount,
+            eligible_image_count: nativeVisionEligible.filter(entry => entry.kind === 'image').length,
+            eligible_document_count: nativeVisionEligible.filter(entry => entry.kind === 'document').length,
             source_kinds: [...new Set(nativeVisionEligible.map((entry) => entry.sourceKind))].sort(),
             base_vision_enabled: true,
             native_passthrough_enabled: true,
@@ -2011,6 +2090,11 @@ export function createProxyServer(config, dependencies = {}) {
         let cachedOccurrences = 0;
         for (const occurrence of mediaOccurrences) {
           const occurrencePathKey = JSON.stringify(occurrence.path || []);
+          if (mediaConfig.mediaCountOnly || (mediaConfig.nativePdfPassthrough && occurrence.mediaType === 'application/pdf')) {
+            log(config, 'info', 'media_semantic_cache_bypassed', { requestId,
+              reason: mediaConfig.mediaCountOnly ? 'count_only' : 'native_pdf_source', media_type: occurrence.mediaType });
+            continue;
+          }
           if (directedVisionPaths.has(occurrencePathKey)) {
             log(config, 'info', 'directed_visual_cache_bypassed', {
               requestId,
@@ -2079,6 +2163,7 @@ export function createProxyServer(config, dependencies = {}) {
         analysisRegistry,
         preloadedCache,
         directedVisualStore,
+        directedProgressPaths,
         directedHistoricalPaths,
         ...(dependencies.mediaAdapterDependencies || {}),
         continuationFreshMessageIndex: toolResultContinuation ? request.messages.length - 1 : -1,
@@ -2115,7 +2200,7 @@ export function createProxyServer(config, dependencies = {}) {
       };
 
       if (!needsManagedWork) {
-        const adapters = createMediaAdapters(config, abortController.signal, () => {}, adapterDependencies);
+        const adapters = createMediaAdapters(mediaConfig, abortController.signal, () => {}, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
         request = injectEvidenceContract(request);
         await preparedMedia?.cleanup(); preparedMedia = null;
@@ -2145,11 +2230,33 @@ export function createProxyServer(config, dependencies = {}) {
           });
           await progress.open();
           await maybeShowStartupBanner(progress);
+          const cachedStartedAt = Date.now();
+          Object.assign(modelRoundProgress, {
+            active: true, round: 1, lane: 'cached_transform', startedAt: cachedStartedAt,
+            startBytes: baseResponseBytes, startModelBytes: modelOutputBytes,
+            firstByteNotified: false, firstSemanticDeltaNotified: false, phase: 'waiting',
+          });
+          runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: cachedStartedAt });
+          runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
+          // Cache reuse has no new media work: show only the actual Main-model timeline.
+          await progress.update(statusText(config.responseLanguage, 'modelPlanning'), {
+            details: { phase: 'managed_model_round_start', model_timeline: true, round: 1, model_started_at: cachedStartedAt },
+          });
+          progress.startSemanticHeartbeat(() => statusText(config.responseLanguage, 'modelHeartbeat', sampleModelHeartbeat()));
           let response = await callUpstreamManagedStream(
-            request, config, req.headers, abortController.signal, '/v1/messages', { onResponseChunk: onBaseResponseChunk, onBusyEvent: onBaseBusyEvent, onResponseMode: onBaseResponseMode },
+            request, config, req.headers, abortController.signal, '/v1/messages', {
+              onResponseChunk: onBaseResponseChunk,
+              onStreamPhase: onManagedModelStreamPhase,
+              onSemanticDelta: onModelSemanticDelta,
+              onBusyEvent: onBaseBusyEvent,
+              onResponseMode: onBaseResponseMode,
+            },
           );
           response = observeServerResponseCapabilities(response, 'cached_transform_stream');
+          runtimeTelemetry.endModelRound(requestId, { endedAt: Date.now() });
+          modelRoundProgress.active = false;
           response = await applyFinalPresentationLanguage(response, request);
+          progress.stopSemanticHeartbeat();
           await closeProgressForFinalResponse(response);
           observeAgentHandoff(response);
           await emitFinalAnthropicResponse(progress, response, { locale: config.responseLanguage });
@@ -2173,8 +2280,9 @@ export function createProxyServer(config, dependencies = {}) {
           ? localized
           : (uiMediaProgress?.render(localized, stateDetails) || localized);
         log(config, 'info', 'managed_task_progress', { requestId, message: rendered, delivery_status: 'requested', ...stateDetails });
-        if (progress) await progress.update(rendered, { force, details: stateDetails });
-        else deferredProgress.push({ rendered, force, stateDetails });
+        const timelineDetails = uiMediaProgress?.timelineDetails(stateDetails) || stateDetails;
+        if (progress) await progress.update(rendered, { force, details: timelineDetails });
+        else deferredProgress.push({ rendered, force, stateDetails: timelineDetails });
       };
 
       const openManagedProgress = async (usage) => {
@@ -2280,8 +2388,11 @@ export function createProxyServer(config, dependencies = {}) {
       if (hasMedia) {
         requestStage = 'media_transform';
         if (hasVisibleActiveMedia && !allMediaCached && !nativeVisionRawOnly) await onProgress('正在處理新的文件與圖片內容…', { phase: 'media_cache_miss' });
-        const adapters = createMediaAdapters(config, abortController.signal, onProgress, adapterDependencies);
+        const adapters = createMediaAdapters(mediaConfig, abortController.signal, onProgress, adapterDependencies);
         request.messages = await adaptMessages(request.messages, adapters);
+        if (mediaConfig.nativePdfPassthrough && Buffer.byteLength(JSON.stringify(request)) > config.limits.maxRequestBytes) {
+          throw new HttpError(413, 'Rendered PDF/image request exceeds the request byte limit. Read fewer pages.', { code: 'pdf_native_request_limit' });
+        }
         if (directedVisualStore?.size > 0 && messagesPath === '/v1/messages') {
           const evidenceByAssetId = new Map();
           for (const asset of directedVisualStore.values()) {
@@ -2289,27 +2400,45 @@ export function createProxyServer(config, dependencies = {}) {
             log(config, 'info', 'directed_perception_planning_started', {
               requestId, asset_id: asset.assetId, asset_count: 1,
             });
+            const visualProgressContext = { path: directedProgressPaths.get(asset.assetId), asset_id: asset.assetId };
+            await onProgress('正在規劃圖片判讀…', { ...visualProgressContext, phase: 'directed_perception_planning' });
             const planningRequest = buildDirectedPlanningRequest(request, asset);
-            const planningResponse = await callUpstreamJson(
-              planningRequest, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent },
-            );
-            const assetPlan = parseDirectedPlanningResponse(planningResponse, asset);
+            let planningResponse;
+            let assetPlan;
+            try {
+              planningResponse = await callUpstreamJson(
+                planningRequest, config, req.headers, abortController.signal, '/v1/messages', { onBusyEvent: onBaseBusyEvent },
+              );
+              assetPlan = parseDirectedPlanningResponse(planningResponse, asset);
+            } catch (error) {
+              await onProgress('圖片判讀規劃失敗。', { ...visualProgressContext, phase: 'directed_perception_planning_failed' });
+              throw error;
+            }
             log(config, 'info', 'directed_perception_planning_completed', {
               requestId, asset_id: asset.assetId, asset_count: 1, question_count: assetPlan.questions.length,
               response_stop_reason: String(planningResponse?.stop_reason || '').slice(0, 100),
             });
             let result;
+            let perceptionFailureReported = false;
+            await onProgress('正在等待視覺模型…', { ...visualProgressContext, phase: 'directed_perception_wait' });
             try {
               result = await executeDirectedPerception(directedVisualStore, assetPlan, config, abortController.signal, {
                 acquireVision: (options) => admission.acquireVision(options),
-                onEvent: (event, fields) => log(
-                  config,
-                  event.endsWith('_failed') ? 'warn' : 'info',
-                  event,
-                  { requestId, ...fields },
-                ),
+                onEvent: async (event, fields) => {
+                  log(config, event.endsWith('_failed') ? 'warn' : 'info', event, { requestId, ...fields });
+                  const messages = {
+                    directed_perception_started: '正在判讀圖片…',
+                    directed_perception_completed: '圖片判讀已返回。',
+                    directed_perception_failed: '圖片判讀失敗。',
+                  };
+                  if (event === 'directed_perception_failed') perceptionFailureReported = true;
+                  if (messages[event]) await onProgress(messages[event], { ...visualProgressContext, ...fields, phase: event });
+                },
               });
             } catch (error) {
+              if (!perceptionFailureReported) {
+                await onProgress('圖片判讀失敗。', { ...visualProgressContext, phase: 'directed_perception_failed' });
+              }
               result = {
                 schema: 'visual_perception_error_v1',
                 asset_id: assetPlan.asset_id,
@@ -2332,7 +2461,7 @@ export function createProxyServer(config, dependencies = {}) {
           directedVisualStore.clear();
         }
         const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisionEligibleCount);
-        if (proxyEvidenceCount > 0) request = injectEvidenceContract(request);
+        if (proxyEvidenceCount > 0 || mediaConfig.nativePdfPassthrough) request = injectEvidenceContract(request);
 
         if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages/count_tokens' && config.usagePreflightEnabled !== false) {
           requestStage = 'native_vision_capability_preflight';
@@ -2358,7 +2487,7 @@ export function createProxyServer(config, dependencies = {}) {
                 code: error.code,
                 eligible_image_count: nativeVisionEligibleCount,
               });
-              const fallbackConfig = { ...config, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
+              const fallbackConfig = { ...mediaConfig, nativePdfPassthrough: false, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
               const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
               request = { ...nativeVisionFallbackRequest, messages: await adaptMessages(nativeVisionFallbackRequest.messages, fallbackAdapters) };
               request = injectEvidenceContract(request);
@@ -2433,7 +2562,9 @@ export function createProxyServer(config, dependencies = {}) {
       if (hasVisibleActiveMedia && !nativeVisionRawOnly) {
         const readyMessage = uiMediaProgress?.renderMediaReady()
           || statusText(config.responseLanguage, 'mediaReady');
-        await progress?.update(readyMessage, { details: { phase: 'media_ready' } });
+        await progress?.update(readyMessage, {
+          details: uiMediaProgress?.timelineDetails({ phase: 'media_ready' }) || { phase: 'media_ready' },
+        });
       }
 
       rawBody = null;
@@ -2458,7 +2589,7 @@ export function createProxyServer(config, dependencies = {}) {
         if (nativeVisionRuntimeFallbackUsed || nativeVisionEligibleCount <= 0) return null;
         nativeVisionRuntimeFallbackUsed = true;
         nativeVisionRawOnly = false;
-        const fallbackConfig = { ...config, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
+        const fallbackConfig = { ...mediaConfig, nativePdfPassthrough: false, visionNativePassthrough: false, visionOrchestrationMode: 'legacy' };
         const fallbackAdapters = createMediaAdapters(fallbackConfig, abortController.signal, onProgress, adapterDependencies);
         let fallbackBody = {
           ...structuredClone(body),
@@ -2623,6 +2754,9 @@ export function createProxyServer(config, dependencies = {}) {
             )
             : undefined,
           completionProbeEnabled: config.completionProbeEnabled === true,
+          completionProbeMaxRetries: config.completionProbeMaxRetries,
+          completionProbeTimeoutMs: config.completionProbeTimeoutMs,
+          maxCompletionProbesPerCandidate: config.completionProbeMaxPerCandidate,
           signal: abortController.signal,
         });
         if (!nativeWebSearchFastLane) {
@@ -2667,9 +2801,7 @@ export function createProxyServer(config, dependencies = {}) {
           modelRoundProgress.phase = 'waiting';
           runtimeTelemetry.beginModelRound(requestId, { round: 1, startedAt: progressTiming.startedAt });
           runtimeTelemetry.updateRequest(requestId, { phase: 'waiting', detail: '' });
-          await onProgress(statusText(config.responseLanguage, 'baseRequestStart'), {
-            phase: 'base_request_start', model_started_at: progressTiming.startedAt,
-          });
+          // The upstream request-start hook below initializes the shared timeline once.
           const collectBase = () => collectManagedBase(request, config, req.headers, abortController.signal, {
             onResponseChunk: onBaseResponseChunk,
             onSemanticDelta: onModelSemanticDelta,

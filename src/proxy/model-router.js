@@ -35,7 +35,17 @@ export function configureModelRoutes(env) {
     const keyEnv = entry.api_key_env === undefined ? '' : String(entry.api_key_env).trim();
     if (keyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyEnv)) throw new Error(`Invalid api_key_env for route ${alias}`);
     const apiKey = keyEnv ? String(env[keyEnv] || '') : String(entry.api_key || '');
-    routes[alias] = Object.freeze({ url, protocol, model, apiKey, alias });
+    for (const field of ['compact_use_route', 'visual_use_route', 'vision_enabled']) {
+      if (Object.hasOwn(entry, field) && typeof entry[field] !== 'boolean') {
+        throw new Error(`Model route ${alias}: ${field} must be a JSON boolean`);
+      }
+    }
+    routes[alias] = Object.freeze({
+      url, protocol, model, apiKey, alias,
+      compactUseRoute: entry.compact_use_route ?? true,
+      visualUseRoute: entry.visual_use_route ?? true,
+      ...(entry.vision_enabled === undefined ? {} : { visionEnabled: entry.vision_enabled }),
+    });
   }
   if (!Object.keys(routes).length) throw new Error('Model routes cannot be empty');
   return Object.freeze({ enabled: true, unknownModel, routes: Object.freeze(routes) });
@@ -48,4 +58,22 @@ export function resolveModelRoute(clientModel, config) {
   if (Object.hasOwn(routing.routes, alias)) return routing.routes[alias];
   if (routing.unknownModel === 'fallback') return Object.freeze({ url: config.vllmBaseUrl, protocol: config.vllmBaseApiProtocol, model: config.vllmBaseModel, apiKey: config.vllmBaseApiKey, alias: null });
   throw new HttpError(400, `Unknown model alias: ${alias || '(missing)'}`, { code: 'unknown_model_alias' });
+}
+
+// A deliberate compact fallback must not resolve the Base model as another alias.
+export function selectCompactRoute(route, config) {
+  if (!route?.alias || route.compactUseRoute !== false) return route;
+  return Object.freeze({ url: config.vllmBaseUrl, protocol: config.vllmBaseApiProtocol,
+    model: config.vllmBaseModel, apiKey: config.vllmBaseApiKey, alias: null });
+}
+
+export function mediaConfigForRoute(route, config, { countOnly = false } = {}) {
+  if (!route?.alias) return countOnly && config.modelRouting?.enabled ? { ...config, mediaCountOnly: true } : config;
+  const capability = route.visionEnabled ?? config.vllmBaseVisionEnabled;
+  const passthrough = route.visualUseRoute !== false && config.visionNativePassthrough === true;
+  return { ...config, vllmBaseVisionEnabled: capability === true,
+    visionNativePassthrough: passthrough,
+    nativePdfPassthrough: capability === true && passthrough,
+    mediaCountOnly: countOnly,
+  };
 }

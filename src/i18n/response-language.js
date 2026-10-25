@@ -682,3 +682,16 @@ export function localizeProgressMessage(locale, fallbackMessage, details = {}) {
   if (key) return statusText(locale, key, values);
   return String(fallbackMessage || '') || statusText(locale, 'genericProcessing');
 }
+
+// Short, trusted labels for the shared media/model timeline. No model text is used here.
+const MEDIA_TIMELINE_LABELS = Object.freeze({
+  'zh-TW': { preparing: '媒體準備', parsing: '解析', extracting: '抽字', mapping: '文件地圖', classifying: '分類', rendering: '轉圖', analyzing: '視覺判讀', zooming: '局部放大', cropping: '裁切', merging: '合併', ready: '媒體就緒', complete: '判讀完成', planning: '規劃判讀', waiting: '等待視覺', partial: '部分可讀', unreadable: '無法辨識', failed: '判讀失敗', retrying: '重試', limited: '已達限制', rejected: '裁切遭拒', processing: '媒體處理', page: '頁', tile: '區塊', batch: '批次', sample: '樣本', image: '圖片', pdfImage: 'PDF 頁面圖', segment: '區段' },
+  'zh-CN': { preparing: '媒体准备', parsing: '解析', extracting: '提取文字', mapping: '文档地图', classifying: '分类', rendering: '转图', analyzing: '视觉判读', zooming: '局部放大', cropping: '裁切', merging: '合并', ready: '媒体就绪', complete: '判读完成', planning: '规划判读', waiting: '等待视觉', partial: '部分可读', unreadable: '无法辨识', failed: '判读失败', retrying: '重试', limited: '已达限制', rejected: '裁切被拒', processing: '媒体处理', page: '页', tile: '区块', batch: '批次', sample: '样本', image: '图片', pdfImage: 'PDF 页面图', segment: '区段' },
+  'en-US': { preparing: 'Preparing media', parsing: 'Parsing', extracting: 'Extracting text', mapping: 'Document map', classifying: 'Classifying', rendering: 'Rendering', analyzing: 'Analyzing', zooming: 'Zooming', cropping: 'Cropping', merging: 'Merging', ready: 'Media ready', complete: 'Analysis complete', planning: 'Planning perception', waiting: 'Waiting for vision', partial: 'Partly readable', unreadable: 'Unreadable', failed: 'Analysis failed', retrying: 'Retrying', limited: 'Limit reached', rejected: 'Crop rejected', processing: 'Processing media', page: 'Page', tile: 'Tile', batch: 'Batch', sample: 'Sample', image: 'Image', pdfImage: 'PDF page image', segment: 'Segment' },
+  'ja-JP': { preparing: 'メディア準備', parsing: '解析', extracting: '文字抽出', mapping: '文書マップ', classifying: '分類', rendering: '画像化', analyzing: '視覚解析', zooming: '部分拡大', cropping: '切り抜き', merging: '統合', ready: 'メディア準備完了', complete: '解析完了', planning: '解析計画', waiting: '視覚処理待機', partial: '部分的に読取可能', unreadable: '読取不可', failed: '解析失敗', retrying: '再試行', limited: '上限到達', rejected: '切り抜き拒否', processing: 'メディア処理', page: 'ページ', tile: '領域', batch: 'バッチ', sample: 'サンプル', image: '画像', pdfImage: 'PDF ページ画像', segment: '区間' },
+  'ko-KP': { preparing: '미디어 준비', parsing: '파싱', extracting: '텍스트 추출', mapping: '문서 맵', classifying: '분류', rendering: '이미지 변환', analyzing: '시각 분석', zooming: '부분 확대', cropping: '자르기', merging: '병합', ready: '미디어 준비 완료', complete: '분석 완료', planning: '분석 계획', waiting: '시각 처리 대기', partial: '부분 판독 가능', unreadable: '판독 불가', failed: '분석 실패', retrying: '재시도', limited: '제한 도달', rejected: '자르기 거부', processing: '미디어 처리', page: '페이지', tile: '영역', batch: '배치', sample: '샘플', image: '이미지', pdfImage: 'PDF 페이지 이미지', segment: '구간' },
+});
+
+export function mediaTimelineLabels(locale) {
+  return MEDIA_TIMELINE_LABELS[locale] || MEDIA_TIMELINE_LABELS[DEFAULT_RESPONSE_LANGUAGE];
+}

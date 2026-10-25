@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.66', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.69', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -286,7 +286,8 @@ test('streamed media request preprocesses under managed slot then streams base v
     body: JSON.stringify({ model: 'm', stream: true, messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: png.toString('base64') } }] }] }),
   });
   const text = await response.text();
-  assert.match(text, /正在使用視覺模型分析圖片/);
+  assert.match(text, /視覺判讀/);
+  assert.doesNotMatch(text, /模型處理中/);
   assert.match(text, /LIVE/);
   assert.equal((text.match(/event: message_start/g) || []).length, 1);
   assert.equal((text.match(/event: message_stop/g) || []).length, 1);
@@ -2536,7 +2537,7 @@ test('V0.2.27.1 streamed media exposes live progress before Vision preprocessing
     const decoder = new TextDecoder();
     let earlyWire = '';
     const deadline = Date.now() + 300;
-    while (!earlyWire.includes('正在使用視覺模型分析圖片') && Date.now() < deadline) {
+    while (!earlyWire.includes('視覺判讀') && Date.now() < deadline) {
       const item = await Promise.race([
         reader.read(),
         new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 40)),
@@ -2546,7 +2547,8 @@ test('V0.2.27.1 streamed media exposes live progress before Vision preprocessing
       earlyWire += decoder.decode(item.value, { stream: true });
     }
     assert.match(earlyWire, /"input_tokens":80000/);
-    assert.match(earlyWire, /正在使用視覺模型分析圖片/);
+    assert.match(earlyWire, /視覺判讀/);
+    assert.doesNotMatch(earlyWire, /模型處理中/);
 
     releaseVision();
     let rest = '';
@@ -2724,7 +2726,7 @@ test('V0.2.27.2 focused Read.pages keeps live progress when whole-document cache
     const decoder = new TextDecoder();
     let earlyWire = '';
     const deadline = Date.now() + 300;
-    while (!earlyWire.includes('正在重新檢查指定 PDF 頁面') && Date.now() < deadline) {
+    while (!earlyWire.includes('媒體處理 · 頁 0/1') && Date.now() < deadline) {
       const item = await Promise.race([
         reader.read(),
         new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 40)),
@@ -2733,7 +2735,9 @@ test('V0.2.27.2 focused Read.pages keeps live progress when whole-document cache
       if (item.done) break;
       earlyWire += decoder.decode(item.value, { stream: true });
     }
-    assert.match(earlyWire, /正在重新檢查指定 PDF 頁面/);
+    assert.match(earlyWire, /媒體處理 · 頁 0\/1/);
+    assert.match(earlyWire, /board\.pdf · 頁 42/);
+    assert.doesNotMatch(earlyWire, /模型處理中/);
 
     releaseFocused();
     while (true) {
@@ -3186,7 +3190,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.66/);
+  assert.match(first, /VERSION\s+0\.29\.69/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3288,10 +3292,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.66');
+  assert.equal(payload.version, '0.29.69');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.66/);
+  assert.match(payload.display, /CCTP 0\.29\.69/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4624,7 +4628,7 @@ test('V0.29.46 directed historical-only continuation does not advertise active m
   assert.doesNotMatch(JSON.stringify(observed), /PROXY_HISTORICAL_VISUAL|PROXY_VISUAL_INPUT|PROXY_VISUAL_EVIDENCE|VisualInspect/);
 });
 
-test('V0.29.47 directed image keeps planning and Vision progress invisible to Claude Code UI', async (t) => {
+test('V0.29.68 directed image shows short planning and Vision phases without exposing their content', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const logs = [];
   const vision = await startJsonServer(async (_req, res) => {
@@ -4682,7 +4686,10 @@ test('V0.29.47 directed image keeps planning and Vision progress invisible to Cl
   assert.equal(response.status, 200);
   const text = await response.text();
   assert.match(text, /VISIBLE_FINAL/);
-  assert.doesNotMatch(text, /正在處理新的文件與圖片內容|正在準備圖片|正在請主模型規劃圖片分析需求|正在依照模型需求分析圖片|圖片 1\/1|目前處理步驟仍在進行/);
+  assert.doesNotMatch(text, /正在處理新的文件與圖片內容|正在準備圖片|正在請主模型規劃圖片分析需求|正在依照模型需求分析圖片|目前處理步驟仍在進行|模型處理中|SubmitVisualPlan|What is visible/);
+  assert.match(text, /圖片 1\/1/);
+  assert.match(text, /規劃判讀/);
+  assert.match(text, /視覺判讀/);
 
   const internalEvents = logs.map((entry) => entry.event);
   assert.ok(internalEvents.includes('directed_perception_planning_started'));

@@ -8,7 +8,7 @@ import { VisualAssetRegistry } from '../visual/asset-registry.js';
 import { analyzeVisualAssets as defaultAnalyzeVisualAssets } from '../visual/vision-client.js';
 import { analyzeGenericZoomFallback } from '../visual/generic-zoom.js';
 import { formatDirectedVisualInput } from '../visual/directed-vision.js';
-import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence } from './evidence-contract.js';
+import { formatDocumentEvidence, formatDocumentMapEvidence, formatImageEvidence, formatUnavailableImageEvidence, escapeEvidenceText } from './evidence-contract.js';
 import { controlTagName, scanControlTags } from './protocol-sanitizer.js';
 
 export function createMediaAdapters(config, signal, onProgress = () => {}, dependencies = {}) {
@@ -31,8 +31,10 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
   const onVisionEvent = dependencies.onVisionEvent || (() => {});
   const mediaProgress = dependencies.mediaProgress || null;
   const directedVisualStore = dependencies.directedVisualStore || null;
+  const directedProgressPaths = dependencies.directedProgressPaths || null;
   const directedHistoricalPaths = dependencies.directedHistoricalPaths || new Set();
   const { maxDecodedBytes, maxOutputChars } = config.limits;
+  let nativePdfImageBytes = 0;
 
   const diagnoseSourceControlTags = (value) => {
     const controlTags = scanControlTags(value);
@@ -178,7 +180,8 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       const key = scopePdfDocumentCacheKey(baseKey, pageScope);
       const filename = tracked?.filename || block.source.filename || block.title || context.filename || cachedOriginal?.filename || 'document.pdf';
       const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
-      return cachedAnalysis(key, () => cachedOriginal?.buffer ? Buffer.from(cachedOriginal.buffer) : readSource(block.source, 'application/pdf'), async (analysisSignal, buffer) => {
+      const loadDocument = () => cachedOriginal?.buffer ? Buffer.from(cachedOriginal.buffer) : readSource(block.source, 'application/pdf');
+      const produceDocument = async (analysisSignal, buffer) => {
         const fingerprint = mediaFingerprint(buffer, 'application/pdf');
         if (!effectiveSourceSha256) effectiveSourceSha256 = fingerprint.mediaSha256;
         if (!pageScope && readSourceRef && documentSourceCache) {
@@ -192,6 +195,9 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         const result = await parsePdf(buffer, {
           limits: config.limits, signal: analysisSignal, onProgress: reportProgress, pageScope,
           documentMapPageThreshold: config.limits?.documentMapPageThreshold ?? 20,
+          nativePages: config.nativePdfPassthrough === true,
+          maxNativeImageBytes: Math.max(0, maxDecodedBytes - nativePdfImageBytes),
+          textOnly: config.mediaCountOnly === true && config.nativePdfPassthrough !== true,
           vllmVisionUrl: config.vllmVisionUrl, vllmVisionModel: config.vllmVisionModel, vllmVisionApiKey: config.vllmVisionApiKey,
           vllmVisionProvider: config.vllmVisionProvider, vllmVisionThink: config.vllmVisionThink, vllmVisionTimeoutMs: config.vllmVisionTimeoutMs,
           analyzeVisualAssets: analyzeWithAdmission, cropImage,
@@ -227,8 +233,16 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
               warnings,
             }),
         };
+        const nativeBlocks = [normalizedBlock];
+        for (const page of result.native_pages || []) {
+          nativePdfImageBytes += Buffer.byteLength(page.image?.source?.data || '', 'base64');
+          if (nativePdfImageBytes > maxDecodedBytes) {
+            throw new HttpError(413, 'Rendered PDF pages exceed the request media byte limit. Read fewer pages.', { code: 'pdf_native_image_limit' });
+          }
+          nativeBlocks.push({ type: 'text', text: `PDF source ${escapeEvidenceText(filename)} — page ${page.page} (page image follows):` }, page.image);
+        }
         return {
-          block: normalizedBlock,
+          block: nativeBlocks.length > 1 ? nativeBlocks : normalizedBlock,
           metadata: {
             mediaType: 'application/pdf', documentMode: result.document_mode || 'full', pages: result.page_count ?? null,
             processedPages: result.processed_pages ?? result.page_count ?? null, sampledPages: result.sampled_pages || [],
@@ -237,7 +251,12 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
             visualUsed: Boolean(result.visual_used), warnings, truncated: Boolean(result.truncated || bounded.truncated),
           },
         };
-      }, { bypassContinuationPreload: context.messageIndex === continuationFreshMessageIndex });
+      };
+      if (config.nativePdfPassthrough === true || config.mediaCountOnly === true) {
+        // Native images are source input, never reusable semantic evidence from another backend.
+        return (await produceDocument(signal, await loadDocument())).block;
+      }
+      return cachedAnalysis(key, loadDocument, produceDocument, { bypassContinuationPreload: context.messageIndex === continuationFreshMessageIndex });
     },
 
     async adaptImage(block, context = {}) {
@@ -253,7 +272,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
       };
       const nativeVisionPassthrough = config.vllmBaseVisionEnabled === true
         && config.visionNativePassthrough === true
-        && ['direct_image', 'read_image'].includes(provenance.sourceKind);
+        && (config.nativePdfPassthrough === true || ['direct_image', 'read_image'].includes(provenance.sourceKind));
       if (nativeVisionPassthrough) {
         if (block.source?.type === 'base64') {
           onVisionEvent('native_vision_raw_passthrough_selected', {
@@ -291,6 +310,10 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           },
         };
       }
+      if (config.mediaCountOnly === true) {
+        return { type: 'text', text: `[Image ${escapeEvidenceText(filename)}: token-count placeholder; visual inference not performed.]` };
+      }
+      const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       if (config.visionOrchestrationMode === 'directed') {
         const currentPathKey = JSON.stringify(context.path || []);
         if (directedHistoricalPaths.has(currentPathKey)) {
@@ -303,6 +326,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         if (!directedVisualStore || typeof directedVisualStore.register !== 'function') {
           throw new HttpError(500, 'Directed visual store is unavailable for this request.', { code: 'directed_visual_store_unavailable' });
         }
+        await reportProgress('正在準備圖片…', { phase: 'image_start' });
         const sourceBuffer = await readSource(block.source, block.source.media_type);
         const normalized = await normalizeImage(sourceBuffer, { ...config.limits, signal });
         const receivedWidth = normalized.originalWidth || normalized.width;
@@ -320,6 +344,7 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
           origin: provenance.origin,
           originTool: provenance.originTool,
         });
+        directedProgressPaths?.set(asset.assetId, context.path);
         onDiagnostic('directed_visual_asset_registered', {
           asset_id: asset.assetId,
           media_type: asset.mediaType,
@@ -332,7 +357,6 @@ export function createMediaAdapters(config, signal, onProgress = () => {}, depen
         });
         return { type: 'text', text: formatDirectedVisualInput(asset) };
       }
-      const reportProgress = (message, details = {}) => onProgress(message, { ...details, path: context.path, filename });
       const fallback = {
         mediaType: block.source.media_type,
         width: null,

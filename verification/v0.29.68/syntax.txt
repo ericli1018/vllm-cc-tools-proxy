@@ -1,0 +1,7 @@
+
+> vllm-cc-tools-proxy@0.29.68 check
+> node scripts/check-syntax.js
+
+Syntax OK: 155 JavaScript files
+
+VERIFICATION_EXIT=0

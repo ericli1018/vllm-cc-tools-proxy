@@ -1714,10 +1714,10 @@ test('V0.29.50 completion probe hides candidate A and continues managed tools un
   assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_confirmed_final').length, 1);
 });
 
-test('V0.29.50 completion probe failure is logged and propagated without returning candidate final', async () => {
+test('V0.29.67 failed completion probe returns safe candidate instead of failing the main request', async () => {
   const diagnostics = [];
   let calls = 0;
-  await assert.rejects(runManagedLoop({
+  const safeResult = await runManagedLoop({
     model: 'm', messages: [{ role: 'user', content: 'finish' }],
   }, {
     upstream: async () => {
@@ -1728,21 +1728,23 @@ test('V0.29.50 completion probe failure is logged and propagated without returni
     executeTool: async () => ({}),
     completionProbeEnabled: true,
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
-  }), (error) => error.code === 'probe_upstream_failed');
+  });
 
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
+  assert.equal(safeResult.content[0].text, 'Candidate A.');
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_started'));
   assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed'
     && entry.details.code === 'probe_upstream_failed'));
   assert.equal(diagnostics.some((entry) => entry.event === 'completion_probe_confirmed_final'), false);
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_fallback'));
 });
 
-test('V0.29.50 completion probe count remains bounded per repeated candidate after real tool progress', async () => {
+test('V0.29.67 completion probe recurring candidate limit releases response instead of a 422 error', async () => {
   let calls = 0;
   let toolRound = 0;
   const diagnostics = [];
   const candidate = response([{ type: 'text', text: 'Same candidate final.' }], 'end_turn');
-  await assert.rejects(runManagedLoop({
+  const boundedResult = await runManagedLoop({
     model: 'm',
     tools: [{ name: 'WebSearch', input_schema: { type: 'object' } }],
     messages: [{ role: 'user', content: 'keep checking until complete' }],
@@ -1766,18 +1768,19 @@ test('V0.29.50 completion probe count remains bounded per repeated candidate aft
     completionProbeEnabled: true,
     maxCompletionProbesPerCandidate: 2,
     onDiagnostic: (event, details) => diagnostics.push({ event, details }),
-  }), (error) => error.code === 'completion_probe_limit');
+  });
 
+  assert.equal(boundedResult.content[0].text, 'Same candidate final.');
   assert.equal(calls, 7);
   assert.equal(toolRound, 2);
   assert.equal(diagnostics.filter((entry) => entry.event === 'completion_probe_started').length, 2);
-  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_failed'
-    && entry.details.code === 'completion_probe_limit'));
+  assert.ok(diagnostics.some((entry) => entry.event === 'completion_probe_suppressed'
+    && entry.details.reason === 'candidate_limit'));
 });
 
 test('V0.29.50 completion probe state is request-local and does not leak into a later managed request', async () => {
   let firstCalls = 0;
-  await assert.rejects(runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'first' }] }, {
+  const first = await runManagedLoop({ model: 'm', messages: [{ role: 'user', content: 'first' }] }, {
     upstream: async () => {
       firstCalls += 1;
       if (firstCalls === 1) return response([{ type: 'text', text: 'First candidate.' }], 'end_turn');
@@ -1785,7 +1788,8 @@ test('V0.29.50 completion probe state is request-local and does not leak into a 
     },
     executeTool: async () => ({}),
     completionProbeEnabled: true,
-  }), (error) => error.code === 'first_probe_failed');
+  });
+  assert.equal(first.content[0].text, 'First candidate.');
 
   const laterRequests = [];
   let laterCalls = 0;

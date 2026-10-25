@@ -1,5 +1,86 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.69 Per-Route Compact and Visual Policies
+
+`VLLM_MODEL_ROUTES` and `VLLM_MODEL_ROUTING_FILE` entries now accept strict JSON booleans:
+
+| Field | Default | true | false |
+| --- | --- | --- | --- |
+| `compact_use_route` | true | Compact uses the matched Route | Compact uses complete `VLLM_BASE_*` |
+| `visual_use_route` | true | Native-capable image/PDF input uses the matched Route | Dedicated `VLLM_VISION_*` analysis |
+| `vision_enabled` | global capability | Declare visual capability | Keep image content off that model |
+
+Native route vision also requires `VISION_NATIVE_PASSTHROUGH=true`. Unset `vision_enabled` inherits `VLLM_BASE_VISION_ENABLED`.
+Matched route compact policy takes priority over `CONTEXT_COMPACT_*`; unmatched fallback and routing-disabled requests retain the legacy dedicated-compact priority.
+Raw PDF is locally converted to bounded text/page-image blocks, preserving document maps and Read.pages; it is not sent as an unsupported raw PDF to a Chat Completions backend. Native PDF semantic caches are bypassed. Non-routing PDF behavior is unchanged.
+OpenAI tool-result images are preserved as following user multimodal content after the tool-result group, retaining tool IDs and page labels. Matched-route credentials are isolated from client credentials.
+The v0.29.68 shared media/model timeline remains in place. Streaming/non-streaming, mixed backend requests, native capability fallback and count-only paths have automated coverage.
+
+See [configuration and behavior](docs/MODEL_ROUTE_POLICIES_v0.29.69.md) and [validation report](change_log/V0.29.69-實作與驗證報告.md).
+Real vLLM + Claude Code has not been exercised here. The supplied Compose still pulls GitHub `main`; this ZIP does not update that source or your running service.
+
+
+## V0.29.68 Unified Image/PDF Progress Timeline
+
+Image and PDF work now shares the existing single-physical-line, append-only model timeline. Media preprocessing no longer introduces the older `模型處理中` multiline status header. A long line may still wrap visually in a narrow terminal; the Proxy does not inject a newline between stages.
+
+- Legacy image analysis, uploaded PDFs and Claude Code `Read(PDF)` page images emit short stages with safe basenames and actual page, batch or tile indices. The full source path, perception prompts and raw model planning are not displayed.
+- Directed Vision exposes only preparation, planning, waiting, analysis and result stages. `partial`, `unreadable` and failure are warnings, not successful completion. Forced `SubmitVisualPlan`, one-shot perception and model routing are unchanged.
+- Media and subsequent Main model share one timeline and clock. Native image passthrough and media-cache hits show Main model work only; they do not invent extra parsing or Vision work.
+- The existing 30-second visibility gate remains. Fast requests stay quiet; subagents remain SSE-ping-only; non-streaming clients still receive normal JSON. Heartbeat bars mean liveness, not token counts or estimated completion percentages.
+- No new ENV is required. `PROGRESS_VISIBLE_AFTER_MS=30000`, `PROGRESS_PING_INTERVAL_MS=5000` and `PROGRESS_HEARTBEAT_MS=30000` retain their defaults. Detailed legacy wording remains available in diagnostics, but is no longer the visible media progress format.
+
+Illustrative output only (the actual stages and elapsed seconds depend on the request):
+
+```text
+處理中 · 12:00:00 ○ 0s ◇ 媒體準備 1s ◇ [board.pdf] 抽字 · 頁 0/3 4s ◇ 視覺判讀 · 批次 1/2 | 35s ◇ 媒體就緒 35s ○ 40s ◐ 44s ◆
+```
+
+This release supersedes the **UI silence** described in the historical V0.29.47 section for Main Agent directed images; it does not expose the hidden planning contents or change Subagent silence.
+
+`compact_use_route`, `visual_use_route` and per-route `vision_enabled` are still pending proposals, **not implemented in this release**. This release only unifies progress and the events needed for it.
+
+See [the implementation and validation report](change_log/V0.29.68-圖片與PDF進度統一_實作與驗證報告.md). Real vLLM plus Claude Code UI has not been tested in this environment. The supplied Compose still pulls GitHub `main`; downloading this ZIP does not publish these changes or update a running container.
+
+
+## v0.29.67 — Completion Probe failure isolation and strict decision fallback
+
+After a valid Main `end_turn` reply, the hidden Completion Probe may use the forced
+`SubmitCompletionDecision` tool, or a **single strict JSON object** containing
+`decision` and optional `remaining_work` if the local model ignores tool choice.
+Free-form text is **never** treated as a decision.
+
+- An invalid, timed-out or unavailable hidden probe can retry once with a **different** JSON-only request, then **returns the original Main reply** rather than returning `completion_probe_invalid` to Claude Code. The fallback does **not** assert the task has been verified complete.
+- A valid forced decision tool call is authoritative even if a backend also emits extra text; that extra text is neither interpreted nor forwarded.
+- Request aborts and actual managed task deadline failures still propagate. This fail-open behavior applies **only** to the optional hidden completion check, not real Tool Calls or SSE framing validation.
+- The same exact candidate is probed at most **2** times within one Managed Request by default; when exhausted the original answer is returned without a 422 error.
+- A request's pinned model route also applies to its hidden probe. The `base_model_selected.source` value is now `model_route` for explicitly matched aliases, instead of misleadingly saying `vllm_base_model`.
+
+New optional environment variables (shown with defaults):
+
+```env
+COMPLETION_PROBE_ENABLED=true
+COMPLETION_PROBE_MAX_RETRIES=1
+COMPLETION_PROBE_TIMEOUT_MS=30000
+COMPLETION_PROBE_MAX_PER_CANDIDATE=2
+```
+
+`COMPLETION_PROBE_MAX_RETRIES=0` disables the extra JSON-only retry, but still
+releases a valid candidate on a probe failure. `COMPLETION_PROBE_ENABLED=false`
+turns off the entire completion check. These are **independent** of SSE `[DONE]`
+validation and managed Tool JSON recovery. The values are now explicitly passed
+through the bundled `compose.yaml` (previously they could be absent from the
+container when only set in an `.env` file).
+
+**Deployment note:** The included Compose command updates/clones GitHub `main`
+on boot. A downloaded ZIP does not change that remote branch. To test this ZIP,
+run its Node source directly or deploy the modified source through your usual
+repository/update procedure.
+
+Historical Completion Probe sections below describe earlier versions. The
+v0.29.67 behavior above supersedes their former 999-probe/fatal-error policy.
+See `change_log/V0.29.67-實作與驗證報告.md` for tests and limitations.
+
 ## v0.29.56 — OpenAI-compatible Base backend (phase 1)
 
 Set `VLLM_BASE_API_PROTOCOL=openai` to use an OpenAI-compatible `/v1/chat/completions` Base endpoint while retaining Claude Code `/v1/messages` frontend. Default `anthropic` preserves the previous Base protocol. **Phase 1 buffering and token-count limitations apply**: see [docs/OPENAI_BASE_BACKEND_v0.29.56.md](docs/OPENAI_BASE_BACKEND_v0.29.56.md).
@@ -39,7 +120,7 @@ Continuation is also one-shot at the Proxy layer:
 - If that next Main round again returns `stop_reason=end_turn` with zero tool calls, the Proxy accepts it immediately and does **not** launch another completion probe. This is logged as `completion_probe_continuation_declined` with `reason=main_end_turn_without_tool`.
 - If a probe returns `continue` on the last available managed round, the Proxy accepts the current candidate instead of forcing a request-ending `managed_tool_loop_limit`. This is logged as `completion_probe_continuation_suppressed` with `reason=round_budget`.
 
-`SubmitCompletionDecision` remains the probe's only available tool; the probe still cannot execute Bash, Read, Edit, Write, WebSearch, Agent, or any other user-work tool. `candidate_final`, one-shot state, and probe counters remain request-local and are never stored in session memory. The existing 999 per-candidate probe bound remains as a secondary guard for candidates that recur after genuine tool progress.
+`SubmitCompletionDecision` remains the probe's only available tool; the probe still cannot execute Bash, Read, Edit, Write, WebSearch, Agent, or any other user-work tool. `candidate_final`, one-shot state, and probe counters remain request-local and are never stored in session memory. The original 999 per-candidate probe bound (superseded in v0.29.67) remains in v0.29.54 as a secondary guard for candidates that recur after genuine tool progress.
 
 ## V0.29.53 Authoritative LANG_PROCESSOR_ENABLED
 
@@ -62,7 +143,7 @@ The decision contract is:
 
 The probe prompt explicitly distinguishes **required work** from optional improvements: things that *could* be done, suggested next steps, or work the user did not explicitly request do not justify continuation. The probe cannot see Bash, Read, Edit, Write, WebSearch, Agent, or other execution tools, so it cannot accidentally turn a simple question into autonomous work.
 
-`candidate_final`, probe counters, and hidden continuation messages remain request-local. The existing per-candidate maximum of 999 probes, diagnostics (`completion_probe_started`, `completion_probe_confirmed_final`, `completion_probe_continuation`, `completion_probe_failed`), final-language repair ordering, and managed task/round bounds remain in place. Probe output itself is never exposed to Claude Code.
+`candidate_final`, probe counters, and hidden continuation messages remain request-local. The historical v0.29.52 per-candidate maximum of 999 probes (superseded in v0.29.67), diagnostics (`completion_probe_started`, `completion_probe_confirmed_final`, `completion_probe_continuation`, `completion_probe_failed`), final-language repair ordering, and managed task/round bounds remain in place. Probe output itself is never exposed to Claude Code.
 
 V0.29.51 sustained loop confirmation, Directed Vision, PDF/Native Vision, Web/ToolSearch, Compact, startup CARD, runtime clock, and existing recovery paths are unchanged.
 
@@ -107,7 +188,7 @@ Probe behavior is deliberately narrow:
 - If the probe returns **no tool use**, the probe response is discarded, the original candidate final is restored, and the existing final-language repair runs afterward. Only the original candidate text is eligible for client delivery.
 - If the probe returns **tool use**, the candidate final is permanently hidden, its thinking/text remains only in this request's hidden continuation history, and the existing managed tool flow continues from the probe response. The final client answer must come from a later genuinely completed response.
 - Probe generation is hidden from visible managed progress/model-round UI and never becomes a Claude Code conversation turn by itself.
-- Each exact candidate final is bounded to at most **999** hidden probes. A limit breach logs `completion_probe_failed` and fails with `completion_probe_limit`; the existing managed-round/task bounds remain additional safety limits.
+- Historically each exact candidate final was bounded to **999** hidden probes and a limit breach could fail with `completion_probe_limit` (changed in v0.29.67); the existing managed-round/task bounds remain additional safety limits.
 - Candidate state, probe counters, and hidden continuation history are local variables inside one `runManagedLoop()` invocation only. They are never written to session memory, continuation caches, media caches, or persistent state and therefore disappear when that request returns or throws, including disconnect/failure paths.
 
 Structured diagnostics are:

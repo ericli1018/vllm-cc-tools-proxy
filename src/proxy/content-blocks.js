@@ -39,7 +39,7 @@ async function adaptBlock(block, adapters, context, depth = 0, ancestors = new W
         parentType: block.type,
         toolUseId: block.tool_use_id || context.toolUseId,
       }, depth + 1, ancestors);
-      if (adapted !== null && adapted !== undefined) clone.content.push(adapted);
+      if (adapted !== null && adapted !== undefined) clone.content.push(...(Array.isArray(adapted) ? adapted : [adapted]));
     }
     if (block.type === 'tool_result' && clone.content.length === 0) clone.content = '';
   }
@@ -65,7 +65,7 @@ export async function adaptMessages(messages, adapters = {}) {
           parentType: null,
           toolUseId: null,
         }, 0, new WeakSet());
-        if (adapted !== null && adapted !== undefined) clone.content.push(adapted);
+        if (adapted !== null && adapted !== undefined) clone.content.push(...(Array.isArray(adapted) ? adapted : [adapted]));
       }
     } else if (typeof message.content === 'string') {
       clone.content = message.content;

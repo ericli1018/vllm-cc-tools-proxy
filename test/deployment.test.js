@@ -891,7 +891,7 @@ test('V0.29.50 completion probe is request-local bounded and enabled only on pro
   const configSource = await fs.readFile(new URL('../src/config.js', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(managedLoopSource, /DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999/);
+  assert.match(managedLoopSource, /DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 2/);
   assert.match(managedLoopSource, /completion_probe_started/);
   assert.match(managedLoopSource, /completion_probe_confirmed_final/);
   assert.match(managedLoopSource, /completion_probe_continuation/);

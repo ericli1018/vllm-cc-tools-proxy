@@ -310,7 +310,8 @@ export async function parsePdf(buffer, options) {
     vllmVisionProvider = 'vllm', vllmVisionThink = false, vllmVisionTimeoutMs = 120000,
     analyzeVisualAssets = defaultAnalyzeVisualAssets, cropImage = defaultCropImage,
     classifyPage = defaultClassifyPdfPage, pageScope = null,
-    documentMapPageThreshold = 20,
+    documentMapPageThreshold = 20, nativePages = false, textOnly = false,
+    maxNativeImageBytes = limits.maxDecodedBytes,
   } = options;
   if (!Buffer.isBuffer(buffer) || detectMediaType(buffer) !== 'application/pdf') throw new HttpError(422, 'Input is not a valid PDF.', { code: 'invalid_pdf' });
   if (buffer.length > limits.maxDecodedBytes) throw new HttpError(413, 'PDF exceeds the configured byte limit.', { code: 'media_too_large' });
@@ -348,6 +349,37 @@ export async function parsePdf(buffer, options) {
       const insufficient = nativeText.length < limits.nativeTextMinCharsPerPage;
       if (insufficient) insufficientCount += 1;
       pages.push({ page: logicalPage, physicalPage, nativeText, insufficient, route: 'TEXT', confidence: 1, reason: 'native text path' });
+    }
+
+    if (nativePages || textOnly) {
+      const native = [];
+      let imageBytes = 0;
+      if (nativePages) {
+        for (const page of pages) {
+          if (signal?.aborted) throw new DOMException('The operation was aborted.', 'AbortError');
+          await onProgress(`正在準備第 ${page.page} 頁供主模型判讀…`, {
+            phase: 'pdf_visual_prepare', page: page.page, completed: native.length, total: pages.length,
+          });
+          const normalized = await renderPage(inputPath, directory, page.physicalPage, limits, signal, runner, overviewDpi(info.pageSize), 'native');
+          imageBytes += normalized.buffer.length;
+          // Bound the aggregate rendered payload, not just each individual page.
+          if (imageBytes > Math.min(limits.maxDecodedBytes, maxNativeImageBytes)) {
+            throw new HttpError(413, 'Rendered PDF pages exceed the media byte limit. Read a smaller page range.', { code: 'pdf_native_image_limit' });
+          }
+          native.push({ page: page.page, image: { type: 'image', source: {
+            type: 'base64', media_type: normalized.mediaType, data: normalized.buffer.toString('base64'),
+          } } });
+        }
+      }
+      const bounded = boundedText(pages.map(page => `PDF page ${page.page} (native text):\n${page.nativeText}`).join('\n\n'), limits.maxOutputChars);
+      await onProgress('PDF 本地處理完成。', { phase: 'pdf_complete', completed: pages.length, total: pages.length });
+      return { parser: nativePages ? 'poppler-native-pages' : 'poppler-count-only',
+        document_mode: pagePlan.focused ? 'focused' : 'full', page_count: info.pages,
+        processed_pages: pages.length, requested_pages: pagePlan.requestedPages, page_scope_mode: pagePlan.mode,
+        visual_used: false, visual_batch_count: 0, classification_count: 0, native_pages: native,
+        markdown: bounded.text, truncated: bounded.truncated, original_chars: bounded.originalChars,
+        returned_chars: bounded.text.length, warnings: textOnly ? ['count_only_visual_evidence_not_generated'] : [],
+      };
     }
 
     const visionEnabled = Boolean(vllmVisionUrl && vllmVisionModel);

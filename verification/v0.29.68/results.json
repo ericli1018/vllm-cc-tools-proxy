@@ -1,0 +1,37 @@
+{
+  "version": "0.29.68",
+  "node": "22.16.0",
+  "tests": 841,
+  "new_unit_tests": 11,
+  "new_http_tests": 18,
+  "syntax_js_files": 155,
+  "real_vllm_claude_code_verified": false,
+  "checks": {
+    "final-tests": {
+      "command": [
+        "npm",
+        "test"
+      ],
+      "exit_code": 0,
+      "seconds": 7.08
+    },
+    "final-syntax": {
+      "command": [
+        "npm",
+        "run",
+        "check"
+      ],
+      "exit_code": 0,
+      "seconds": 3.35
+    },
+    "full-verify": {
+      "command": [
+        "sh",
+        "-x",
+        "scripts/verify.sh"
+      ],
+      "exit_code": 0,
+      "seconds": 41.93
+    }
+  }
+}

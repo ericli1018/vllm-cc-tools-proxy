@@ -140,6 +140,8 @@ export class ProgressStream {
       content: '',
       rendered: false,
       heartbeatRun: 0,
+      mediaKey: '',
+      mediaContext: '',
     };
     this.visible = false;
     this.nextContentIndex = 0;
@@ -366,8 +368,9 @@ export class ProgressStream {
     const isBusyWait = timelineEnabled && phase === 'upstream_busy_wait';
     const isTerminal = ['handoff_to_claude_code', 'returning_visible_response', 'returning_model_output'].includes(phase);
     const isHeartbeat = kind === 'semantic_heartbeat';
+    const isMedia = details.media_timeline === true;
 
-    if (!this.modelTimeline.active && !(isStart || isPhase || isFirstSemantic || isBusyWait)) return null;
+    if (!this.modelTimeline.active && !(isStart || isPhase || isFirstSemantic || isBusyWait || isMedia)) return null;
 
     let emit = false;
     let append = '';
@@ -390,7 +393,20 @@ export class ProgressStream {
       emit = true;
     }
 
-    if (isBusyWait) {
+    if (isMedia) {
+      const key = String(details.media_key || details.phase || '');
+      if (this.modelTimeline.mediaKey !== key) {
+        const inline = value => String(value || '').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, ' ').slice(0, 400);
+        const context = inline(details.media_context);
+        const contextFragment = context && context !== this.modelTimeline.mediaContext ? ` [${context}]` : '';
+        const elapsed = this.#modelTimelineElapsedSeconds(details, changedAt);
+        append += this.#appendModelTimeline(` ${elapsed}s ${details.media_warning ? '⚠' : '◇'}${contextFragment} ${inline(details.media_label)}`);
+        this.modelTimeline.mediaKey = key;
+        this.modelTimeline.mediaContext = context;
+        this.modelTimeline.phase = 'media';
+        emit = true;
+      }
+    } else if (isBusyWait) {
       append += this.#appendModelTimeline(' ↻');
       emit = true;
     } else if (isPhase) {

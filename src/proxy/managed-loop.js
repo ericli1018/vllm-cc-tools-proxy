@@ -34,7 +34,9 @@ const DEFAULT_MODEL_ROUND_TIMEOUT_MS = 360_000;
 const DEFAULT_MODEL_STALL_TIMEOUT_MS = 90_000;
 const DEFAULT_TOOL_STALL_TIMEOUT_MS = 300_000;
 const DEFAULT_MAX_STALL_RECOVERY_ROUNDS = 2;
-const DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 999;
+const DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE = 2;
+const DEFAULT_COMPLETION_PROBE_MAX_RETRIES = 1;
+const DEFAULT_COMPLETION_PROBE_TIMEOUT_MS = 30_000;
 const COMPLETION_DECISION_TOOL_NAME = 'SubmitCompletionDecision';
 const COMPLETION_PROBE_PROMPT = `[VCC_COMPLETION_DECISION_PROBE_V1]
 Do not perform any work. Determine only whether the latest assistant response is a valid stopping point.
@@ -44,7 +46,15 @@ Choose decision=complete for a substantive answer, explanation, recommendation, 
 Choose decision=await_user when further progress requires user clarification, approval, choice, credentials, missing input, or another external response.
 Choose decision=continue ONLY when the latest assistant response is clearly a transitional response that explicitly commits to performing a concrete operation required by the user's request, but stopped before performing that operation, and that operation can be completed now without additional user input.
 Do not choose CONTINUE merely because the response could be improved, expanded, verified further, researched further, or followed by optional work. Optional improvements, suggested next steps, and work not explicitly requested do not count as unfinished work. Could do more is not unfinished work.
-Do not call, simulate, or describe any other tool.`;
+Do not call, simulate, or describe any other tool.
+If the backend cannot emit the required tool call, the ONLY acceptable text fallback is a single JSON object with decision and optional remaining_work fields; no prose or Markdown.`;
+const COMPLETION_PROBE_JSON_RETRY_PROMPT = `[VCC_COMPLETION_DECISION_PROBE_JSON_RETRY_V1]
+Your previous decision output was not usable. Do not perform the user's task.
+Return ONLY one JSON object and no Markdown, reasoning, or surrounding text.
+Allowed outputs: {"decision":"complete"}, {"decision":"await_user"}, or {"decision":"continue","remaining_work":"one specific unfinished operation"}.
+Default to complete for a substantive answer that satisfies the request. Use await_user only when user or external input is needed.
+Use continue ONLY if the last assistant message explicitly promised a concrete required operation but stopped before performing it.
+Optional improvements or further research are NOT unfinished work.`;
 const COMPLETION_CONTINUATION_PROMPT = `[VCC_COMPLETION_CONTINUATION_V1]
 The hidden completion decision determined that the user's explicit request is not yet fully satisfied. Continue only the unfinished work required by the original request. Do not restate the plan, repeat completed work, or perform optional improvements that were not explicitly requested. Use the normal tools only if they are actually needed. Do not mention this hidden completion check.`;
 
@@ -96,31 +106,80 @@ function buildCompletionProbeRequest(request, candidateFinal) {
   return probe;
 }
 
+function buildCompletionProbeJsonRetryRequest(request, candidateFinal) {
+  const probe = buildCompletionProbeRequest(request, candidateFinal);
+  probe.tool_choice = { type: 'none' };
+  probe.messages.at(-1).content = [{ type: 'text', text: COMPLETION_PROBE_JSON_RETRY_PROMPT }];
+  return probe;
+}
+
 function completionProbeInvalid(message) {
   return new HttpError(502, message, { code: 'completion_probe_invalid', retryable: true });
 }
 
-function parseCompletionDecision(response) {
+function completionProbeResponseShape(response) {
   const content = Array.isArray(response?.content) ? response.content : [];
-  const toolUses = content.filter((block) => block?.type === 'tool_use');
-  if (toolUses.length !== 1 || toolUses[0]?.name !== COMPLETION_DECISION_TOOL_NAME) {
-    throw completionProbeInvalid('Completion decision probe must return exactly one SubmitCompletionDecision tool call.');
-  }
-  const visibleText = content.some((block) => block?.type === 'text' && String(block.text || '').trim());
-  if (visibleText) throw completionProbeInvalid('Completion decision probe returned unexpected visible text.');
-  const input = toolUses[0]?.input;
+  return {
+    probe_stop_reason: typeof response?.stop_reason === 'string' ? response.stop_reason.slice(0, 48) : null,
+    probe_block_types: content.slice(0, 8).map((block) => String(block?.type || 'unknown').slice(0, 32)),
+    probe_tool_count: content.filter((block) => block?.type === 'tool_use').length,
+    probe_text_bytes: content.reduce((sum, block) => block?.type === 'text'
+      ? sum + Buffer.byteLength(String(block.text || '')) : sum, 0),
+  };
+}
+
+function validatedCompletionDecision(input, format, ignoredTextBytes = 0) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw completionProbeInvalid('Completion decision probe tool input is invalid.');
+    throw completionProbeInvalid('Completion decision probe input must be an object.');
   }
-  const decision = String(input.decision || '').trim();
+  if (Object.keys(input).some((key) => !['decision', 'remaining_work'].includes(key))) {
+    throw completionProbeInvalid('Completion decision probe returned unexpected fields.');
+  }
+  const decision = input.decision;
   if (!['complete', 'await_user', 'continue'].includes(decision)) {
     throw completionProbeInvalid('Completion decision probe returned an invalid decision.');
   }
-  const remainingWork = typeof input.remaining_work === 'string' ? input.remaining_work.trim().slice(0, 2000) : '';
+  if (input.remaining_work !== undefined && typeof input.remaining_work !== 'string') {
+    throw completionProbeInvalid('Completion decision probe remaining_work must be a string.');
+  }
+  const remainingWork = typeof input.remaining_work === 'string' ? input.remaining_work.trim() : '';
+  if (remainingWork.length > 2000) {
+    throw completionProbeInvalid('Completion decision probe remaining_work exceeds the limit.');
+  }
   if (decision === 'continue' && !remainingWork) {
     throw completionProbeInvalid('Completion decision probe must identify remaining_work when decision=continue.');
   }
-  return { decision, remainingWork };
+  return { decision, remainingWork, format, ignoredTextBytes };
+}
+
+function parseCompletionDecision(response) {
+  const content = Array.isArray(response?.content) ? response.content : [];
+  if (response?.stop_reason === 'max_tokens') {
+    throw completionProbeInvalid('Completion decision probe output was truncated.');
+  }
+  const toolUses = content.filter((block) => block?.type === 'tool_use');
+  const visibleText = content.filter((block) => block?.type === 'text')
+    .map((block) => String(block.text || '')).join('').trim();
+  if (toolUses.length === 1 && toolUses[0]?.name === COMPLETION_DECISION_TOOL_NAME) {
+    if (content.some((block) => !['text', 'thinking', 'tool_use'].includes(block?.type))) {
+      throw completionProbeInvalid('Completion decision probe contained unsupported blocks.');
+    }
+    // A valid forced decision tool call is authoritative. Some local backends also
+    // emit explanatory text; never expose it or interpret it as another decision.
+    return validatedCompletionDecision(toolUses[0].input, 'tool_call', Buffer.byteLength(visibleText));
+  }
+  if (toolUses.length !== 0 || content.some((block) => !['text', 'thinking'].includes(block?.type))) {
+    throw completionProbeInvalid('Completion decision probe must return one decision tool call or strict JSON.');
+  }
+  // Compatibility fallback for backends that ignore tool_choice. No free prose,
+  // labels, Markdown fences, or JSON embedded in an explanation is accepted.
+  if (!visibleText || Buffer.byteLength(visibleText) > 2300 || !visibleText.startsWith('{') || !visibleText.endsWith('}')) {
+    throw completionProbeInvalid('Completion decision probe returned unexpected visible text.');
+  }
+  let input;
+  try { input = JSON.parse(visibleText); }
+  catch { throw completionProbeInvalid('Completion decision probe visible JSON is invalid.'); }
+  return validatedCompletionDecision(input, 'strict_json');
 }
 
 function buildCompletionContinuationRequest(request, candidateFinal) {
@@ -397,6 +456,8 @@ function mergeManagedStallRecoveryResponse(blocks, response) {
 function managedTimeoutError(code, timeoutMs, phase, extraDetails = {}) {
   const message = code === 'managed_task_timeout'
     ? 'Managed task exceeded its total execution deadline.'
+    : code === 'completion_probe_timeout'
+      ? 'Completion decision probe exceeded its time limit.'
     : code === 'managed_model_stall_timeout'
       ? 'Base model response stalled after upstream response bytes began arriving.'
       : 'Base model did not complete the managed round within the bounded model deadline.';
@@ -983,6 +1044,8 @@ export async function runManagedLoop(initialRequest, {
   onModelRoundState = () => {},
   compressContinuationWindow = null,
   maxCompletionProbesPerCandidate = DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE,
+  completionProbeMaxRetries = DEFAULT_COMPLETION_PROBE_MAX_RETRIES,
+  completionProbeTimeoutMs = DEFAULT_COMPLETION_PROBE_TIMEOUT_MS,
   completionProbeEnabled = false,
 } = {}) {
   const request = structuredClone(initialRequest);
@@ -1021,10 +1084,15 @@ export async function runManagedLoop(initialRequest, {
   let candidateFinal = null;
   let completionContinuationPending = false;
   const completionProbeAttempts = new Map();
-  const completionProbeLimit = Math.min(
-    DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE,
-    Math.max(1, Math.floor(Number(maxCompletionProbesPerCandidate) || DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE)),
-  );
+  const completionProbeLimit = Math.min(10, Math.max(1,
+    Number.isFinite(Number(maxCompletionProbesPerCandidate))
+      ? Math.floor(Number(maxCompletionProbesPerCandidate)) : DEFAULT_MAX_COMPLETION_PROBES_PER_CANDIDATE));
+  const completionRetryLimit = Math.min(2, Math.max(0,
+    Number.isFinite(Number(completionProbeMaxRetries))
+      ? Math.floor(Number(completionProbeMaxRetries)) : DEFAULT_COMPLETION_PROBE_MAX_RETRIES));
+  const completionProbeTimeout = Math.max(1,
+    Number.isFinite(Number(completionProbeTimeoutMs))
+      ? Math.floor(Number(completionProbeTimeoutMs)) : DEFAULT_COMPLETION_PROBE_TIMEOUT_MS);
 
   const publishServerBlock = async (phase, block) => {
     if (liveServerEvents) await onServerToolEvent({ phase, block: structuredClone(block) });
@@ -1335,50 +1403,96 @@ export async function runManagedLoop(initialRequest, {
       const candidateKey = completionCandidateKey(candidateFinal);
       const probeAttempt = (completionProbeAttempts.get(candidateKey) || 0) + 1;
       if (probeAttempt > completionProbeLimit) {
-        const error = new HttpError(422, 'Completion probe limit reached for the same candidate final.', {
-          code: 'completion_probe_limit',
-          retryable: false,
-          details: { probe_limit: completionProbeLimit },
-        });
-        await onDiagnostic('completion_probe_failed', {
+        await onDiagnostic('completion_probe_suppressed', {
           round: round + 1,
           probe_attempt: probeAttempt,
           probe_limit: completionProbeLimit,
-          code: error.code,
+          reason: 'candidate_limit',
           ...candidateTelemetry(candidateFinal),
         });
+        const boundedFinal = candidateFinal;
         candidateFinal = null;
-        throw error;
+        return withExternalServerPrefix(boundedFinal, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
       }
       completionProbeAttempts.set(candidateKey, probeAttempt);
-      const probeRequest = buildCompletionProbeRequest(request, candidateFinal);
       await onDiagnostic('completion_probe_started', {
         round: round + 1,
         probe_attempt: probeAttempt,
         probe_limit: completionProbeLimit,
+        retry_limit: completionRetryLimit,
+        timeout_ms: completionProbeTimeout,
         ...candidateTelemetry(candidateFinal),
       });
       let probeResponse;
       let completionDecision;
-      try {
-        probeResponse = await containedUpstream(probeRequest, signal, { hiddenCompletionProbe: true });
-        if (Array.isArray(probeResponse?.content)) {
-          const normalizedContent = probeResponse.content.map((block) => normalizeManagedToolUseBlock(block));
-          if (normalizedContent.some((block, index) => block !== probeResponse.content[index])) {
-            probeResponse = { ...probeResponse, content: normalizedContent };
-          }
+      let probeError = null;
+      for (let retryAttempt = 0; retryAttempt <= completionRetryLimit; retryAttempt += 1) {
+        const probeRequest = retryAttempt === 0
+          ? buildCompletionProbeRequest(request, candidateFinal)
+          : buildCompletionProbeJsonRetryRequest(request, candidateFinal);
+        if (retryAttempt > 0) {
+          await onDiagnostic('completion_probe_retry_started', {
+            round: round + 1,
+            probe_attempt: probeAttempt,
+            retry_attempt: retryAttempt,
+            retry_limit: completionRetryLimit,
+            strategy: 'strict_json',
+          });
         }
-        completionDecision = parseCompletionDecision(probeResponse);
-      } catch (error) {
-        await onDiagnostic('completion_probe_failed', {
+        probeResponse = null;
+        try {
+          // Probe timeout is independent of Main's model round deadline. It
+          // aborts only this hidden request, never a valid candidate final.
+          probeResponse = await runWithBoundedTime(
+            (probeSignal) => containedUpstream(probeRequest, probeSignal, { hiddenCompletionProbe: true }),
+            { signal, timeoutMs: completionProbeTimeout, timeoutCode: 'completion_probe_timeout', phase: 'probe' },
+          );
+          if (Array.isArray(probeResponse?.content)) {
+            const normalizedContent = probeResponse.content.map((block) => normalizeManagedToolUseBlock(block));
+            if (normalizedContent.some((block, index) => block !== probeResponse.content[index])) {
+              probeResponse = { ...probeResponse, content: normalizedContent };
+            }
+          }
+          completionDecision = parseCompletionDecision(probeResponse);
+          if (completionDecision.ignoredTextBytes > 0) {
+            await onDiagnostic('completion_probe_extra_text_ignored', {
+              round: round + 1, bytes: completionDecision.ignoredTextBytes,
+            });
+          }
+          if (completionDecision.format === 'strict_json') {
+            await onDiagnostic('completion_probe_json_accepted', {
+              round: round + 1, retry_attempt: retryAttempt,
+            });
+          }
+          probeError = null;
+          break;
+        } catch (error) {
+          if (signal?.aborted || error?.name === 'AbortError' || error?.code === 'managed_task_timeout') throw error;
+          probeError = error;
+          await onDiagnostic('completion_probe_failed', {
+            round: round + 1,
+            probe_attempt: probeAttempt,
+            probe_limit: completionProbeLimit,
+            retry_attempt: retryAttempt,
+            retry_limit: completionRetryLimit,
+            code: String(error?.code || error?.name || 'completion_probe_failed').slice(0, 80),
+            ...completionProbeResponseShape(probeResponse),
+            ...candidateTelemetry(candidateFinal),
+          });
+        }
+      }
+      if (probeError) {
+        await onDiagnostic('completion_probe_fallback', {
           round: round + 1,
           probe_attempt: probeAttempt,
-          probe_limit: completionProbeLimit,
-          code: String(error?.code || error?.name || 'completion_probe_failed'),
+          retry_limit: completionRetryLimit,
+          reason: String(probeError?.code || probeError?.name || 'unknown').slice(0, 80),
+          action: 'return_original_candidate',
           ...candidateTelemetry(candidateFinal),
         });
+        const safeFinal = candidateFinal;
         candidateFinal = null;
-        throw error;
+        return withExternalServerPrefix(safeFinal, externalServerPrefix, serverUsageCounts, liveServerEvents, materializeServerToolBlocks);
       }
       if (completionDecision.decision === 'complete' || completionDecision.decision === 'await_user') {
         await onDiagnostic('completion_probe_confirmed_final', {

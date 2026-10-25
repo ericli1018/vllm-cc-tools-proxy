@@ -18,11 +18,22 @@ export function toOpenAIRequest(request) {
       messages.push(output);
     } else if (msg.role === 'user') {
       const pending = [];
+      const toolVisuals = [];
       const flush = () => { if (pending.length) messages.push({ role: 'user', content: pending.splice(0) }); };
       for (const block of blocks) {
         if (block.type === 'tool_result') {
           flush();
           messages.push({ role: 'tool', tool_call_id: block.tool_use_id, content: textOf(block.content) });
+          if (Array.isArray(block.content) && block.content.some(part => part?.type === 'image')) {
+            toolVisuals.push({ type: 'text', text: `Visual source from tool result ${block.tool_use_id}:` });
+            for (const part of block.content) {
+              if (part?.type === 'text') toolVisuals.push({ type: 'text', text: part.text || '' });
+              else if (part?.type === 'image') {
+                if (part.source?.type !== 'base64') throw new HttpError(400, 'OpenAI upstream requires base64 image sources.', { code: 'unsupported_content' });
+                toolVisuals.push({ type: 'image_url', image_url: { url: `data:${part.source.media_type || 'image/png'};base64,${part.source.data}` } });
+              }
+            }
+          }
         } else if (block.type === 'text') pending.push({ type: 'text', text: block.text || '' });
         else if (block.type === 'image') {
           const source = block.source || {};
@@ -31,6 +42,7 @@ export function toOpenAIRequest(request) {
         } else throw new HttpError(400, `Unsupported Anthropic content block: ${block.type}`, { code: 'unsupported_content' });
       }
       flush();
+      if (toolVisuals.length) messages.push({ role: 'user', content: toolVisuals });
     } else throw new HttpError(400, `Unsupported message role: ${msg.role}`, { code: 'unsupported_role' });
   }
   const out = { model: request.model, messages, stream: Boolean(request.stream) };
