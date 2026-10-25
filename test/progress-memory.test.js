@@ -20,7 +20,7 @@ test('V0.29.12 disposed ProgressStream is collectible after timer and response r
       heartbeatIntervalMs: 60000,
     });
     await progress.open();
-    await progress.update('pending', { details: { phase: 'pending' } });
+    await progress.update('pending', { details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'thinking' } });
     progress.startSemanticHeartbeat(() => 'heartbeat');
     const ref = new WeakRef(progress);
     await progress.dispose();

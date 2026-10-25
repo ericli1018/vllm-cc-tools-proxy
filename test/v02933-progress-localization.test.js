@@ -93,16 +93,16 @@ test('V0.29.33 ProgressStream emits one timestamped neutral header and keeps it 
     pingIntervalMs: 60_000,
   });
   await progress.open();
-  await progress.update('◐ 模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◐ 模型開始思考 · 0 B', { force: true, details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'thinking' } });
   await new Promise((resolve) => setTimeout(resolve, 5));
-  await progress.update('◆ 模型開始回應 · 596 B', { force: true, details: { phase: 'model_stream_phase' } });
+  await progress.update('◆ 模型開始回應 · 596 B', { force: true, details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'response' } });
   await progress.closeProgress('模型已產生下一步工具；正在交還 Claude Code 執行…');
   await progress.stop();
 
   const wire = response.chunks.join('');
-  const matches = [...wire.matchAll(/模型處理中 · (\d{2}:\d{2}:\d{2})/g)];
+  const matches = [...wire.matchAll(/處理中 · (\d{2}:\d{2}:\d{2})/g)];
   assert.equal(matches.length, 1, wire);
-  assert.doesNotMatch(wire, /目前處理進度：/);
+  assert.doesNotMatch(wire, /模型處理中|目前處理進度：/);
   assert.doesNotMatch(wire, /主模型/);
 });
 

@@ -258,3 +258,37 @@ test('V0.29.69 rendered PDF request cannot exceed the configured request byte li
   const wire = await res.text(); assert.equal(res.status, 413, wire);
   assert.match(wire, /pdf_native_request_limit/); assert.equal(seen.route.length, 0);
 });
+
+// Regression: a fresh native Read + managed tools used to open the old renderer
+// before the real model-round callback initialized the new timeline.
+for (const protocol of ['anthropic', 'openai']) for (const kind of ['image', 'read-pdf']) {
+  test(`V0.29.70 HTTP ${protocol} native ${kind} with managed tools has no legacy preamble`, async t => {
+    const { post, seen } = await setup(t, { protocol, extraConfig: { responseLanguage: 'zh-TW', progressVisibleAfterMs: 1, progressHeartbeatMs: 10 } });
+    const file = kind === 'image' ? '/private/screen.png' : '/private/scan.pdf';
+    const res = await post({ stream: true,
+      tools: [{ name: 'WebSearch', description: 'Search the web', input_schema: { type: 'object', properties: { query: { type: 'string' } } } }],
+      messages: [
+        { role: 'user', content: '檢查檔案內容。' },
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'read-native', name: 'Read', input: { file_path: file, ...(kind === 'read-pdf' ? { pages: '42' } : {}) } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'read-native', content: [image()] }] },
+      ],
+    });
+    const wire = await res.text(); assert.equal(res.status, 200, wire);
+    assert.match(wire, /ROUTE_OK/);
+    assert.doesNotMatch(wire, /模型處理中|正在請模型規劃下一步|正在請模型根據工具結果繼續/);
+    const events = wire.split(/\r?\n/).filter(line => line.startsWith('data: ')).map(line => JSON.parse(line.slice(6)));
+    const blocks = new Map();
+    for (const e of events) {
+      if (e.type === 'content_block_start') blocks.set(e.index, { type: e.content_block.type, text: e.content_block.text || '' });
+      if (e.type === 'content_block_delta' && e.delta.type === 'text_delta') blocks.get(e.index).text += e.delta.text;
+    }
+    const timelines = [...blocks.values()].filter(b => b.text.startsWith('處理中 · '));
+    assert.equal(timelines.length, 1, wire);
+    assert.doesNotMatch(timelines[0].text.replace(/\n\n$/, ''), /\n/);
+    assert.equal(seen.base.length, 0);
+    assert.equal(seen.vision.length, 0);
+    assert.equal(seen.route.length, 1, 'no extra inference introduced for progress');
+    assert.ok(seen.logs.some(e => e.event === 'managed_task_progress' && e.phase === 'managed_model_round_start'), 'exercise the formerly leaking callback');
+    assert.equal(events.filter(e => e.type === 'message_stop').length, 1);
+  });
+}

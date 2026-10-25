@@ -658,7 +658,9 @@ test('V0.29.33 localizes neutral timestamped model progress and preserves legacy
   const languageSource = await fs.readFile(new URL('../src/i18n/response-language.js', import.meta.url), 'utf8');
   const readme = await fs.readFile(new URL('../README.md', import.meta.url), 'utf8');
   const changeLogEntries = await fs.readdir(new URL('../change_log/', import.meta.url));
-  assert.match(progressSource, /progressHeader = progressBlockHeader\(this\.locale, \{ timestampMs: this\.startedAt \}\)/);
+  // V0.29.70 keeps legacy labels only for history stripping; no live legacy renderer.
+  assert.match(progressSource, /allProgressBlockHeaders\(\)/);
+  assert.doesNotMatch(progressSource, /this\.progressHeader/);
   assert.match(languageSource, /progressHeader: '模型處理中'/);
   assert.match(languageSource, /progressHeader: 'Model processing'/);
   assert.doesNotMatch(languageSource, /主模型|Main model|main model|main-model|メインモデル|주 모델/);

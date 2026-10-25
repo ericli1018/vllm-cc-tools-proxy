@@ -1,8 +1,9 @@
 import crypto from 'node:crypto';
 import { writeChunk } from '../lib/http.js';
 import { normalizeAnthropicUsage } from './anthropic-usage.js';
-import { allProgressBlockHeaders, modelTimelineHeader, progressBlockHeader, statusText } from '../i18n/response-language.js';
+import { allProgressBlockHeaders, modelTimelineHeader, statusText } from '../i18n/response-language.js';
 
+// Retained only for recognizing/removing progress from older conversation history.
 export const PROGRESS_BLOCK_HEADER = '模型處理中';
 const LEGACY_PROGRESS_BLOCK_HEADERS = Object.freeze([
   '目前處理進度：',
@@ -130,7 +131,6 @@ export class ProgressStream {
     this.carrier = carrier === 'thinking' ? 'thinking' : 'text';
     this.visibleProgressEnabled = visibleProgressEnabled !== false;
     this.startedAt = Date.now();
-    this.progressHeader = progressBlockHeader(this.locale, { timestampMs: this.startedAt });
     this.timelineHeader = '';
     this.modelTimeline = {
       active: false,
@@ -138,7 +138,6 @@ export class ProgressStream {
       phase: 'waiting',
       round: 0,
       content: '',
-      rendered: false,
       heartbeatRun: 0,
       mediaKey: '',
       mediaContext: '',
@@ -442,12 +441,12 @@ export class ProgressStream {
         phase: entry.details.phase,
         revision: entry.revision,
         changedAt: entry.changedAt,
-        renderMode: 'append',
+        renderMode: 'timeline_inline',
       };
-      const message = String(entry.message);
-      const timeline = entry.timeline || null;
+      const timeline = entry.timeline;
       const thinkingCarrier = this.carrier === 'thinking';
-      if (timeline?.active && !timeline.emit) return;
+      // Never fall back to the retired multiline header/message renderer.
+      if (!timeline?.active || !timeline.emit) return;
 
       if (!this.progressBlockOpen) {
         this.visible = true;
@@ -461,27 +460,16 @@ export class ProgressStream {
             ? { type: 'thinking', thinking: '', signature: '' }
             : { type: 'text', text: '' },
         }), { kind: 'progress_block_start', phase: entry.details.phase, revision: entry.revision, changedAt: entry.changedAt, carrier: this.carrier, contentIndex: this.progressBlockIndex });
-        const initialText = timeline?.active ? timeline.snapshot : `${this.progressHeader}\n${message}`;
-        if (timeline?.active) this.modelTimeline.rendered = true;
+        const initialText = timeline.snapshot;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
           index: this.progressBlockIndex,
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: initialText }
             : { type: 'text_delta', text: initialText },
-        }), { ...metadata, renderMode: timeline?.active ? 'timeline_inline' : metadata.renderMode, carrier: this.carrier, contentIndex: this.progressBlockIndex });
+        }), { ...metadata, carrier: this.carrier, contentIndex: this.progressBlockIndex });
       } else {
-        let deltaText = `\n${message}`;
-        let timelineRenderMode = metadata.renderMode;
-        if (timeline?.active) {
-          if (!this.modelTimeline.rendered) {
-            deltaText = `\n${timeline.snapshot}`;
-            this.modelTimeline.rendered = true;
-          } else {
-            deltaText = timeline.append;
-          }
-          timelineRenderMode = 'timeline_inline';
-        }
+        const deltaText = timeline.append;
         if (!deltaText) return;
         await this.#write(event('content_block_delta', {
           type: 'content_block_delta',
@@ -489,7 +477,7 @@ export class ProgressStream {
           delta: thinkingCarrier
             ? { type: 'thinking_delta', thinking: deltaText }
             : { type: 'text_delta', text: deltaText },
-        }), { ...metadata, renderMode: timelineRenderMode, carrier: this.carrier });
+        }), { ...metadata, carrier: this.carrier });
       }
     });
   }
@@ -543,6 +531,10 @@ export class ProgressStream {
     }
 
     const timeline = this.#prepareModelTimeline(kind, details, changedAt, message);
+    // Legacy/unstructured status copy is diagnostic-only. In particular, the
+    // managed-loop notice precedes the authoritative onModelRoundState start.
+    // Do not queue it or invoke first-visible hooks, even when force=true.
+    if (!timeline) return;
     if (timeline?.terminal && message) {
       let terminalMessage = message;
       if (String(details.phase || '') === 'handoff_to_claude_code') {

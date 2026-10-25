@@ -305,7 +305,7 @@ test('V0.29.41 final model content starts after separate startup-banner and prog
   const progress = new ProgressStream(responseSink, { visibleAfterMs: 0, pingIntervalMs: 60_000 });
   await progress.open();
   await progress.showStartupBanner('BANNER');
-  await progress.update('PROGRESS', { force: true, details: { phase: 'waiting' } });
+  await progress.update('PROGRESS', { force: true, details: { phase: 'model_stream_phase', model_timeline: true, model_phase: 'thinking' } });
   await emitFinalAnthropicResponse(progress, {
     content: [{ type: 'text', text: 'FINAL' }],
     stop_reason: 'end_turn',

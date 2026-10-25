@@ -1,5 +1,24 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.70 Timeline-Only Visible Progress
+
+The retired `模型處理中 · HH:mm:ss` / `正在請模型規劃下一步…` preamble is no longer emitted. All Proxy-owned progress uses the existing compact, single-line timeline. This fixes native `Read(image)` and `Read(PDF)` page images with managed tools, where the legacy planning callback arrived before the authoritative model-round start.
+
+- `ProgressStream` has no multiline fallback renderer. Unstructured status descriptions remain diagnostic-only; they cannot open a visible block or queue an old preamble, including when `force=true`.
+- Model/media stages, heartbeat bars, warning markers and final handoff stay on the same timeline. Existing old conversation history is still recognized and stripped before model reuse.
+- Actual model answers are not searched or rewritten for these phrases. Native Claude Code rows such as `Read 1 file` and `Thought for 1s`, and the optional Proxy startup card, are unchanged.
+- No new ENV. The visibility gate, Subagent ping-only policy, non-streaming JSON, `compact_use_route`, `visual_use_route`, protocol adapters and routing behavior remain unchanged.
+
+Illustrative result (timestamps and elapsed seconds are not fixed):
+
+```text
+處理中 · 11:38:29 ○ || 75s ◐ 77s ◆ 78s ◇ 78s 已產生下一步 Read；交還執行…
+```
+
+See [scope and verification plan](docs/PROGRESS_TIMELINE_ONLY_v0.29.70.md) and [validation report](change_log/V0.29.70-舊版進度移除與驗證報告.md).
+The ZIP does not publish GitHub `main` or update your running container. Real vLLM + Claude Code UI verification remains to be done in your environment.
+
+
 ## V0.29.69 Per-Route Compact and Visual Policies
 
 `VLLM_MODEL_ROUTES` and `VLLM_MODEL_ROUTING_FILE` entries now accept strict JSON booleans:
