@@ -112,8 +112,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.71'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.71'
+test "$(node -p "require('./package.json').version")" = '0.29.73'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.73'
 
 
 test -f src/i18n/response-language.js
@@ -542,7 +542,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.71'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.73'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1383,3 +1383,21 @@ grep -Fq 'modelResponseTimezone: config.modelResponseTimezone' src/services/prox
 test -f docs/MODEL_RESPONSE_TIMEZONE_v0.29.71.md
 test -f change_log/V0.29.71-進度顯示時區_實作與驗證報告.md
 node --test test/v02971-progress-timezone.test.js
+
+# V0.29.72 OpenAI Thinking/Effort bridge, optional vLLM budget, and streaming tool safety.
+grep -q '^VLLM_OPENAI_THINKING_BUDGET_ENABLED=false$' .env.example
+grep -Fq 'VLLM_OPENAI_THINKING_BUDGET_ENABLED: ${VLLM_OPENAI_THINKING_BUDGET_ENABLED:-false}' compose.yaml
+grep -Fq 'thinking_budget_enabled' src/proxy/model-router.js
+grep -Fq "out.reasoning_effort = selectedEffort" src/services/openai-upstream-adapter.js
+grep -Fq "'vllm' : 'none'" src/services/openai-upstream-adapter.js
+test -f docs/OPENAI_REASONING_BRIDGE_v0.29.72.md
+test -f change_log/V0.29.72-OpenAI推理參數轉換_實作與驗證報告.md
+node --test test/v02972-openai-reasoning.test.js
+
+# V0.29.73 OpenAI vendor-specific per-route thinking budget fields.
+grep -Fq 'thinking_budget_format' src/proxy/model-router.js
+grep -Fq "'tensorfold' ? 'thinking_budget' : 'thinking_token_budget'" src/services/openai-upstream-adapter.js
+grep -Fq 'thinkingBudgetFormat: selectedRoute.thinkingBudgetFormat' src/services/proxy-server.js
+grep -Fq 'thinking_budget_format' .env.example
+test -f docs/TENSORFOLD_THINKING_BUDGET_v0.29.73.md
+test -f change_log/V0.29.73-TensorFold_Thinking_Budget_實作與驗證報告.md

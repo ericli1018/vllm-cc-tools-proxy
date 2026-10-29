@@ -253,6 +253,7 @@ export function loadConfig(env = process.env) {
     modelRouting: configureModelRoutes(env),
     vllmBaseUrl,
     vllmBaseApiProtocol,
+    vllmOpenaiThinkingBudgetEnabled: booleanValue(env.VLLM_OPENAI_THINKING_BUDGET_ENABLED, false, 'VLLM_OPENAI_THINKING_BUDGET_ENABLED'),
     vllmBaseModel,
     vllmBaseResponseMode,
     vllmBaseApiKey,

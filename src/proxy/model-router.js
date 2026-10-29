@@ -35,16 +35,22 @@ export function configureModelRoutes(env) {
     const keyEnv = entry.api_key_env === undefined ? '' : String(entry.api_key_env).trim();
     if (keyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(keyEnv)) throw new Error(`Invalid api_key_env for route ${alias}`);
     const apiKey = keyEnv ? String(env[keyEnv] || '') : String(entry.api_key || '');
-    for (const field of ['compact_use_route', 'visual_use_route', 'vision_enabled']) {
+    for (const field of ['compact_use_route', 'visual_use_route', 'vision_enabled', 'thinking_budget_enabled']) {
       if (Object.hasOwn(entry, field) && typeof entry[field] !== 'boolean') {
         throw new Error(`Model route ${alias}: ${field} must be a JSON boolean`);
       }
+    }
+    if (Object.hasOwn(entry, 'thinking_budget_format')
+        && !['none', 'vllm', 'tensorfold'].includes(entry.thinking_budget_format)) {
+      throw new Error(`Model route ${alias}: thinking_budget_format must be none, vllm or tensorfold`);
     }
     routes[alias] = Object.freeze({
       url, protocol, model, apiKey, alias,
       compactUseRoute: entry.compact_use_route ?? true,
       visualUseRoute: entry.visual_use_route ?? true,
       ...(entry.vision_enabled === undefined ? {} : { visionEnabled: entry.vision_enabled }),
+      ...(entry.thinking_budget_enabled === undefined ? {} : { thinkingBudgetEnabled: entry.thinking_budget_enabled }),
+      ...(entry.thinking_budget_format === undefined ? {} : { thinkingBudgetFormat: entry.thinking_budget_format }),
     });
   }
   if (!Object.keys(routes).length) throw new Error('Model routes cannot be empty');

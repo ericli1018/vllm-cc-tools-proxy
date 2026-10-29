@@ -4,7 +4,53 @@ import { HttpError } from '../lib/http.js';
 
 const textOf = (v) => typeof v === 'string' ? v : Array.isArray(v) ? v.filter(x => x?.type === 'text').map(x => x.text || '').join('\n') : '';
 
-export function toOpenAIRequest(request) {
+const OPENAI_REASONING_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+// Anthropic effort describes overall generation work. vLLM's Chat Completions
+// reasoning_effort is the closest native control; server-side effort maps are
+// responsible for translating unsupported per-model levels.
+function applyThinkingControls(out, request, { mapThinkingBudget = false, thinkingBudgetFormat } = {}) {
+  // Explicit route format takes precedence. When absent, preserve the v0.29.72
+  // boolean switch (true -> vLLM extension; false -> no budget field).
+  const budgetFormat = thinkingBudgetFormat ?? (mapThinkingBudget ? 'vllm' : 'none');
+  if (!['none', 'vllm', 'tensorfold'].includes(budgetFormat)) {
+    throw new HttpError(400, 'Unsupported thinking budget format.', { code: 'invalid_thinking_budget_format' });
+  }
+  const selectedEffort = request?.output_config?.effort ?? request?.reasoning_effort;
+  if (selectedEffort != null) {
+    if (typeof selectedEffort !== 'string' || !OPENAI_REASONING_EFFORTS.has(selectedEffort)) {
+      throw new HttpError(400, 'Unsupported OpenAI reasoning effort.', { code: 'invalid_reasoning_effort' });
+    }
+    out.reasoning_effort = selectedEffort;
+  }
+  const explicitlyDisabled = request?.thinking?.type === 'disabled'
+    || request?.chat_template_kwargs?.enable_thinking === false;
+  if (explicitlyDisabled) {
+    out.reasoning_effort = 'none';
+    return;
+  }
+  // No explicit effort: enable thinking for templates which default to off.
+  if (request?.thinking?.type === 'enabled' && out.reasoning_effort == null) {
+    out.chat_template_kwargs = { enable_thinking: true };
+  }
+  // OpenAI-compatible server-specific extension, opt-in per route.
+  // Never change max_tokens or send both vendor budget field names.
+  if (budgetFormat !== 'none' && request?.thinking?.type === 'enabled'
+      && request.thinking.budget_tokens != null) {
+    const budget = request.thinking.budget_tokens;
+    if (!Number.isSafeInteger(budget) || budget <= 0) {
+      throw new HttpError(400, 'Invalid thinking budget.', { code: 'invalid_thinking_budget' });
+    }
+    out[budgetFormat === 'tensorfold' ? 'thinking_budget' : 'thinking_token_budget'] = budget;
+  }
+}
+
+function reasoningOf(value) {
+  if (typeof value?.reasoning === 'string' && value.reasoning) return value.reasoning;
+  return typeof value?.reasoning_content === 'string' ? value.reasoning_content : '';
+}
+
+export function toOpenAIRequest(request, options = {}) {
   const messages = [];
   if (request.system) messages.push({ role: 'system', content: textOf(request.system) });
   for (const msg of request.messages || []) {
@@ -50,6 +96,7 @@ export function toOpenAIRequest(request) {
   if (request.temperature != null) out.temperature = request.temperature;
   if (request.top_p != null) out.top_p = request.top_p;
   if (request.stop_sequences?.length) out.stop = request.stop_sequences;
+  applyThinkingControls(out, request, options);
   if (Array.isArray(request.tools) && request.tools.length) {
     out.tools = request.tools.filter(x => !x.type || x.type === 'custom').map(x => ({ type: 'function', function: { name: x.name, description: x.description || '', parameters: x.input_schema || { type: 'object', properties: {} } } }));
     if (out.tools.length !== request.tools.length) throw new HttpError(400, 'OpenAI backend cannot natively execute Anthropic server tools.', { code: 'unsupported_server_tool' });
@@ -78,6 +125,8 @@ export function toAnthropicMessage(payload, model = '') {
   const choice = payload.choices?.[0] || {};
   const msg = choice.message || {};
   const content = [];
+  const reasoning = reasoningOf(msg);
+  if (reasoning) content.push({ type: 'thinking', thinking: reasoning, signature: '' });
   const body = typeof msg.content === 'string' ? msg.content : textOf(msg.content);
   if (body) content.push({ type: 'text', text: body });
   for (const call of msg.tool_calls || []) content.push({ type: 'tool_use', id: call.id, name: call.function?.name, input: parsedArgs(call.function?.arguments, call.function?.name) });
@@ -88,9 +137,12 @@ function createMessageStream(payload, model) {
   const msg = toAnthropicMessage(payload, model);
   const data = [event('message_start', { type: 'message_start', message: { ...msg, content: [], stop_reason: null } })];
   msg.content.forEach((block, index) => {
-    const base = block.type === 'text' ? { type: 'text', text: '' } : { type: 'tool_use', id: block.id, name: block.name, input: {} };
+    const base = block.type === 'text' ? { type: 'text', text: '' }
+      : block.type === 'thinking' ? { type: 'thinking', thinking: '', signature: '' }
+      : { type: 'tool_use', id: block.id, name: block.name, input: {} };
     data.push(event('content_block_start', { type: 'content_block_start', index, content_block: base }));
     if (block.type === 'text') data.push(event('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'text_delta', text: block.text } }));
+    else if (block.type === 'thinking') data.push(event('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'thinking_delta', thinking: block.thinking } }));
     else data.push(event('content_block_delta', { type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json: JSON.stringify(block.input) } }));
     data.push(event('content_block_stop', { type: 'content_block_stop', index }));
   });
@@ -104,10 +156,10 @@ function createMessageStream(payload, model) {
 // partial call fails the stream rather than fabricating a successful tool request.
 async function* translateOpenAIStream(source, model) {
   const decoder = new TextDecoder();
-  let pending = '', started = false, textOpen = false, nextIndex = 0;
+  let pending = '', started = false, textOpen = false, thinkingOpen = false, nextIndex = 0;
   let finishReason = null, completed = false, usage = null;
   const tools = new Map();
-  let textIndex = -1;
+  let textIndex = -1, thinkingIndex = -1;
   const emit = (name, payload) => Buffer.from(event(name, payload));
   const start = (id, modelName) => emit('message_start', { type: 'message_start', message: {
     id: id || `msg_${Date.now()}`, type: 'message', role: 'assistant', model: modelName || model,
@@ -125,7 +177,24 @@ async function* translateOpenAIStream(source, model) {
     if (!choice) return;
     if (choice.finish_reason) finishReason = choice.finish_reason;
     const delta = choice.delta || {};
+    const reasoning = reasoningOf(delta);
+    // Tool input is not committed until [DONE]; do not interleave new content
+    // inside its still-open Anthropic tool_use block.
+    if (tools.size > 0 && (reasoning || (typeof delta.content === 'string' && delta.content))) {
+      throw new HttpError(502, 'OpenAI SSE interleaved text or reasoning inside an unfinished tool call.', {
+        code: 'vllm_invalid_stream', retryable: true,
+      });
+    }
+    if (reasoning) {
+      if (textOpen) { yield emit('content_block_stop', { type: 'content_block_stop', index: textIndex }); textOpen = false; }
+      if (!thinkingOpen) {
+        thinkingOpen = true; thinkingIndex = nextIndex++;
+        yield emit('content_block_start', { type: 'content_block_start', index: thinkingIndex, content_block: { type: 'thinking', thinking: '', signature: '' } });
+      }
+      yield emit('content_block_delta', { type: 'content_block_delta', index: thinkingIndex, delta: { type: 'thinking_delta', thinking: reasoning } });
+    }
     if (typeof delta.content === 'string' && delta.content) {
+      if (thinkingOpen) { yield emit('content_block_stop', { type: 'content_block_stop', index: thinkingIndex }); thinkingOpen = false; }
       if (!textOpen) {
         textOpen = true; textIndex = nextIndex++;
         yield emit('content_block_start', { type: 'content_block_start', index: textIndex, content_block: { type: 'text', text: '' } });
@@ -137,6 +206,7 @@ async function* translateOpenAIStream(source, model) {
       let tool = tools.get(key);
       if (!tool) {
         if (textOpen) { yield emit('content_block_stop', { type: 'content_block_stop', index: textIndex }); textOpen = false; }
+        if (thinkingOpen) { yield emit('content_block_stop', { type: 'content_block_stop', index: thinkingIndex }); thinkingOpen = false; }
         tool = { index: nextIndex++, id: '', name: '', arguments: '', opened: false };
         tools.set(key, tool);
       }
@@ -174,6 +244,7 @@ async function* translateOpenAIStream(source, model) {
   }
   if (!started) throw new HttpError(502, 'OpenAI SSE contained no completion.', { code: 'vllm_invalid_stream', retryable: true });
   if (textOpen) yield emit('content_block_stop', { type: 'content_block_stop', index: textIndex });
+  if (thinkingOpen) yield emit('content_block_stop', { type: 'content_block_stop', index: thinkingIndex });
   for (const tool of tools.values()) {
     if (!tool.opened) throw new HttpError(502, 'OpenAI tool call missing identity.', { code: 'vllm_invalid_stream', retryable: true });
     parsedArgs(tool.arguments, tool.name);

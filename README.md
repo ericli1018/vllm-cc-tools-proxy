@@ -1,5 +1,17 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.73 Per-Route vLLM / TensorFold Thinking Budget
+
+OpenAI-compatible model routes now accept `thinking_budget_format: "none" | "vllm" | "tensorfold"` to send no manual Budget, `thinking_token_budget`, or TensorFold `thinking_budget` respectively. The format is a **per-route JSON property** inside `VLLM_MODEL_ROUTES` / `VLLM_MODEL_ROUTING_FILE`, not a separate ENV. It takes precedence over the existing `thinking_budget_enabled` flag; omitting it preserves v0.29.72 behavior and global `VLLM_OPENAI_THINKING_BUDGET_ENABLED` defaults. `reasoning_effort`, `max_tokens`, Anthropic routes and existing Tool/SSE behavior remain unchanged.
+
+See [per-route compatibility guide](docs/TENSORFOLD_THINKING_BUDGET_v0.29.73.md) and [verification report](change_log/V0.29.73-TensorFold_Thinking_Budget_實作與驗證報告.md). Real TensorFold + Claude Code integration has not been verified.
+
+## V0.29.72 OpenAI-compatible Thinking / Effort Bridge
+
+`output_config.effort=low|medium|high|xhigh|max` now reaches OpenAI-compatible Base models as `reasoning_effort`, preserving the requested level. The explicit disabled mode maps to `none`. The optional vLLM-only manual `thinking_token_budget` extension is guarded by `VLLM_OPENAI_THINKING_BUDGET_ENABLED=false` (default), with per-route override `thinking_budget_enabled: true|false`.
+
+The adapter also converts vLLM `reasoning` and legacy `reasoning_content` into Anthropic Thinking Blocks for both SSE and non-streaming JSON while retaining Tool Call safety. Reasoning blocks have no valid Anthropic cryptographic signature; see integration limits in [the bridge documentation](docs/OPENAI_REASONING_BRIDGE_v0.29.72.md). Anthropic upstream requests are unaffected.
+
 ## V0.29.71 MODEL_RESPONSE_TIMEZONE — Progress Clock
 
 `MODEL_RESPONSE_TIMEZONE` independently controls the `HH:mm:ss` at the start of the **existing** compact single-line timeline. It uses Node.js `Intl.DateTimeFormat` with an IANA time zone, so it works when the Docker container itself uses UTC and correctly follows DST changes.

@@ -157,7 +157,10 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
       response = await requestBaseUpstream(openaiBackend ? upstreamEndpoint(selectedRoute.url, '/v1/chat/completions') : upstreamEndpoint(selectedRoute.url, path), {
         method: 'POST',
         headers: openaiBackend ? { 'content-type': 'application/json', ...(selectedRoute.apiKey ? { authorization: `Bearer ${selectedRoute.apiKey}` } : {}) } : anthropicHeaders,
-        body: JSON.stringify(openaiBackend ? toOpenAIRequest(upstreamRequest) : upstreamRequest),
+        body: JSON.stringify(openaiBackend ? toOpenAIRequest(upstreamRequest, {
+          mapThinkingBudget: selectedRoute.thinkingBudgetEnabled ?? config.vllmOpenaiThinkingBudgetEnabled ?? false,
+          thinkingBudgetFormat: selectedRoute.thinkingBudgetFormat,
+        }) : upstreamRequest),
         signal,
         onResponseChunk: typeof onResponseChunk === 'function'
           ? (bytes) => { if (forwardChunks) onResponseChunk(bytes); }
