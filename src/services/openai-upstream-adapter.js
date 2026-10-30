@@ -52,11 +52,24 @@ function reasoningOf(value) {
 
 export function toOpenAIRequest(request, options = {}) {
   const messages = [];
-  if (request.system) messages.push({ role: 'system', content: textOf(request.system) });
+  // Claude Code (and managed continuations) can also place system messages
+  // inside the message history. Keep all system guidance, but present it as
+  // one leading system turn for OpenAI-compatible chat templates.
+  const systemTexts = [];
+  if (request.system) {
+    const text = textOf(request.system);
+    if (text) systemTexts.push(text);
+  }
   for (const msg of request.messages || []) {
     const blocks = typeof msg.content === 'string' ? [{ type: 'text', text: msg.content }] : (msg.content || []);
     if (!Array.isArray(blocks)) throw new HttpError(400, 'Unsupported Anthropic message content.', { code: 'unsupported_content' });
-    if (msg.role === 'assistant') {
+    if (msg.role === 'system') {
+      if (blocks.some(block => block?.type !== 'text' || typeof block.text !== 'string')) {
+        throw new HttpError(400, 'OpenAI upstream requires text-only system messages.', { code: 'unsupported_content' });
+      }
+      const text = blocks.map(block => block.text).join('\n');
+      if (text) systemTexts.push(text);
+    } else if (msg.role === 'assistant') {
       const tools = blocks.filter(x => x.type === 'tool_use');
       const text = blocks.filter(x => x.type === 'text').map(x => x.text || '').join('\n');
       const output = { role: 'assistant', content: text || null };
@@ -91,6 +104,7 @@ export function toOpenAIRequest(request, options = {}) {
       if (toolVisuals.length) messages.push({ role: 'user', content: toolVisuals });
     } else throw new HttpError(400, `Unsupported message role: ${msg.role}`, { code: 'unsupported_role' });
   }
+  if (systemTexts.length) messages.unshift({ role: 'system', content: systemTexts.join('\n\n') });
   const out = { model: request.model, messages, stream: Boolean(request.stream) };
   if (request.max_tokens != null) out.max_tokens = request.max_tokens;
   if (request.temperature != null) out.temperature = request.temperature;

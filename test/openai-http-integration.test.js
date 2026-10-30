@@ -234,3 +234,44 @@ test('V0.29.66 parallel OpenAI routes preserve endpoint, credentials, and model 
     ['/v1/chat/completions', 'model-b', 'Bearer key-b'],
   ]);
 });
+
+test('V0.29.74 HTTP: Claude Code nonstream request with inline system reaches OpenAI backend', async t => {
+  const seen = [];
+  const backend = await serve(async (req, res) => {
+    seen.push(await reqBody(req));
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ id: 'r-system', model: 'local-model', choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }], usage: { prompt_tokens: 14, completion_tokens: 1 } }));
+  });
+  const proxy = await serve(createProxyServer(options(backend.url)).listeners('request')[0]);
+  t.after(async () => { await close(proxy.server); await close(backend.server); });
+  const response = await post(proxy.url, { model: 'claude-opus-5-5', stream: false, max_tokens: 128,
+    messages: [{ role: 'user', content: 'ping' }, { role: 'system', content: 'injected policy' }] });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).content[0].text, 'ok');
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].messages.map(m => m.role), ['system', 'user']);
+  assert.equal(seen[0].messages[0].content, 'injected policy');
+});
+
+test('V0.29.74 HTTP: managed streaming with inline system and declared tools reaches OpenAI backend', async t => {
+  const seen = [];
+  const backend = await serve(async (req, res) => {
+    seen.push(await reqBody(req));
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.end(chunk({ role: 'assistant', content: 'managed reply' }, 'stop') + 'data: [DONE]\n\n');
+  });
+  const proxy = await serve(createProxyServer(options(backend.url)).listeners('request')[0]);
+  t.after(async () => { await close(proxy.server); await close(backend.server); });
+  const response = await post(proxy.url, { model: 'claude-opus-5-5', stream: true, max_tokens: 128,
+    messages: [{ role: 'user', content: 'research' }, { role: 'system', content: [{ type: 'text', text: 'runtime policy' }] }],
+    tools: [{ name: 'web_search', input_schema: { type: 'object', properties: { query: { type: 'string' } } } }],
+  });
+  const wire = await response.text();
+  assert.equal(response.status, 200);
+  assert.match(wire, /managed reply/);
+  assert.match(wire, /event: message_stop/);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].messages.map(m => m.role), ['system', 'user']);
+  assert.equal(seen[0].messages[0].content, 'runtime policy');
+  assert.equal(seen[0].tools[0].function.name, 'web_search');
+});

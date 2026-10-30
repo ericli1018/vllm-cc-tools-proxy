@@ -1,5 +1,13 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.74 OpenAI System Message Role Compatibility
+
+Fixes `HTTP 400 Unsupported message role: system` when Claude Code places a `role: "system"` message **inside** `messages[]` instead of only using Anthropic's top-level `system` field. `toOpenAIRequest()` now collects top-level and embedded system text into a **single leading** OpenAI system message, preserving the remaining User/Assistant/Tool order and the existing OpenAI, TensorFold, and Anthropic routing behavior. Unsupported non-text system blocks fail with `unsupported_content` rather than being discarded.
+
+This is a Proxy-side protocol conversion fix, **not** a TensorFold model modification. No new environment variables; it applies whenever `VLLM_BASE_API_PROTOCOL=openai` or a matched model route has `"protocol":"openai"`. Unit plus HTTP tests cover non-streaming, managed SSE and combined system context. Real TensorFold + Claude Code deployment remains unverified.
+
+See [release notes](change_log/V0.29.74-OpenAI_System_Role_修正與驗證.md).
+
 ## V0.29.73 Per-Route vLLM / TensorFold Thinking Budget
 
 OpenAI-compatible model routes now accept `thinking_budget_format: "none" | "vllm" | "tensorfold"` to send no manual Budget, `thinking_token_budget`, or TensorFold `thinking_budget` respectively. The format is a **per-route JSON property** inside `VLLM_MODEL_ROUTES` / `VLLM_MODEL_ROUTING_FILE`, not a separate ENV. It takes precedence over the existing `thinking_budget_enabled` flag; omitting it preserves v0.29.72 behavior and global `VLLM_OPENAI_THINKING_BUDGET_ENABLED` defaults. `reasoning_effort`, `max_tokens`, Anthropic routes and existing Tool/SSE behavior remain unchanged.

@@ -114,3 +114,34 @@ test('V0.29.59 interrupted text-only stream is not misclassified as malformed to
   const adapted = await adaptOpenAIResponse(upstream, { model: 'm', stream: true });
   await assert.rejects(async () => { for await (const _ of adapted.body) {} }, err => err.code === 'vllm_invalid_stream');
 });
+
+test('V0.29.74: inline system role after user is hoisted into OpenAI system context', () => {
+  const converted = toOpenAIRequest({ model: 'DeepSeek-V4.1-Flash-1017', stream: true, messages: [
+    { role: 'user', content: 'write code' },
+    { role: 'system', content: 'runtime policy' },
+  ] });
+  assert.deepEqual(converted.messages.map(message => message.role), ['system', 'user']);
+  assert.equal(converted.messages[0].content, 'runtime policy');
+  assert.deepEqual(converted.messages[1].content, [{ type: 'text', text: 'write code' }]);
+});
+
+test('V0.29.74: top-level and inline system blocks are preserved in one leading system message', () => {
+  const converted = toOpenAIRequest({ model: 'm', system: [{ type: 'text', text: 'top-level policy' }], messages: [
+    { role: 'user', content: 'question' },
+    { role: 'system', content: [{ type: 'text', text: 'late policy A' }, { type: 'text', text: 'late policy B' }] },
+    { role: 'assistant', content: 'answer' },
+    { role: 'system', content: 'additional policy' },
+  ] });
+  assert.deepEqual(converted.messages.map(message => message.role), ['system', 'user', 'assistant']);
+  assert.match(converted.messages[0].content, /top-level policy/);
+  assert.match(converted.messages[0].content, /late policy A/);
+  assert.match(converted.messages[0].content, /late policy B/);
+  assert.match(converted.messages[0].content, /additional policy/);
+  assert.deepEqual(converted.messages[1].content, [{ type: 'text', text: 'question' }]);
+});
+
+test('V0.29.74: non-text inline system content is rejected rather than silently lost', () => {
+  assert.throws(() => toOpenAIRequest({ model: 'm', messages: [
+    { role: 'system', content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AA==' } }] },
+  ] }), error => error.code === 'unsupported_content');
+});
