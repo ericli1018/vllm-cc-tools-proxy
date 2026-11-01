@@ -17,6 +17,7 @@ import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
+import { createProxyAuthenticator, isPublicHealthRequest, stripProxyCredentials } from '../proxy/api-auth.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { resolveModelRoute, selectCompactRoute, mediaConfigForRoute } from '../proxy/model-router.js';
 import { prepareMediaHandles } from '../proxy/media-preflight.js';
@@ -89,7 +90,10 @@ function upstreamHeaders(incomingHeaders, config) {
     const value = incomingHeaders?.[name];
     if (typeof value === 'string' && value) headers[name] = value;
   }
-  if (config.vllmBaseApiKey) headers.authorization = `Bearer ${config.vllmBaseApiKey}`;
+  if (config.vllmBaseApiKey) {
+    headers.authorization = `Bearer ${config.vllmBaseApiKey}`;
+    if (config.proxyAuthEnabled) headers['x-api-key'] = config.vllmBaseApiKey;
+  }
   return headers;
 }
 
@@ -641,6 +645,11 @@ function defaultConcurrency(config) {
 }
 
 export function createProxyServer(config, dependencies = {}) {
+  const authenticate = createProxyAuthenticator(config);
+  log(config, config.proxyAuthEnabled ? 'info' : 'warn', config.proxyAuthEnabled ? 'proxy_auth_enabled' : 'proxy_auth_disabled', {
+    auth_enabled: Boolean(config.proxyAuthEnabled),
+    ...(config.proxyAuthEnabled ? {} : { message: 'Proxy API authentication is disabled. Restrict network access or set PROXY_API_KEY.' }),
+  });
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
   // Session-local, process-memory only; bounded to avoid unbounded tool-result retention.
@@ -779,6 +788,20 @@ export function createProxyServer(config, dependencies = {}) {
 
   return http.createServer(async (req, res) => {
     const requestId = crypto.randomUUID();
+    // Authenticate before reading bodies, recording sessions, emitting SSE, or
+    // executing any model/tool/transparent-forwarding work.
+    if (config.proxyAuthEnabled) {
+      if (!isPublicHealthRequest(req) && !authenticate(req)) {
+        log(config, 'warn', 'proxy_auth_rejected', { requestId, method: req.method, code: 'authentication_error' });
+        return sendJson(res, 401, {
+          type: 'error',
+          error: { type: 'authentication_error', message: 'Missing or invalid proxy API key.', retryable: false },
+        }, { 'www-authenticate': 'Bearer realm="cc-tool-proxy"', connection: 'close' });
+      }
+      // Credentials authenticate this hop only; every later forwarding path
+      // uses backend-configured keys, never these ingress credentials.
+      stripProxyCredentials(req);
+    }
     const requestObservedAt = Date.now();
     const abortController = new AbortController();
     let progress = null;

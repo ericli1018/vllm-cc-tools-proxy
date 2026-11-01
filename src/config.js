@@ -2,6 +2,7 @@ import { resolveResponseLanguage } from './i18n/response-language.js';
 import os from 'node:os';
 import path from 'node:path';
 import { configureModelRoutes } from './proxy/model-router.js';
+import { validateProxyApiKey } from './proxy/api-auth.js';
 
 const MiB = 1024 * 1024;
 
@@ -239,10 +240,15 @@ export function loadConfig(env = process.env) {
     evidenceContractVersion: 'evidence-v14',
   });
 
+  const proxyApiKey = env.PROXY_API_KEY ?? '';
+  const proxyAuthEnabled = booleanValue(env.PROXY_AUTH_ENABLED, Boolean(proxyApiKey), 'PROXY_AUTH_ENABLED');
+  validateProxyApiKey(proxyApiKey, { required: proxyAuthEnabled });
   const progressTimeZone = optionalProgressTimeZone(env.MODEL_RESPONSE_TIMEZONE);
   return Object.freeze({
     port: intValue(env.PORT || env.PROXY_PORT, 8080, 'PORT', { min: 1, max: 65535 }),
     host: env.HOST || '0.0.0.0',
+    proxyAuthEnabled,
+    proxyApiKey,
     resourceProfile: profileName,
     responseLanguage: resolveResponseLanguage(env.MODEL_RESPONSE_LANGUAGE),
     modelResponseTimezone: progressTimeZone.timeZone,

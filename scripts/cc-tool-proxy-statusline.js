@@ -15,6 +15,20 @@ function statusUrl(baseValue, sessionId) {
   return base.toString();
 }
 
+function statusHeaders(baseUrl) {
+  let key = String(process.env.CC_TOOL_PROXY_API_KEY || '').trim();
+  if (!key) {
+    // A custom status endpoint must not inherit a provider credential destined
+    // for a different host/port. Set an explicit key for such an endpoint.
+    try {
+      if (new URL(baseUrl).origin === new URL(process.env.ANTHROPIC_BASE_URL || '').origin) {
+        key = String(process.env.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_API_KEY || '').trim();
+      }
+    } catch {}
+  }
+  return { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) };
+}
+
 function charWidth(ch) {
   const cp = String(ch || '').codePointAt(0);
   if (!Number.isInteger(cp)) return 0;
@@ -123,7 +137,8 @@ async function main() {
   try {
     const response = await fetch(statusUrl(baseUrl, sessionId), {
       method: 'GET',
-      headers: { accept: 'application/json' },
+      headers: statusHeaders(baseUrl),
+      redirect: 'error',
       signal: AbortSignal.timeout(750),
     });
     if (!response.ok) return;

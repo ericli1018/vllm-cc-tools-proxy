@@ -985,3 +985,12 @@ test('V0.29.55 malformed tool JSON uses bounded checkpoint recovery without repa
   assert.ok(changeLogEntries.includes('V0.29.55-更新說明.md'));
   assert.ok(changeLogEntries.includes('V0.29.55-實作與驗證報告.md'));
 });
+
+test('V0.29.75 deployment: auth ENV is passed without a public default secret', () => {
+  assert.match(compose, /PROXY_AUTH_ENABLED:\s*"\$\{PROXY_AUTH_ENABLED:-\}"/);
+  assert.match(compose, /PROXY_API_KEY:\s*"\$\{PROXY_API_KEY:-\}"/);
+  assert.match(envExample, /^PROXY_AUTH_ENABLED=$/m);
+  assert.match(envExample, /^PROXY_API_KEY=$/m);
+  assert.match(readme, /PROXY_AUTH_ENABLED/);
+  assert.match(readme, /CC_TOOL_PROXY_API_KEY/);
+});

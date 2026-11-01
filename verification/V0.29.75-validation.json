@@ -1,0 +1,51 @@
+{
+  "version": "0.29.75",
+  "baseline": "0.29.74",
+  "node": "v22.16.0",
+  "baseline_tests": {
+    "total": 939,
+    "passed": 939,
+    "failed": 0
+  },
+  "regression_proof_on_original_baseline": {
+    "total": 31,
+    "passed": 11,
+    "failed": 20,
+    "exit_code": 1,
+    "expected_failure": true
+  },
+  "full_regression": {
+    "total": 968,
+    "passed": 968,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0
+  },
+  "new_version_targeted_tests": {
+    "total": 29,
+    "passed": 29,
+    "failed": 0
+  },
+  "syntax_check": {
+    "javascript_files": 163,
+    "exit_code": 0
+  },
+  "complete_verification_script": {
+    "command": "sh scripts/verify.sh",
+    "exit_code": 0
+  },
+  "review": "Changed-file self-review; no independent subagent reviewer available.",
+  "live_tensorfold_claude_code_test": false,
+  "remote_repository_modified": false,
+  "running_deployment_modified": false,
+  "test_history_notes": [
+    "First full run had four stale version assertions (health, startup banner, status, version metadata); expectations updated to 0.29.75 and complete verification passed.",
+    "Duplicate-header fixture initially omitted Host and was rejected by Node with 400 before the application. Added Host, then confirmed the corrected new tests fail on original v0.29.74 and pass on v0.29.75."
+  ],
+  "evidence_log_sha256": {
+    "v02975-baseline-tests.log": "3c34d6e262ba0f9827682ccbbec4affc87c4f13c0fabc5b73729e42f57ea5f4c",
+    "v02975-red-proof.log": "11c767e5808f9b30d710b25672a5d3b2d304e40d1632a8a136b5199eedb78b41",
+    "v02975-auth-green.log": "b686a5d3c4638a696788b449e400f7c9fa33363b666d03647c7e62d177b2a687",
+    "v02975-verify.log": "8fdc0aaac10762f5fdeec7369582d35614b608c4d61988df20100356cf733e38"
+  }
+}

@@ -1,5 +1,17 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.75 Inbound API Key Authentication
+
+Set `PROXY_AUTH_ENABLED=true` and a private `PROXY_API_KEY` to require `Authorization: Bearer <key>` or `x-api-key: <key>` before any model, tool, body parsing, SSE, or bypass forwarding. Only **GET `/health` and GET `/healthz`** remain public; status, count_tokens, Compact and all other paths are protected. If both credential headers are sent they must both match; duplicate/malformed headers are rejected.
+
+- Empty auth flag: automatically enable when a key is present. Both unset: legacy behavior with a `proxy_auth_disabled` warning. Explicit `false` disables authentication.
+- Explicit `true` with no valid key refuses startup. Rejections return generic HTTP 401; keys are never echoed in authentication logs/errors.
+- Enabled deployments consume/strip frontend credentials at ingress. Upstreams receive only configured `VLLM_BASE_API_KEY`, route `api_key`, or the existing dedicated service keys. Empty backend keys do **not** inherit client keys. Disabled deployments retain legacy forwarding.
+- Update `scripts/cc-tool-proxy-statusline.js` on Claude Code clients too. Use `CC_TOOL_PROXY_API_KEY`; otherwise the script reuses `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_API_KEY` only when the configured origins match. Redirects are refused.
+- No dependencies added. Single shared key only, not user/tenant authorization, rate limiting or TLS. Use HTTPS/network controls for untrusted networks.
+
+See [configuration, client examples and acceptance checks](docs/PROXY_API_AUTH_v0.29.75.md) and [release verification](change_log/V0.29.75-API_Key_驗證與憑證隔離.md). This ZIP does not update GitHub `main` or a running container.
+
 ## V0.29.74 OpenAI System Message Role Compatibility
 
 Fixes `HTTP 400 Unsupported message role: system` when Claude Code places a `role: "system"` message **inside** `messages[]` instead of only using Anthropic's top-level `system` field. `toOpenAIRequest()` now collects top-level and embedded system text into a **single leading** OpenAI system message, preserving the remaining User/Assistant/Tool order and the existing OpenAI, TensorFold, and Anthropic routing behavior. Unsupported non-text system blocks fail with `unsupported_content` rather than being discarded.

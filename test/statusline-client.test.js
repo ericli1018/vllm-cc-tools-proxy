@@ -108,3 +108,33 @@ test('V0.29.35 statusLine tail-follows a long current logical line instead of wr
   assert.doesNotMatch(lines[1], /舊行不應再露出/);
   assert.ok(terminalWidth(lines[1]) <= 44, `preview width=${terminalWidth(lines[1])}`);
 });
+
+for (const kind of ['explicit', 'bearer', 'api-key', 'different-origin']) {
+  test(`V0.29.75 statusLine credential selection: ${kind}`, async t => {
+    let authorization, apiKey;
+    const server = http.createServer((req,res) => {
+      authorization = req.headers.authorization; apiKey = req.headers['x-api-key'];
+      res.setHeader('content-type','application/json'); res.end(JSON.stringify({ display: 'status available' }));
+    });
+    const url = await listen(server); t.after(() => server.close());
+    const env = { CC_TOOL_PROXY_URL: url, CC_TOOL_PROXY_API_KEY: '', ANTHROPIC_BASE_URL: url+'/v1', ANTHROPIC_AUTH_TOKEN: '', ANTHROPIC_API_KEY: '' };
+    if (kind === 'explicit') { env.CC_TOOL_PROXY_API_KEY = 'status-key'; env.ANTHROPIC_AUTH_TOKEN = 'not-this-key'; }
+    if (kind === 'bearer') env.ANTHROPIC_AUTH_TOKEN = 'status-key';
+    if (kind === 'api-key') env.ANTHROPIC_API_KEY = 'status-key';
+    if (kind === 'different-origin') { env.ANTHROPIC_BASE_URL = 'http://127.0.0.1:9'; env.ANTHROPIC_AUTH_TOKEN = 'do-not-leak'; }
+    const result = await runClient({ input: { session_id: 'auth-session' }, env });
+    assert.equal(result.code, 0); assert.equal(result.stdout.trim(), 'status available'); assert.equal(result.stderr,'');
+    assert.equal(authorization, kind === 'different-origin' ? undefined : 'Bearer status-key');
+    assert.equal(apiKey, undefined);
+  });
+}
+
+test('V0.29.75 statusLine refuses redirects and never sends credentials to redirect target', async t => {
+  let targetCalls = 0;
+  const target = http.createServer((req,res) => { targetCalls++; res.end('{}'); });
+  const targetUrl = await listen(target); t.after(() => target.close());
+  const server = http.createServer((req,res) => { res.writeHead(302, { location: targetUrl+'/capture' }); res.end(); });
+  const url = await listen(server); t.after(() => server.close());
+  const result = await runClient({ input: { session_id: 'private' }, env: { CC_TOOL_PROXY_URL: url, CC_TOOL_PROXY_API_KEY: 'status-key' } });
+  assert.equal(targetCalls,0); assert.equal(result.stdout,''); assert.equal(result.stderr,'');
+});

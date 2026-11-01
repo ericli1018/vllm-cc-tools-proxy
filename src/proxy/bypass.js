@@ -70,6 +70,9 @@ export async function forwardTransparent(req, res, config, { rawBody = Buffer.al
   const target = new URL(buildUpstreamUrl(config.vllmBaseUrl, req.url || '/'));
   const transport = target.protocol === 'https:' ? https : http;
   const headers = filterRequestHeaders(req.headers, config.vllmBaseApiKey);
+  if (config.proxyAuthEnabled && config.vllmBaseApiKey && config.vllmBaseApiProtocol !== 'openai') {
+    headers['x-api-key'] = config.vllmBaseApiKey;
+  }
   emitBaseModelSelected(config, rawBody, target.pathname);
   const upstreamBody = rewriteBaseJsonBody(rawBody, config.vllmBaseModel);
   if (upstreamBody.length > 0) headers['content-length'] = String(upstreamBody.length);
