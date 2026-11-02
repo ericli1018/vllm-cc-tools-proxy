@@ -17,6 +17,7 @@ import { collectAnthropicMessageFromSse } from '../proxy/anthropic-sse-collector
 import { classifyMessagesRequest } from '../proxy/managed-detector.js';
 import { classifyClaudeCodeCompactRequest, prepareClaudeCodeCompactRequest } from '../proxy/context-compact-detector.js';
 import { forwardTransparent } from '../proxy/bypass.js';
+import { forwardChatCompletions, routedModelList, isOpenAIClientPath, openAIErrorBody, sendOpenAIError } from './chat-completions.js';
 import { createProxyAuthenticator, isPublicHealthRequest, stripProxyCredentials } from '../proxy/api-auth.js';
 import { rewriteBaseRequest, selectBaseModel } from '../proxy/base-model.js';
 import { resolveModelRoute, selectCompactRoute, mediaConfigForRoute } from '../proxy/model-router.js';
@@ -34,7 +35,8 @@ import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { observeImagePayloads } from '../proxy/image-payload-observer.js';
 import { requestBaseUpstream } from './base-upstream.js';
-import { toOpenAIRequest, adaptOpenAIResponse, approximateTokenCount } from './openai-upstream-adapter.js';
+import { toOpenAIRequest, adaptOpenAIResponse } from './openai-upstream-adapter.js';
+import { countOpenAIInputTokens, tokenizeOnRoute } from './token-count.js';
 import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
@@ -125,10 +127,6 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
     : incomingHeaders;
   const anthropicHeaders = upstreamHeaders(isolatedHeaders, { ...config, vllmBaseApiKey: selectedRoute.apiKey });
   if (config.modelRouting?.enabled && selectedRoute.apiKey) anthropicHeaders['x-api-key'] = selectedRoute.apiKey;
-  if (openaiBackend && path === '/v1/messages/count_tokens') {
-    const body = JSON.stringify(approximateTokenCount(request));
-    return bufferedUpstreamResponse({ status: 200, ok: true, headers: { get: () => 'application/json' } }, body);
-  }
   const retryBusy = path === '/v1/messages';
   const selectedBaseModel = selectBaseModel(request?.model, selectedRoute.model);
   const clockEligiblePath = path === '/v1/messages' || path === '/v1/messages/count_tokens';
@@ -146,6 +144,13 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
     path,
     route_alias: selectedRoute.alias,
   });
+  if (openaiBackend && path === '/v1/messages/count_tokens') {
+    const payload = await countOpenAIInputTokens(upstreamRequest, selectedRoute, config, {
+      signal, incomingHeaders,
+      onEvent: (event, fields) => log(config, 'info', event, { requestId: baseRouteContext.getStore()?.requestId, ...fields }),
+    });
+    return bufferedUpstreamResponse({ status: 200, ok: true, headers: { get: () => 'application/json' } }, JSON.stringify(payload));
+  }
   const retryIntervalMs = Number.isFinite(Number(config.vllmBusyRetryIntervalMs))
     ? Math.max(1, Number(config.vllmBusyRetryIntervalMs))
     : 15_000;
@@ -793,7 +798,8 @@ export function createProxyServer(config, dependencies = {}) {
     if (config.proxyAuthEnabled) {
       if (!isPublicHealthRequest(req) && !authenticate(req)) {
         log(config, 'warn', 'proxy_auth_rejected', { requestId, method: req.method, code: 'authentication_error' });
-        return sendJson(res, 401, {
+        return sendJson(res, 401, isOpenAIClientPath(req.url)
+          ? openAIErrorBody(new HttpError(401, 'Missing or invalid proxy API key.', { code: 'authentication_error' })) : {
           type: 'error',
           error: { type: 'authentication_error', message: 'Missing or invalid proxy API key.', retryable: false },
         }, { 'www-authenticate': 'Bearer realm="cc-tool-proxy"', connection: 'close' });
@@ -1282,6 +1288,49 @@ export function createProxyServer(config, dependencies = {}) {
         });
       }
 
+      const apiPath = url.pathname.replace(/\/+$/, '');
+      if (req.method === 'GET' && apiPath === '/v1/models' && config.modelRouting?.enabled) {
+        log(config, 'info', 'route_decision', { requestId, method: req.method, path: url.pathname, decision: 'local_models', reason: 'configured_route_aliases' });
+        completed = true;
+        return sendJson(res, 200, routedModelList(config));
+      }
+      if (req.method === 'POST' && apiPath === '/v1/chat/completions') {
+        requestStage = 'chat_completions';
+        try {
+          const rawBody = await readBody(req, config.limits.maxRequestBytes);
+          await forwardChatCompletions(req, res, config, { rawBody, signal: abortController.signal,
+            onEvent: (event, fields) => log(config, 'info', event, { requestId, ...fields }) });
+        } catch (error) {
+          if (!abortController.signal.aborted) {
+            // Do not log raw prompts, tool arguments, or credentials.
+            log(config, 'warn', 'chat_request_failed', { requestId, code: error.code || 'internal_error' });
+            await sendOpenAIError(res, error, config);
+          }
+        }
+        completed = true;
+        return;
+      }
+
+      if (req.method === 'POST' && ['/tokenize', '/v1/tokenize'].includes(apiPath)) {
+        requestStage = 'tokenize';
+        let original;
+        try { original = JSON.parse((await readBody(req, config.limits.maxRequestBytes)).toString('utf8')); }
+        catch (error) {
+          if (error instanceof HttpError) throw error;
+          throw new HttpError(400, 'Tokenizer request is not valid JSON.', { code: 'invalid_json' });
+        }
+        if (!original || typeof original !== 'object' || Array.isArray(original)) {
+          throw new HttpError(400, 'Tokenizer request must be a JSON object.', { code: 'invalid_request' });
+        }
+        const route = resolveModelRoute(original.model, config);
+        const payload = await tokenizeOnRoute(original, route, config, {
+          signal: abortController.signal, incomingHeaders: req.headers,
+          onEvent: (event, fields) => log(config, 'info', event, { requestId, ...fields }),
+        });
+        completed = true;
+        return sendJson(res, 200, payload);
+      }
+
       const messagesPath = req.method === 'POST' ? canonicalMessagesPath(url.pathname) : '';
       const isMessagesPath = Boolean(messagesPath);
       if (!isMessagesPath) {
@@ -1323,7 +1372,7 @@ export function createProxyServer(config, dependencies = {}) {
       // AsyncLocalStorage isolates overlapping client HTTP requests without mutating global config.
       const pinnedBaseRoute = resolveModelRoute(original.model, config);
       const mediaConfig = mediaConfigForRoute(pinnedBaseRoute, config, { countOnly: messagesPath === '/v1/messages/count_tokens' });
-      baseRouteContext.enterWith({ route: pinnedBaseRoute });
+      baseRouteContext.enterWith({ route: pinnedBaseRoute, requestId });
       clientSessionId = claudeCodeSessionId(req.headers, original);
       if (messagesPath === '/v1/messages') {
         const serverCapabilityInventory = inspectAnthropicServerCapabilities(original);
@@ -1568,7 +1617,7 @@ export function createProxyServer(config, dependencies = {}) {
             dedicated_compact_overridden: Boolean(pinnedBaseRoute.alias && config.contextCompact?.enabled),
           });
           runtimeTelemetry.updateRequest(requestId, { phase: 'compact', detail: compactRoute.model || original.model || '' });
-          await baseRouteContext.run({ route: compactRoute }, async () => {
+          await baseRouteContext.run({ route: compactRoute, requestId }, async () => {
             if (compactRequest.stream !== true) {
               const payload = await callUpstreamJson(compactRequest, config, req.headers, abortController.signal);
               sendJson(res, 200, payload);
@@ -2492,7 +2541,11 @@ export function createProxyServer(config, dependencies = {}) {
           directedVisualStore.clear();
         }
         const proxyEvidenceCount = Math.max(0, (mediaProgress?.descriptors?.length || 0) - nativeVisionEligibleCount - directedVisionEligibleCount);
-        if (proxyEvidenceCount > 0 || mediaConfig.nativePdfPassthrough) request = injectEvidenceContract(request);
+        const nativePdfEvidence = mediaConfig.nativePdfPassthrough === true
+          && mediaProgress?.descriptors?.some((entry) => entry.kind === 'document');
+        // Native-only image/tool-result input has no Proxy evidence to authenticate.
+        // Locally rendered PDF documents still create source evidence and need the contract.
+        if (proxyEvidenceCount > 0 || nativePdfEvidence) request = injectEvidenceContract(request);
 
         if (nativeVisionEligibleCount > 0 && messagesPath === '/v1/messages/count_tokens' && config.usagePreflightEnabled !== false) {
           requestStage = 'native_vision_capability_preflight';

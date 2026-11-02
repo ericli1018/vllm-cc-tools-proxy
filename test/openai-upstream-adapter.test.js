@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toOpenAIRequest, toAnthropicMessage, adaptOpenAIResponse, approximateTokenCount } from '../src/services/openai-upstream-adapter.js';
+import { toOpenAIRequest, toAnthropicMessage, adaptOpenAIResponse } from '../src/services/openai-upstream-adapter.js';
 
 test('maps assistant tool use and user tool results', () => {
   const data = toOpenAIRequest({ model: 'm', system: 'policy', messages: [
@@ -33,7 +33,6 @@ test('adapts OpenAI streaming tool chunks to parseable Anthropic SSE', async () 
   assert.match(await result.text(), /partial_json/);
 });
 
-test('token count is explicit zero without tokenizer', () => assert.equal(approximateTokenCount({}).input_tokens, 0));
 
 test('OpenAI SSE is emitted incrementally before upstream completion', async () => {
   let release;

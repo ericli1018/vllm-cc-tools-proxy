@@ -74,9 +74,15 @@ export function selectCompactRoute(route, config) {
 }
 
 export function mediaConfigForRoute(route, config, { countOnly = false } = {}) {
-  if (!route?.alias) return countOnly && config.modelRouting?.enabled ? { ...config, mediaCountOnly: true } : config;
-  const capability = route.visionEnabled ?? config.vllmBaseVisionEnabled;
-  const passthrough = route.visualUseRoute !== false && config.visionNativePassthrough === true;
+  // Keep the pre-existing token-count placeholder contract: no native rendering
+  // and no new mediaCountOnly flag for Router-disabled single-model requests.
+  if (!route?.alias && countOnly) return config.modelRouting?.enabled
+    ? { ...config, mediaCountOnly: true }
+    : config;
+  // Base fallback and explicit model aliases follow the same native-media policy.
+  // Only an explicit route override may disable native visual handling.
+  const capability = route?.visionEnabled ?? config.vllmBaseVisionEnabled;
+  const passthrough = route?.visualUseRoute !== false && config.visionNativePassthrough === true;
   return { ...config, vllmBaseVisionEnabled: capability === true,
     visionNativePassthrough: passthrough,
     nativePdfPassthrough: capability === true && passthrough,

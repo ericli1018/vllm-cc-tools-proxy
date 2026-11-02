@@ -1,5 +1,44 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.78 Native Vision Consistency for Base Fallback and MCP Images
+
+With `VLLM_BASE_VISION_ENABLED=true` and `VISION_NATIVE_PASSTHROUGH=true`, Base / Router-fallback requests now follow **the same native-media policy as an explicitly matched Router alias**. Previously, `route_alias=null` left `tool_result_image` (e.g. ComfyUI MCP `get_image`) and `read_pdf_image` on the dedicated Directed Vision branch, even when ordinary `Read(image)` worked natively. This release fixes that mismatch, including in Router-disabled single-backend deployments. **No new ENV is needed.**
+
+- Native Base image types now include `direct_image`, `read_image`, `tool_result_image`, `read_pdf_image`, and locally rendered bounded PDF pages. Eligible image blocks are preserved for the selected Base model; they **do not** trigger Directed Vision planning or dedicated visual inference. A native-only image request continues to use ordinary model progress, with no fabricated Vision-analysis stages.
+- Raw PDF documents are **not** forwarded as unsupported PDF objects. Proxy still extracts text, builds page/document maps and renders bounded page images, preserving `Read.pages`, page indices, media limits and cancellation. Native PDF semantic caches are not reused as evidence.
+- A matched Router alias with `visual_use_route=false` or `vision_enabled=false`, or globally disabled native switches, still uses the existing dedicated `VLLM_VISION_*` pipeline. `VISION_ORCHESTRATION_MODE=directed` only applies to media **not** eligible for native passthrough.
+- Explicit image-capability rejection from the selected Base (supported 400/415/422 errors) still triggers the existing **one-time same-model request retry with dedicated Vision evidence**. Generic 5xx, network failures, unknown model errors, and ordinary timeouts do **not** silently switch models.
+- This release only changes `/v1/messages` media handling, not the independent `/v1/chat/completions` path, the model list, API authentication, token-count semantics, Compact, Tool safety or TensorFold/vLLM decoding. Native passthrough requires the selected Base to actually support images; enabling flags does not add vision capability to a text-only model.
+
+See [native-media regression details](docs/NATIVE_VISION_BASE_FALLBACK_v0.29.78.md) and [verification report](change_log/V0.29.78-Native_Vision_MCP_修正與驗證.md). Real ComfyUI MCP + TensorFold / vLLM + Claude Code deployment is not verified by the local simulated tests.
+
+## V0.29.77 Route-aware Backend Token Counting
+
+OpenAI-backed `POST /v1/messages/count_tokens` now asks the selected backend for its token count instead of returning a local placeholder `0`. Managed SSE usage preflight uses the same pinned route, actual model and configured backend key. No new ENV.
+
+- OpenAI count attempts `/tokenize`, then `/v1/tokenize`, then the same backend's `/v1/messages/count_tokens`, **only** after HTTP 404/405/501 (explicit model-not-found is not capability fallback). Authentication, rate-limit, server, malformed-count and transport failures do not trigger alternate endpoints or switch models.
+- Public `POST /tokenize` and `/v1/tokenize` now share Router selection; preserve native tokenizer inputs/token IDs and rewrite only `model`. Both use the backend tokenizer paths, retaining reverse-proxy prefixes. Direct `/detokenize` is unchanged.
+- Tokenizer requests reuse the inference adapter's messages, system text, tool schemas/results, images and thinking controls. No generation, character estimate, or fabricated zero. Backend-confirmed zero is valid; invalid/missing counts are errors.
+- All utility requests use only configured backend keys, never frontend credentials; respect cancellation, transport timeouts and response size bounds. Safe diagnostic events include request ID, alias, real model, endpoint and count, never prompts or keys.
+- Public unsupported counts return HTTP 501. Managed preflight remains best effort: a failed count logs `managed_usage_preflight_failed` and inference can continue with unknown initial usage; it is **not** a successful count of zero. Non-streaming inference still uses its response usage without adding a new preflight.
+- This returns backend-reported prompt counts, not a universal exactness guarantee across provider/template versions, media processing, cache accounting or later prompt changes. `/tokenize` is a vLLM/TensorFold extension, not a universal OpenAI Chat API endpoint.
+
+See [implementation scope and decisions](docs/TOKEN_COUNT_ROUTING_v0.29.77.md) and [configuration and verification](change_log/V0.29.77-Token計數路由_設定與驗證.md). No inference stall/recovery settings were changed; real remote deployment remains unverified.
+
+## V0.29.76 Unified Model Catalog and Dual-API Routing
+
+`GET /v1/models` now returns configured Router aliases locally when routing is enabled. Multiple aliases for the same backend remain separate; no backend URLs/keys are exposed. With routing disabled, the existing Base catalog forwarding remains.
+
+`POST /v1/chat/completions` now shares `resolveModelRoute` with `/v1/messages`: URL, upstream model, protocol, credentials, reject/fallback and request-local backend selection all follow `VLLM_MODEL_ROUTES` / `VLLM_MODEL_ROUTING_FILE`. No new ENV.
+
+- OpenAI -> OpenAI preserves native request fields and response extensions, with only the top-level response `model` rewritten to the client alias. SSE text/tool fragments stream incrementally; terminal completion is committed after `[DONE]`.
+- OpenAI -> Anthropic converts supported text/images, leading system/developer instructions, function tools/results, effort, usage and JSON/SSE responses. Text/reasoning stream incrementally; tool calls commit after validated `message_stop`. Unsupported/lossy options return explicit errors, not silent omissions.
+- Chat requests do not enter the Claude Code Managed tool loop, Completion Probe, progress UI, or dedicated Compact/Vision workflows. Existing Messages workflows and all configured timeout settings remain unchanged.
+- Ingress auth applies; Chat always uses backend-configured credentials, even if ingress auth is disabled. Client cancellation cancels the selected upstream.
+- Upgrade note: even with Router disabled, Chat now follows `VLLM_BASE_API_PROTOCOL`. Set `openai` for native OpenAI forwarding; the default `anthropic` invokes the reverse bridge. Cross-protocol support is a documented subset, not full API equivalence.
+
+See [configuration and compatibility limits](docs/UNIFIED_API_ROUTING_v0.29.76.md) and [verification report](change_log/V0.29.76-模型清單與雙API路由_驗證.md). No remote repository or running deployment is modified by this ZIP.
+
 ## V0.29.75 Inbound API Key Authentication
 
 Set `PROXY_AUTH_ENABLED=true` and a private `PROXY_API_KEY` to require `Authorization: Bearer <key>` or `x-api-key: <key>` before any model, tool, body parsing, SSE, or bypass forwarding. Only **GET `/health` and GET `/healthz`** remain public; status, count_tokens, Compact and all other paths are protected. If both credential headers are sent they must both match; duplicate/malformed headers are rejected.

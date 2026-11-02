@@ -33,7 +33,8 @@ export function buildUpstreamUrl(baseUrl, incomingUrl) {
   const base = new URL(baseUrl);
   const incoming = new URL(incomingUrl || '/', 'http://proxy.local');
   let basePath = base.pathname.replace(/\/+$/, '');
-  if (basePath.endsWith('/v1/messages')) basePath = basePath.slice(0, -'/v1/messages'.length);
+  // Accept either a service root, /v1, or a full supported endpoint.
+  basePath = basePath.replace(/\/v1\/(?:chat\/completions|messages(?:\/count_tokens)?|models)$/, '');
 
   if (basePath.endsWith('/v1') && (incoming.pathname === '/v1' || incoming.pathname.startsWith('/v1/'))) {
     base.pathname = `${basePath}${incoming.pathname.slice(3)}` || '/v1';

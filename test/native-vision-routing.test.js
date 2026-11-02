@@ -325,17 +325,13 @@ test('V0.29.29 actual Claude Code Read(image) provenance routes the returned ima
   assert.deepEqual(observed.map((entry) => entry.url), ['/v1/messages']);
 });
 
-test('V0.29.29 actual Claude Code Read(PDF) image provenance stays on Proxy Vision', async (t) => {
+test('V0.29.78 actual Claude Code Read(PDF) page image uses Base Native Vision', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
   let observedBody = '';
   const upstream = http.createServer(async (req, res) => {
     const payload = JSON.parse(await readRequest(req));
     observedBody = JSON.stringify(payload);
-    assert.equal(req.url, '/v1/messages');
-    assert.equal(observedBody.includes(base64), false);
-    assert.match(observedBody, /READ PDF PAGE EVIDENCE/);
-    assert.match(observedBody, /source_kind: \\\"read_pdf_image\\\"/);
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ id: 'read-pdf-image', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 1 } }));
   });
@@ -359,18 +355,19 @@ test('V0.29.29 actual Claude Code Read(PDF) image provenance stays on Proxy Visi
     body: JSON.stringify({ model: 'm', stream: false, messages }),
   });
   assert.equal(response.status, 200);
-  assert.equal(visionCalls, 1);
+  assert.equal(visionCalls, 0);
+  assert.equal(observedBody.includes(base64), true);
+  assert.doesNotMatch(observedBody, /READ PDF PAGE EVIDENCE|VCC_PROXY_EVIDENCE_CONTRACT_V1/);
 });
 
-test('V0.29.29 mixed Native and Proxy-routed images preserve the raw Native image while injecting evidence only for the Proxy-routed image', async (t) => {
+test('V0.29.78 mixed direct and tool-result images both remain raw Native Vision without dedicated evidence', async (t) => {
   const png = await fs.readFile(new URL('./fixtures/text-image.png', import.meta.url));
   const base64 = png.toString('base64');
+  const captured = [];
   const upstream = http.createServer(async (req, res) => {
     const payload = JSON.parse(await readRequest(req));
     const serialized = JSON.stringify(payload);
-    assert.equal(serialized.includes(base64), true);
-    assert.match(serialized, /MIXED PROXY EVIDENCE/);
-    assert.match(serialized, /VCC_PROXY_EVIDENCE_CONTRACT_V1/);
+    captured.push({ url: req.url, serialized });
     if (req.url.includes('/count_tokens')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ input_tokens: 88 }));
@@ -402,7 +399,11 @@ test('V0.29.29 mixed Native and Proxy-routed images preserve the raw Native imag
     body: JSON.stringify({ model: 'm', stream: false, messages }),
   });
   assert.equal(response.status, 200);
-  assert.equal(visionCalls, 1);
+  assert.equal(visionCalls, 0);
+  const modelCall = captured.find(entry => entry.url === '/v1/messages');
+  assert.ok(modelCall, 'expected Base /v1/messages request');
+  assert.doesNotMatch(modelCall.serialized, /MIXED PROXY EVIDENCE|VCC_PROXY_EVIDENCE_CONTRACT_V1/);
+  assert.equal(modelCall.serialized.split(base64).length - 1, 2, 'direct and MCP image must both reach Base');
 });
 
 test('V0.29.31 Native raw route no longer depends on a full-image count_tokens probe', async (t) => {

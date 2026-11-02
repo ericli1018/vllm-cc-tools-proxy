@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { resolveModelRoute } from '../src/proxy/model-router.js';
+import { resolveModelRoute, mediaConfigForRoute } from '../src/proxy/model-router.js';
 import { parsePdf } from '../src/parsers/pdf.js';
 import { adaptMessages } from '../src/proxy/content-blocks.js';
 import { toOpenAIRequest } from '../src/services/openai-upstream-adapter.js';
@@ -149,4 +149,21 @@ test('V0.29.69 native image budget is shared across PDF documents within one req
   const block = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: pdf.toString('base64') } };
   await adapters.adaptDocument(block); await adapters.adaptDocument(block);
   assert.deepEqual(budgets, [limits.maxDecodedBytes, limits.maxDecodedBytes - png.length]);
+});
+
+
+test('V0.29.78 model-route and Base fallback have equivalent Native Vision policy', () => {
+  const config = { ...configFor({}), vllmBaseVisionEnabled: true, visionNativePassthrough: true };
+  const known = mediaConfigForRoute(resolveModelRoute('alias', config), config);
+  const fallbackConfig = { ...config, modelRouting: { ...config.modelRouting, unknownModel: 'fallback' } };
+  const unknown = mediaConfigForRoute(resolveModelRoute('missing', fallbackConfig), fallbackConfig);
+  assert.equal(known.nativePdfPassthrough, true);
+  assert.equal(unknown.nativePdfPassthrough, true, 'fallback must handle tool_result_image and rendered PDF pages');
+  assert.equal(unknown.vllmBaseVisionEnabled, true);
+  assert.equal(unknown.visionNativePassthrough, true);
+  const fallbackCount = mediaConfigForRoute(resolveModelRoute('missing', fallbackConfig), fallbackConfig, { countOnly: true });
+  assert.equal(fallbackCount.mediaCountOnly, true);
+  assert.equal(fallbackCount.nativePdfPassthrough, undefined, 'token-only fallback keeps legacy media placeholders');
+  assert.equal(mediaConfigForRoute(resolveModelRoute('missing', fallbackConfig), { ...fallbackConfig, visionNativePassthrough: false }).nativePdfPassthrough, false);
+  assert.equal(mediaConfigForRoute(resolveModelRoute('missing', fallbackConfig), { ...fallbackConfig, vllmBaseVisionEnabled: false }).nativePdfPassthrough, false);
 });

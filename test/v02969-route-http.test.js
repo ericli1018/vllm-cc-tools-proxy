@@ -39,13 +39,17 @@ function answer(res, protocol, body, text, plan = false) {
     event('content_block_delta', { index: 0, delta: { type: 'text_delta', text } }) + event('content_block_stop', { index: 0 }) +
     event('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 7 } }) + event('message_stop'));
 }
-async function setup(t, { protocol = 'anthropic', baseProtocol = 'openai', routes = {}, directed = true, rejectImage = 0, extraConfig = {}, externalCompact = false } = {}) {
+async function setup(t, { protocol = 'anthropic', baseProtocol = 'openai', routes = {}, directed = true, rejectImage = 0, rejectBaseImage = 0, routingEnabled = true, extraConfig = {}, externalCompact = false } = {}) {
   const seen = { base: [], route: [], vision: [], externalPdf: [], logs: [] };
   const make = (kind, protocol) => serve(t, async (req, res) => {
     const body = await read(req); seen[kind].push({ body, path: req.url, headers: req.headers });
     await delay(kind === 'route' ? 6 : 2);
     if (req.url.endsWith('/count_tokens')) return json(res, { input_tokens: 23 });
-    if (kind === 'route' && rejectImage && hasImages(body)) return json(res, { error: { type: 'invalid_request_error', message: rejectImage === 400 ? 'At most 0 image(s) may be provided in one prompt.' : 'Service unavailable' } }, rejectImage);
+    if (req.url.endsWith('/tokenize')) return json(res, { count: 23, tokens: [] });
+    if (((kind === 'route' && rejectImage) || (kind === 'base' && rejectBaseImage)) && hasImages(body)) {
+      const code = kind === 'route' ? rejectImage : rejectBaseImage;
+      return json(res, { error: { type: 'invalid_request_error', message: code === 400 ? 'At most 0 image(s) may be provided in one prompt.' : 'Service unavailable' } }, code);
+    }
     const plan = body.tools?.some(t => (t.name || t.function?.name) === 'SubmitVisualPlan');
     answer(res, protocol, body, `${kind.toUpperCase()}_OK`, plan);
   });
@@ -60,7 +64,7 @@ async function setup(t, { protocol = 'anthropic', baseProtocol = 'openai', route
   const definitions = Object.fromEntries(Object.entries(Object.keys(routes).length ? routes : { alias: {} }).map(([alias, settings]) => [alias, { url: routeUrl + '/v1', protocol, model: `local-${alias}`, api_key: 'route-key', ...settings }]));
   const config = { ...loadConfig({
     VLLM_BASE_URL: baseUrl, VLLM_BASE_MODEL: 'base-model', VLLM_BASE_API_PROTOCOL: baseProtocol, VLLM_BASE_API_KEY: 'base-key',
-    VLLM_MODEL_ROUTES: JSON.stringify(definitions), VLLM_MODEL_ROUTING_UNKNOWN_MODEL: 'fallback',
+    VLLM_MODEL_ROUTES: JSON.stringify(definitions), VLLM_MODEL_ROUTING_ENABLED: String(routingEnabled), VLLM_MODEL_ROUTING_UNKNOWN_MODEL: 'fallback',
     VLLM_BASE_VISION_ENABLED: 'true', VISION_NATIVE_PASSTHROUGH: 'true', VISION_ORCHESTRATION_MODE: directed ? 'directed' : 'legacy',
     VLLM_VISION_URL: visionUrl, VLLM_VISION_MODEL: 'dedicated-vision', VLLM_VISION_API_KEY: 'vision-key',
     COMPLETION_PROBE_ENABLED: 'false', LANG_PROCESSOR_ENABLED: 'false', LOG_LEVEL: 'info',
@@ -189,8 +193,10 @@ test('V0.29.69 plain count_tokens honors route, never generates or uses the Base
 test('V0.29.69 unmatched fallback count_tokens does not perform dedicated PDF inference', async t => {
   const { seen, post } = await setup(t);
   const res = await post({ model: 'unknown', messages: [{ role: 'user', content: [document()] }] }, '/v1/messages/count_tokens');
-  assert.equal(res.status, 200, await res.text());
+  assert.equal(res.status, 200); assert.equal((await res.json()).input_tokens, 23);
   assert.equal(seen.externalPdf.length, 0); assert.equal(seen.vision.length, 0);
+  assert.equal(seen.route.length, 0); assert.equal(seen.base.length, 1);
+  assert.equal(seen.base[0].path, '/tokenize'); assert.equal(seen.base[0].body.model, 'base-model');
 });
 
 test('V0.29.69 empty route API key never inherits client or Base credentials', async t => {
@@ -290,5 +296,97 @@ for (const protocol of ['anthropic', 'openai']) for (const kind of ['image', 're
     assert.equal(seen.route.length, 1, 'no extra inference introduced for progress');
     assert.ok(seen.logs.some(e => e.event === 'managed_task_progress' && e.phase === 'managed_model_round_start'), 'exercise the formerly leaking callback');
     assert.equal(events.filter(e => e.type === 'message_stop').length, 1);
+  });
+}
+
+
+// V0.29.78: Native Vision eligibility must not depend on whether a Router alias matched.
+// A ComfyUI/MCP tool_result image is regular image input for the selected multimodal Base.
+function toolImageMessages(kind = 'mcp') {
+  const toolName = kind === 'read-pdf' ? 'Read' : 'mcp__comfyui__get_image';
+  return [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'image-tool-1', name: toolName,
+      input: kind === 'read-pdf' ? { file_path: '/private/report.pdf', pages: '1' } : { filename: 'web-painting_00003_.png' } }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'image-tool-1', content: [
+      { type: 'text', text: 'Saved to /tmp/landscape-previews/web-painting_00003_.png' }, image(),
+    ] }] },
+  ];
+}
+for (const protocol of ['anthropic', 'openai']) for (const stream of [false, true]) for (const kind of ['mcp', 'read-pdf']) {
+  test(`V0.29.78 Base fallback native ${kind} ${protocol} stream=${stream} skips Directed Vision`, async t => {
+    const { seen, post } = await setup(t, { baseProtocol: protocol });
+    const res = await post({ model: 'not-configured', stream, messages: toolImageMessages(kind) });
+    const wire = await res.text();
+    assert.equal(res.status, 200, wire);
+    assert.match(wire, /BASE_OK/);
+    assert.equal(seen.route.length, 0);
+    assert.equal(seen.vision.length, 0);
+    assert.equal(seen.externalPdf.length, 0);
+    assert.equal(seen.base.length, 1);
+    assert.equal(seen.base[0].body.model, 'base-model');
+    assert.equal(seen.base[0].headers.authorization, 'Bearer base-key');
+    assert.ok(hasImages(seen.base[0].body), 'raw MCP/Read-PDF image must reach the Base model');
+    assert.match(JSON.stringify(seen.base[0].body), new RegExp(png.toString('base64').slice(0, 80)));
+    assert.doesNotMatch(JSON.stringify(seen.base[0].body), /VCC_PROXY_EVIDENCE_CONTRACT_V1/, 'raw native images have no Proxy evidence');
+    assert.ok(seen.logs.some(e => e.event === 'native_vision_route_selected' && e.source_kinds?.includes(kind === 'mcp' ? 'tool_result_image' : 'read_pdf_image')));
+    assert.ok(!seen.logs.some(e => e.event === 'directed_vision_route_selected'));
+    assert.doesNotMatch(wire, /規劃判讀|等待視覺|視覺判讀|判讀失敗|SubmitVisualPlan/);
+  });
+}
+for (const protocol of ['anthropic', 'openai']) {
+  test(`V0.29.78 Base fallback native PDF ${protocol}: local-render page, never dedicated analyzer`, async t => {
+    const { seen, post } = await setup(t, { baseProtocol: protocol });
+    const res = await post({ model: 'unmatched', messages: [{ role: 'user', content: [document()] }] });
+    const wire = await res.text(); assert.equal(res.status, 200, wire);
+    assert.match(wire, /BASE_OK/);
+    assert.equal(seen.route.length, 0);
+    assert.equal(seen.vision.length, 0);
+    assert.equal(seen.externalPdf.length, 0);
+    assert.ok(hasImages(seen.base.at(-1).body));
+    assert.match(JSON.stringify(seen.base.at(-1).body), /PDF source|scan\.pdf/);
+    assert.match(JSON.stringify(seen.base.at(-1).body), /VCC_PROXY_EVIDENCE_CONTRACT_V1/, 'PDF text is still local Proxy evidence');
+    assert.ok(seen.logs.some(e => e.event === 'native_vision_route_selected' && e.source_kinds?.includes('pdf_document')));
+  });
+}
+for (const protocol of ['anthropic', 'openai']) {
+  test(`V0.29.78 Base native MCP capability 400 ${protocol} falls back once without lost media`, async t => {
+    const { seen, post } = await setup(t, { baseProtocol: protocol, rejectBaseImage: 400 });
+    const res = await post({ model: 'unknown', messages: toolImageMessages() });
+    const wire = await res.text(); assert.equal(res.status, 200, wire);
+    assert.match(wire, /BASE_OK/);
+    assert.equal(seen.base.filter(e => hasImages(e.body)).length, 1);
+    assert.equal(hasImages(seen.base.at(-1).body), false);
+    assert.equal(seen.vision.length + seen.externalPdf.length, 1, 'exactly one dedicated image analysis must run');
+    assert.equal(seen.route.length, 0);
+    assert.ok(seen.logs.some(e => e.event === 'native_vision_fallback_selected'));
+  });
+}
+test('V0.29.78 Router disabled still uses Base Native Vision for MCP images', async t => {
+  const { seen, post } = await setup(t, { routingEnabled: false });
+  const res = await post({ messages: toolImageMessages() });
+  const wire = await res.text(); assert.equal(res.status, 200, wire);
+  assert.equal(seen.route.length, 0);
+  assert.ok(hasImages(seen.base.at(-1).body));
+  assert.equal(seen.vision.length, 0);
+});
+test('V0.29.78 explicit visual_use_route=false still forces dedicated Vision', async t => {
+  const { seen, post } = await setup(t, { routes: { alias: { visual_use_route: false } } });
+  const res = await post({ messages: toolImageMessages() });
+  assert.equal(res.status, 200, await res.text());
+  assert.equal(seen.base.length, 0);
+  assert.equal(seen.vision.length, 1);
+  assert.equal(hasImages(seen.route.at(-1).body), false);
+});
+
+for (const protocol of ['anthropic', 'openai']) {
+  test(`V0.29.78 Base native MCP backend 503 ${protocol} is not treated as unsupported vision`, async t => {
+    const { seen, post } = await setup(t, { baseProtocol: protocol, rejectBaseImage: 503 });
+    const res = await post({ model: 'unknown', messages: toolImageMessages() });
+    const wire = await res.text();
+    assert.equal(res.status, 502, wire);
+    assert.equal(seen.base.length, 1);
+    assert.equal(seen.vision.length + seen.externalPdf.length, 0);
+    assert.equal(seen.route.length, 0);
+    assert.ok(!seen.logs.some(e => e.event === 'native_vision_fallback_selected'));
   });
 }

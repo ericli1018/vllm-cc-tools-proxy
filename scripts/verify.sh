@@ -112,8 +112,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.75'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.75'
+test "$(node -p "require('./package.json').version")" = '0.29.78'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.78'
 
 
 test -f src/i18n/response-language.js
@@ -542,7 +542,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.75'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.78'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1415,3 +1415,24 @@ test -f change_log/V0.29.75-API_Key_驗證與憑證隔離.md
 grep -q '^PROXY_AUTH_ENABLED=$' .env.example
 grep -q '^PROXY_API_KEY=$' .env.example
 node --test --test-name-pattern='V0.29.75' test/proxy-auth.test.js test/statusline-client.test.js test/deployment.test.js
+
+# V0.29.76: one router for model discovery and both client API protocols.
+test -f docs/UNIFIED_API_ROUTING_v0.29.76.md
+test -f src/services/chat-completions.js
+test -f src/services/openai-client-adapter.js
+grep -Fq 'V0.29.76 Unified Model Catalog and Dual-API Routing' README.md
+node --test test/v02976-unified-routing.test.js test/v02976-chat-stream.test.js
+
+# V0.29.77: token counting must query the selected route, never a zero stub.
+test -f src/services/token-count.js
+test -f docs/TOKEN_COUNT_ROUTING_v0.29.77.md
+! grep -Fq 'approximateTokenCount' src/services/proxy-server.js
+grep -Fq 'countOpenAIInputTokens' src/services/proxy-server.js
+node --test test/v02977-token-routing.test.js test/v02977-token-prompt.test.js
+
+# V0.29.78: Native Vision must handle MCP tool-result and Read(PDF) page images on Base fallback.
+test -f docs/NATIVE_VISION_BASE_FALLBACK_v0.29.78.md
+test -f change_log/V0.29.78-Native_Vision_MCP_修正與驗證.md
+grep -Fq 'V0.29.78 Native Vision Consistency for Base Fallback and MCP Images' README.md
+grep -Fq 'const nativePdfEvidence = mediaConfig.nativePdfPassthrough === true' src/services/proxy-server.js
+node --test --test-name-pattern='V0.29.78' test/v02969-route-http.test.js test/v02969-route-policies.test.js test/native-vision-routing.test.js

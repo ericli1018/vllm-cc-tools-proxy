@@ -286,8 +286,3 @@ export async function adaptOpenAIResponse(response, request) {
     body: { async *[Symbol.asyncIterator]() { yield bytes; } }, text: async () => translated };
 }
 
-export function approximateTokenCount(request) {
-  // No portable token-count endpoint exists in OpenAI Chat Completions.
-  // Deliberately return zero rather than misreport an inaccurate token count.
-  return { input_tokens: 0 };
-}
