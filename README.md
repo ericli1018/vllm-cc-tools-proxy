@@ -1,5 +1,9 @@
 # VLLM-CC-TOOLS-PROXY
 
+## v0.29.79 — Tool Reference Compatibility
+
+Before routing `/v1/messages` to a local model, validate ToolSearch `tool_reference` against the current request's exact tool definitions. Convert references to readable ToolSearch results and make the matching deferred tools callable; never synthesize tools, silently drop references, or change the Claude Code client result. Invalid/absent/duplicate definitions fail with HTTP 400. `TOOL_REFERENCE_MODE=compat` (default) or `passthrough` (only for a backend with native Anthropic Tool Search support); per-route `tool_reference_mode` overrides the default. See `docs/TOOL_REFERENCE_v0.29.79.md`.
+
 ## V0.29.78 Native Vision Consistency for Base Fallback and MCP Images
 
 With `VLLM_BASE_VISION_ENABLED=true` and `VISION_NATIVE_PASSTHROUGH=true`, Base / Router-fallback requests now follow **the same native-media policy as an explicitly matched Router alias**. Previously, `route_alias=null` left `tool_result_image` (e.g. ComfyUI MCP `get_image`) and `read_pdf_image` on the dedicated Directed Vision branch, even when ordinary `Read(image)` worked natively. This release fixes that mismatch, including in Router-disabled single-backend deployments. **No new ENV is needed.**

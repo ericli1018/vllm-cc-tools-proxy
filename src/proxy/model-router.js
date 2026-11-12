@@ -44,6 +44,10 @@ export function configureModelRoutes(env) {
         && !['none', 'vllm', 'tensorfold'].includes(entry.thinking_budget_format)) {
       throw new Error(`Model route ${alias}: thinking_budget_format must be none, vllm or tensorfold`);
     }
+    if (Object.hasOwn(entry, 'tool_reference_mode')
+        && !['compat', 'passthrough'].includes(entry.tool_reference_mode)) {
+      throw new Error(`Model route ${alias}: tool_reference_mode must be compat or passthrough`);
+    }
     routes[alias] = Object.freeze({
       url, protocol, model, apiKey, alias,
       compactUseRoute: entry.compact_use_route ?? true,
@@ -51,6 +55,7 @@ export function configureModelRoutes(env) {
       ...(entry.vision_enabled === undefined ? {} : { visionEnabled: entry.vision_enabled }),
       ...(entry.thinking_budget_enabled === undefined ? {} : { thinkingBudgetEnabled: entry.thinking_budget_enabled }),
       ...(entry.thinking_budget_format === undefined ? {} : { thinkingBudgetFormat: entry.thinking_budget_format }),
+      ...(entry.tool_reference_mode === undefined ? {} : { toolReferenceMode: entry.tool_reference_mode }),
     });
   }
   if (!Object.keys(routes).length) throw new Error('Model routes cannot be empty');

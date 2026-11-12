@@ -52,6 +52,7 @@ import { normalizeAnthropicUsage, totalAnthropicInputTokens, usageFromTokenCount
 import { normalizeNativeWebToolsRequest, createManagedWebPolicyEnforcer, detectServerWebUiDeclaration, canonicalWebToolName } from '../proxy/native-web-tools.js';
 import { inspectAnthropicServerCapabilities, inspectAnthropicServerResponse } from '../proxy/server-capabilities.js';
 import { prepareLocalToolSearchRequest, localToolSearchStateSnapshot } from '../proxy/tool-search.js';
+import { prepareToolReferenceCompatibility } from '../proxy/tool-reference-compat.js';
 import { ClientWebToolLifecycleRegistry, parseClaudeCodeWebFetchProcessorChild, webFetchResultNeedsFallback } from '../proxy/client-web-tool-lifecycle.js';
 import { processWebFetchContent } from './web-fetch-processor.js';
 import { runContextCompact } from './context-compact-client.js';
@@ -1856,6 +1857,25 @@ export function createProxyServer(config, dependencies = {}) {
         }
       };
 
+      // v0.29.79: convert only for local backends, after the Compact early-return.
+      // Validation uses current tools, and referenced deferred definitions are made
+      // callable before prepareLocalToolSearchRequest filters the catalog.
+      const toolRefResult = prepareToolReferenceCompatibility(original, {
+        mode: pinnedBaseRoute.toolReferenceMode ?? config.toolReferenceMode ?? 'compat',
+        protocol: pinnedBaseRoute.protocol,
+      });
+      if (toolRefResult.changed) {
+        original = toolRefResult.request;
+        cleanedMessages = original.messages;
+        requestRewritten = true;
+        historyRewritten = true;
+        log(config, 'info', 'tool_reference_compat_applied', {
+          requestId, route_alias: pinnedBaseRoute.alias,
+          protocol: pinnedBaseRoute.protocol,
+          reference_count: toolRefResult.referenceCount,
+          materialized_tool_count: toolRefResult.materializedCount,
+        });
+      }
       requestStage = 'request_classification';
       const classification = classifyMessagesRequest(original);
       const initiallyManaged = messagesPath === '/v1/messages/count_tokens'

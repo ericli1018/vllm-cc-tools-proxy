@@ -70,6 +70,9 @@ export function toOpenAIRequest(request, options = {}) {
       const text = blocks.map(block => block.text).join('\n');
       if (text) systemTexts.push(text);
     } else if (msg.role === 'assistant') {
+      if (blocks.some(x => ['server_tool_use', 'tool_search_tool_result'].includes(x?.type))) {
+        throw new HttpError(400, 'Tool Search history must be validated and materialized before OpenAI conversion.', { code: 'tool_reference_unconverted' });
+      }
       const tools = blocks.filter(x => x.type === 'tool_use');
       const text = blocks.filter(x => x.type === 'text').map(x => x.text || '').join('\n');
       const output = { role: 'assistant', content: text || null };
@@ -81,6 +84,9 @@ export function toOpenAIRequest(request, options = {}) {
       const flush = () => { if (pending.length) messages.push({ role: 'user', content: pending.splice(0) }); };
       for (const block of blocks) {
         if (block.type === 'tool_result') {
+          if (Array.isArray(block.content) && block.content.some(item => item?.type === 'tool_reference')) {
+            throw new HttpError(400, 'Tool references must be validated and materialized before OpenAI conversion.', { code: 'tool_reference_unconverted' });
+          }
           flush();
           messages.push({ role: 'tool', tool_call_id: block.tool_use_id, content: textOf(block.content) });
           if (Array.isArray(block.content) && block.content.some(part => part?.type === 'image')) {

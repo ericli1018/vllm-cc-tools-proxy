@@ -74,6 +74,7 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      TOOL_REFERENCE_MODE: "${TOOL_REFERENCE_MODE:-compat}"
       PROXY_AUTH_ENABLED: "${PROXY_AUTH_ENABLED:-}"
       PROXY_API_KEY: "${PROXY_API_KEY:-}"
       PORT: 8080

@@ -1,0 +1,34 @@
+{
+  "version": "0.29.79",
+  "baseline": "0.29.78",
+  "baseline_sha256": "e9375a55ae5b292308c374989f7ffb0f26dd860deb956e8f4d4a72e048776854",
+  "baseline_crc": "pass",
+  "upgrade_check": "pass",
+  "upgrade_apply": "pass",
+  "source_full_suite": {
+    "tests": 1134,
+    "passed": 1134,
+    "failed": 0
+  },
+  "targeted_suite": {
+    "tests": 41,
+    "passed": 41,
+    "failed": 0
+  },
+  "http_integration": {
+    "tests": 6,
+    "passed": 6,
+    "failed": 0
+  },
+  "syntax": {
+    "javascript_files": 175,
+    "passed": true
+  },
+  "historical_verify": {
+    "exit_code": 0
+  },
+  "live_tensorfold_tested": false,
+  "github_main_modified": false,
+  "production_deployed": false,
+  "verified_test_environment": "Node.js v22.16.0 with local HTTP mock backends"
+}

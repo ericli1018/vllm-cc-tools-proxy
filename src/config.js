@@ -249,6 +249,7 @@ export function loadConfig(env = process.env) {
     host: env.HOST || '0.0.0.0',
     proxyAuthEnabled,
     proxyApiKey,
+    toolReferenceMode: enumValue(env.TOOL_REFERENCE_MODE, 'compat', 'TOOL_REFERENCE_MODE', ['compat', 'passthrough']),
     resourceProfile: profileName,
     responseLanguage: resolveResponseLanguage(env.MODEL_RESPONSE_LANGUAGE),
     modelResponseTimezone: progressTimeZone.timeZone,

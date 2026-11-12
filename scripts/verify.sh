@@ -112,8 +112,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.78'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.78'
+test "$(node -p "require('./package.json').version")" = '0.29.79'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.79'
 
 
 test -f src/i18n/response-language.js
@@ -542,7 +542,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.78'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.79'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1436,3 +1436,7 @@ test -f change_log/V0.29.78-Native_Vision_MCP_修正與驗證.md
 grep -Fq 'V0.29.78 Native Vision Consistency for Base Fallback and MCP Images' README.md
 grep -Fq 'const nativePdfEvidence = mediaConfig.nativePdfPassthrough === true' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.78' test/v02969-route-http.test.js test/v02969-route-policies.test.js test/native-vision-routing.test.js
+
+# v0.29.79 Tool Reference validation and compatibility suite
+test -f src/proxy/tool-reference-compat.js
+node --test test/v02979-tool-reference.test.js test/v02979-router-mode.test.js test/v02979-tool-reference-http.test.js
