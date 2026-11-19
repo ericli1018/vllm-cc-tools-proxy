@@ -1,0 +1,72 @@
+{
+  "release": "0.29.81",
+  "basis": "vllm-cc-tools-proxy-v0.29.80.zip",
+  "date": "2026-11-19",
+  "scope": [
+    "stateless media-history normalization",
+    "latest-four PATH-backed image occurrence window",
+    "deterministic released-image markers",
+    "shared Read/Screenshot provenance",
+    "normalization before traces/count/vision/inference"
+  ],
+  "baseline": {
+    "tests": 1143,
+    "passed": 1143,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "tdd": {
+    "module_missing_red": true,
+    "pipeline_red": true,
+    "trace_order_red": true,
+    "duplicate_id_red": true,
+    "unc_path_red": true
+  },
+  "source_full_suite": {
+    "tests": 1162,
+    "passed": 1162,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "exit_code": 0
+  },
+  "syntax": {
+    "files": 180,
+    "exit_code": 0
+  },
+  "historical_verify": {
+    "command": "sh scripts/verify.sh",
+    "exit_code": 0
+  },
+  "feature_defaults": {
+    "MEDIA_HISTORY_NORMALIZATION_ENABLED": false,
+    "MEDIA_HISTORY_MAX_PATH_IMAGES": 4
+  },
+  "storage": {
+    "new_image_store": false,
+    "new_metadata_store": false,
+    "new_volume": false
+  },
+  "limitations": {
+    "live_vllm_tested": false,
+    "live_claude_code_tested": false,
+    "remote_repository_modified": false,
+    "deployed": false,
+    "tool_search_cache_stability_changed": false
+  },
+  "evidence_sha256": {
+    "baseline.log": "1a1b23ec086eaac0bfbf4e4c183310dab4c3056f1fb7c6e825c2ce710718168a",
+    "task1-red.log": "84fac23774d15f3286d2a0bdf145cc75921b5482a42e0a762797cc49f3ec3ae2",
+    "task1-green.log": "24e63fa460470525198fb5dff45f12ec2eea49a86dac65b83bdc9d55aa63b6d1",
+    "task2.log": "80dd0f6095dcd7f5349e7d6f5a1987c1837cbda92e1c39d900cc3a3059944ccd",
+    "task3-red2.log": "ce837686cda9f2b5b1b6e124b0ba1735f916d04ce47cc1520d05d4af7bb23909",
+    "task3-green2.log": "92357ce93c2b4c053548d270108014203e9c25b339ac33e320b7f07b2ada9875",
+    "review-red.log": "b2a6eca0a30813cb5831072d1e71adf060801259c9c4d7a61efcb2e9cfd57a59",
+    "review-green.log": "9d5dcb82bb35e4a9db2250e06127979746c86868100037bf6d0cd425f811cc23",
+    "edge-red.log": "efd8082c3b36d4610d299e538735737856f019d7f9e4cd2c082997cc24ce234b",
+    "edge-green.log": "a1df7ac1a2b083d4b293dd55532b8592126e6663b331623c87be1aa09c72edbd",
+    "full-final.log": "17ea3ac2356d2c77d06db808141d13379acd99f60f2df0a56c22d32a556bd459",
+    "syntax-final.log": "c2099e3b6003bb8d0548cf8028f040edcc80e2342d48061e66f46a2dd4a0e46b",
+    "verify-final.log": "0f7075689242ddb7ae044e0dd1b93251ba72f8ab50ab6390a203430ad47cd26d"
+  }
+}

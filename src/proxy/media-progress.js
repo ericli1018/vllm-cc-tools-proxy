@@ -1,15 +1,6 @@
-import crypto from 'node:crypto';
-import path from 'node:path';
-import { parsePdfPageScope } from './pdf-page-scope.js';
 import { languageProfile, mediaText, mediaTimelineLabels, statusText } from '../i18n/response-language.js';
 import { enterRequestStructure } from '../lib/structure-guard.js';
-
-function safeBasename(value, fallback = '') {
-  if (typeof value !== 'string' || !value.trim()) return fallback;
-  const normalized = value.replaceAll('\\', '/').replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g, '').trim();
-  const base = path.posix.basename(normalized).slice(0, 160);
-  return base && base !== '.' && base !== '/' ? base : fallback;
-}
+import { collectToolMediaContexts, safeMediaBasename } from './media-provenance.js';
 
 function isMediaBlock(block) {
   if (!block || typeof block !== 'object') return false;
@@ -22,44 +13,8 @@ function pathKey(value) {
   return JSON.stringify(value || []);
 }
 
-function readToolContextMap(messages) {
-  const result = new Map();
-  const ancestors = new WeakSet();
-  const walk = (value, depth = 0) => {
-    if (!value || typeof value !== 'object') return;
-    const leave = enterRequestStructure(value, ancestors, depth);
-    try {
-      if (Array.isArray(value)) {
-        for (const item of value) walk(item, depth + 1);
-        return;
-      }
-      if (value.type === 'tool_use' && typeof value.id === 'string') {
-        const toolName = String(value.name || '');
-        const isRead = toolName.toLowerCase() === 'read';
-        const rawPath = isRead ? (value.input?.file_path || value.input?.path || value.input?.filename || '') : '';
-        const filename = safeBasename(rawPath);
-        let pageScope = null;
-        let pageScopeError = null;
-        if (isRead) {
-          try { pageScope = parsePdfPageScope(value.input?.pages); }
-          catch (error) { pageScopeError = { code: error?.code || 'invalid_pdf_page_scope', message: String(error?.message || 'Invalid PDF page scope.') }; }
-        }
-        result.set(value.id, {
-          toolName, isRead, filename, pageScope, pageScopeError,
-          readSourceRef: rawPath ? crypto.createHash('sha256').update(String(rawPath)).digest('hex') : '',
-        });
-      }
-      if (Array.isArray(value.content)) walk(value.content, depth + 1);
-    } finally {
-      leave();
-    }
-  };
-  walk(messages);
-  return result;
-}
-
 function collectDescriptors(messages, locale = 'zh-TW', { excludePaths = new Set() } = {}) {
-  const toolContexts = readToolContextMap(messages);
+  const toolContexts = collectToolMediaContexts(messages);
   const descriptors = [];
   let documentFallback = 0;
   let imageFallback = 0;
@@ -75,7 +30,7 @@ function collectDescriptors(messages, locale = 'zh-TW', { excludePaths = new Set
 
     if (isMediaBlock(block) && !excludePaths.has(pathKey(currentPath))) {
       const kind = block.type === 'document' ? 'document' : 'image';
-      const named = safeBasename(block.source?.filename || block.title || block.name || filename);
+      const named = safeMediaBasename(block.source?.filename || block.title || block.name || filename);
       let resolved = named;
       if (!resolved) {
         resolved = kind === 'document'

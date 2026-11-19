@@ -1,52 +1,5 @@
-import crypto from 'node:crypto';
-import path from 'node:path';
 import { enterRequestStructure } from '../lib/structure-guard.js';
-
-function safeBasename(value) {
-  if (typeof value !== 'string' || !value.trim()) return '';
-  const normalized = value.replaceAll('\\', '/').replace(/[\u0000-\u001f\u007f]/g, '').trim();
-  const base = path.posix.basename(normalized).slice(0, 160);
-  return base && base !== '.' && base !== '/' ? base : '';
-}
-
-function hashReference(value) {
-  return typeof value === 'string' && value
-    ? crypto.createHash('sha256').update(value).digest('hex')
-    : '';
-}
-
-function collectToolContexts(messages) {
-  const contexts = new Map();
-  const ancestors = new WeakSet();
-  const walk = (value, depth = 0) => {
-    if (!value || typeof value !== 'object') return;
-    const leave = enterRequestStructure(value, ancestors, depth);
-    try {
-      if (Array.isArray(value)) {
-        for (const item of value) walk(item, depth + 1);
-        return;
-      }
-      if (value.type === 'tool_use' && typeof value.id === 'string') {
-        const toolName = String(value.name || '');
-        const isRead = toolName.toLowerCase() === 'read';
-        const sourcePath = isRead
-          ? String(value.input?.file_path || value.input?.path || value.input?.filename || '')
-          : '';
-        contexts.set(value.id, {
-          toolName,
-          isRead,
-          filename: safeBasename(sourcePath),
-          readSourceRef: hashReference(sourcePath),
-        });
-      }
-      if (Array.isArray(value.content)) walk(value.content, depth + 1);
-    } finally {
-      leave();
-    }
-  };
-  walk(messages);
-  return contexts;
-}
+import { collectToolMediaContexts, mediaSourceReference, safeMediaBasename } from './media-provenance.js';
 
 function imageBlock(value) {
   return value?.type === 'image'
@@ -67,18 +20,8 @@ function dimensionMetadata(block) {
   return Object.fromEntries(Object.entries(output).sort(([a], [b]) => a.localeCompare(b)));
 }
 
-function sourceReference(source) {
-  for (const key of ['source_path', 'sourcePath', 'file_path', 'filePath', 'path', 'filename']) {
-    const value = source?.[key];
-    if (typeof value === 'string' && value) {
-      return { basename: safeBasename(value), ref: hashReference(value) };
-    }
-  }
-  return { basename: '', ref: '' };
-}
-
 export function observeImagePayloads(messages) {
-  const toolContexts = collectToolContexts(messages);
+  const toolContexts = collectToolMediaContexts(messages);
   const observed = [];
 
   const ancestors = new WeakSet();
@@ -94,13 +37,13 @@ export function observeImagePayloads(messages) {
       const origin = parentType === 'tool_result'
         ? (nextToolContext?.isRead ? 'read' : 'tool_result')
         : 'direct';
-      const externalReference = sourceReference(block.source);
+      const externalReference = mediaSourceReference(block.source);
       observed.push({
         path: [...currentPath],
         origin,
         parentType,
         toolName: nextToolContext?.toolName || '',
-        filename: nextToolContext?.filename || safeBasename(block.source?.filename || block.title || block.name || ''),
+        filename: nextToolContext?.filename || safeMediaBasename(block.source?.filename || block.title || block.name || ''),
         readSourceRef: nextToolContext?.readSourceRef || '',
         sourceType: String(block.source?.type || ''),
         mediaType: String(block.source?.media_type || ''),

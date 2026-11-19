@@ -515,3 +515,15 @@ test('V0.29.50 completion probe is enabled by default in production config', () 
   const cfg = loadConfig({ VLLM_BASE_URL: 'http://base:8000' });
   assert.equal(cfg.completionProbeEnabled, true);
 });
+
+test('V0.29.81 stateless media history normalization defaults off with a latest-four window', () => {
+  const defaults = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000' });
+  assert.equal(defaults.mediaHistoryNormalizationEnabled, false);
+  assert.equal(defaults.mediaHistoryMaxPathImages, 4);
+  const enabled = loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_HISTORY_NORMALIZATION_ENABLED: 'true', MEDIA_HISTORY_MAX_PATH_IMAGES: '0' });
+  assert.equal(enabled.mediaHistoryNormalizationEnabled, true);
+  assert.equal(enabled.mediaHistoryMaxPathImages, 0);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_HISTORY_NORMALIZATION_ENABLED: 'yes' }), /MEDIA_HISTORY_NORMALIZATION_ENABLED/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_HISTORY_MAX_PATH_IMAGES: '-1' }), /MEDIA_HISTORY_MAX_PATH_IMAGES/);
+  assert.throws(() => loadConfig({ VLLM_BASE_URL: 'http://vllm:8000', MEDIA_HISTORY_MAX_PATH_IMAGES: '1.5' }), /MEDIA_HISTORY_MAX_PATH_IMAGES/);
+});

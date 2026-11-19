@@ -1,0 +1,55 @@
+{
+  "release": "0.29.80",
+  "baseline": "vllm-cc-tools-proxy-v0.29.79.zip",
+  "baseline_sha256": "c7e7382794d107fcdab7a22ce4653e154f3a90f3989494c6b5fe2000865ea129",
+  "feature": "Routed /v1/messages responses restore the matched client model alias while upstream requests keep the physical backend model.",
+  "tdd": {
+    "red_test_file": "test/v02980-response-model-alias.test.js",
+    "red_exit_code": 1,
+    "red_expected_failures": [
+      "OpenAI non-stream returned DeepSeek-V4.1-Flash-1017",
+      "Anthropic non-stream returned Qwen3.8-27B",
+      "Managed non-stream returned physical backend model",
+      "Concurrent aliases returned physical backend model"
+    ],
+    "green_targeted": {
+      "tests": 9,
+      "passed": 9,
+      "failed": 0
+    }
+  },
+  "full_regression": {
+    "command": "npm test -- --test-concurrency=4",
+    "tests": 1143,
+    "passed": 1143,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "exit_code": 0
+  },
+  "syntax": {
+    "command": "npm run check",
+    "javascript_files": 176,
+    "exit_code": 0
+  },
+  "historical_verification": {
+    "command": "sh scripts/verify.sh",
+    "exit_code": 0,
+    "note": "The first foreground invocation exceeded the tool call time budget and was interrupted; a fresh background invocation completed with exit 0."
+  },
+  "behavior": {
+    "matched_openai_route_nonstream": "client alias returned",
+    "matched_anthropic_route_nonstream": "client alias returned",
+    "matched_route_streaming": "message_start.model remains client alias",
+    "managed_rounds": "client alias returned",
+    "parallel_alias_isolation": "verified",
+    "base_fallback": "legacy physical response model unchanged",
+    "content_tool_argument_replacement": "none; only top-level model is rewritten",
+    "new_env_required": false
+  },
+  "limitations": {
+    "live_vllm_tensorfold_claude_code_tested": false,
+    "remote_repository_modified": false,
+    "production_deployed": false
+  }
+}

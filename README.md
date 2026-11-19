@@ -1,5 +1,32 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.81 Stateless Media History Normalization for vLLM
+
+This release adds an **opt-in, request-scoped** media-history normalizer to reduce long Claude Code image history before `/v1/messages` reaches vLLM. It creates no image store, metadata registry, cache directory or volume. Every request is rescanned deterministically.
+
+```yaml
+environment:
+  MEDIA_HISTORY_NORMALIZATION_ENABLED: "true"
+  MEDIA_HISTORY_MAX_PATH_IMAGES: "4"
+```
+
+- Scans direct user images and images nested in `tool_result.content`. Only images with trusted structured provenance from Claude Code `Read` or recognized Screenshot tools are releasable. Arbitrary result text such as `Saved to:` and basename-only screenshot filenames are not trusted.
+- Keeps the latest N PATH-backed image **occurrences** as physical image blocks. Older PATH-backed image blocks are replaced in place with `[Image released: media_id=<stable-id>; path=<original-path>]`. Tool-result IDs, text, message order and error flags are preserved.
+- PATH-less user uploads, unknown tools, ambiguous duplicate tool IDs, invalid PDF page provenance and non-base64 image sources are never auto-released. `MEDIA_HISTORY_MAX_PATH_IMAGES=0` releases all safely re-readable PATH-backed images while retaining pathless images.
+- `media_id` is a deterministic internal SHA-256-derived identifier over normalized path, PDF page scope, media type and image bytes. It is not persisted and is not forwarded as a vLLM multimodal UUID. Same input yields byte-identical markers; replacing file contents changes the ID.
+- Normalization occurs before diagnostic traces, Compact classification, media inventory, temp-file preparation, Vision routing, Count Tokens and inference. `/v1/messages` and `/v1/messages/count_tokens` therefore use the same normalized history, and released bytes cannot reappear during Managed recovery or completion probes.
+- Native or dedicated processing for the remaining images is unchanged. Existing `MEDIA_CACHE_*`, PDF processing and request-scoped temp handling are separate pre-existing subsystems; this feature adds no persistence and released images never enter them.
+- Prefix caching still has a one-time divergence whenever a physical image first becomes a marker. Once the marker stabilizes, later turns can reuse that text prefix. A rolling latest-four window reduces unbounded multimodal context but cannot guarantee 100% cache hits.
+- Default remains `false` because this rewrites conversation history sent to the model. Enable it only after confirming Claude Code can re-run `Read(path)` for your image-producing tools.
+
+Tool Search cache stability is a separate recorded follow-up: the current local Tool Search bridge can still change the early `tools[]` schema after materialization, which may invalidate a long prefix. v0.29.81 does not modify that workflow.
+
+See [the exact policy, security boundaries and A/B metrics](docs/MEDIA_HISTORY_NORMALIZATION_v0.29.81.md) and [the release verification report](change_log/V0.29.81-無狀態媒體歷史正規化_實作與驗證.md). Real vLLM / Claude Code image-history validation remains required after deployment.
+
+## v0.29.80 — Routed Response Model Alias Round-Trip
+
+For a matched Router alias, `/v1/messages` now reports the **same model name the client requested** even when the physical backend is a different model. Example: client `claude-opus-5-5` → backend `DeepSeek-V4.1-Flash-1017` → client response `model: claude-opus-5-5`. This applies to OpenAI-compatible and Anthropic routes, streaming and non-streaming, and managed model rounds. Only the protocol `model` field is rewritten; assistant text, thinking, tool arguments/results and backend routing are untouched. Unknown-model Base fallback retains the previous physical response model. No new ENV is required. See `docs/ROUTED_RESPONSE_MODEL_ALIAS_v0.29.80.md`.
+
 ## v0.29.79 — Tool Reference Compatibility
 
 Before routing `/v1/messages` to a local model, validate ToolSearch `tool_reference` against the current request's exact tool definitions. Convert references to readable ToolSearch results and make the matching deferred tools callable; never synthesize tools, silently drop references, or change the Claude Code client result. Invalid/absent/duplicate definitions fail with HTTP 400. `TOOL_REFERENCE_MODE=compat` (default) or `passthrough` (only for a backend with native Anthropic Tool Search support); per-route `tool_reference_mode` overrides the default. See `docs/TOOL_REFERENCE_v0.29.79.md`.

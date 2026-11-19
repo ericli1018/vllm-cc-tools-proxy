@@ -34,6 +34,7 @@ import { scopeMediaCacheKey, scopePdfDocumentCacheKey } from '../cache/cache-key
 import { MediaAnalysisRegistry } from '../media/analysis-registry.js';
 import { createMediaProgressTracker } from '../proxy/media-progress.js';
 import { observeImagePayloads } from '../proxy/image-payload-observer.js';
+import { normalizeMediaHistory } from '../proxy/media-history-normalizer.js';
 import { requestBaseUpstream } from './base-upstream.js';
 import { toOpenAIRequest, adaptOpenAIResponse } from './openai-upstream-adapter.js';
 import { countOpenAIInputTokens, tokenizeOnRoute } from './token-count.js';
@@ -116,6 +117,16 @@ function bufferedUpstreamResponse(response, text) {
 
 // Each HTTP request pins one backend for its complete asynchronous managed workflow.
 const baseRouteContext = new AsyncLocalStorage();
+
+function restoreRoutedClientModel(response) {
+  const alias = String(baseRouteContext.getStore()?.clientModelAlias || '').trim();
+  if (!alias || !response || typeof response !== 'object' || Array.isArray(response)) return response;
+  // Only rewrite the protocol model field. Never replace model-like strings in
+  // visible text, thinking, tool inputs, tool results, IDs, or diagnostics.
+  if (response.type !== 'message' && !Object.hasOwn(response, 'model')) return response;
+  if (response.model === alias) return response;
+  return { ...response, model: alias };
+}
 
 async function fetchUpstream(request, config, incomingHeaders, signal, path = '/v1/messages', {
   onResponseChunk = null,
@@ -233,7 +244,7 @@ async function callUpstreamJson(request, config, incomingHeaders, signal, path =
       code: payload?.error?.type || 'vllm_request_failed', retryable: response.status >= 500, details: payload?.error,
     });
   }
-  return payload;
+  return path === '/v1/messages' ? restoreRoutedClientModel(payload) : payload;
 }
 
 async function callUpstreamManagedStream(request, config, incomingHeaders, signal, path = '/v1/messages', { onResponseChunk = null, onStreamPhase = null, onSemanticDelta = null, onCheckpoint = null, onBusyEvent = null, onResponseMode = null, onStreamSummary = null } = {}) {
@@ -262,12 +273,13 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
   }
   if (contentType.includes('text/event-stream')) {
     try {
-      return await collectAnthropicMessageFromSse(response, {
+      const collected = await collectAnthropicMessageFromSse(response, {
         ...(typeof onStreamPhase === 'function' ? { onStreamPhase } : {}),
         ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
         ...(typeof onCheckpoint === 'function' ? { onCheckpoint } : {}),
         ...(typeof onStreamSummary === 'function' ? { onComplete: onStreamSummary } : {}),
       });
+      return restoreRoutedClientModel(collected);
     } catch (error) {
       if (error?.code === 'vllm_invalid_stream' && error?.details && typeof error.details === 'object') {
         error.details = {
@@ -282,7 +294,7 @@ async function callUpstreamManagedStream(request, config, incomingHeaders, signa
   // Compatibility fallback for upstreams that ignore stream=true and still return one JSON Message.
   // Raw body chunks are still counted by requestBaseUpstream, but live token activity requires SSE.
   const text = await response.text();
-  try { return text ? JSON.parse(text) : {}; } catch {
+  try { return restoreRoutedClientModel(text ? JSON.parse(text) : {}); } catch {
     throw new HttpError(502, 'vLLM returned neither Anthropic SSE nor valid JSON for a managed model round.', {
       code: 'vllm_invalid_stream', retryable: true, details: { content_type: contentType, body_prefix: text.slice(0, 1000) },
     });
@@ -422,7 +434,7 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
   }
   const contentType = (upstream.headers.get('content-type') || '').toLowerCase();
   if (contentType.includes('text/event-stream')) {
-    return collectAnthropicMessageFromSse(upstream, {
+    const collected = await collectAnthropicMessageFromSse(upstream, {
       onUsage,
       ...(typeof onSemanticDelta === 'function' ? { onSemanticDelta } : {}),
       onFirstEvent: async ({ event, type, block_type }) => onLifecycle('base_upstream_first_event', {
@@ -441,6 +453,7 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
         first_model_event_observed: Boolean(firstModelEventObserved),
       }),
     });
+    return restoreRoutedClientModel(collected);
   }
 
   const text = await upstream.text();
@@ -456,7 +469,7 @@ async function collectManagedBase(request, config, incomingHeaders, signal, {
     first_model_event_observed: false,
     compatibility_json: true,
   });
-  return payload;
+  return restoreRoutedClientModel(payload);
 }
 
 async function streamTransformedBase(request, res, config, incomingHeaders, signal, path = '/v1/messages') {
@@ -1373,8 +1386,28 @@ export function createProxyServer(config, dependencies = {}) {
       // AsyncLocalStorage isolates overlapping client HTTP requests without mutating global config.
       const pinnedBaseRoute = resolveModelRoute(original.model, config);
       const mediaConfig = mediaConfigForRoute(pinnedBaseRoute, config, { countOnly: messagesPath === '/v1/messages/count_tokens' });
-      baseRouteContext.enterWith({ route: pinnedBaseRoute, requestId });
+      baseRouteContext.enterWith({ route: pinnedBaseRoute, requestId, clientModelAlias: pinnedBaseRoute.alias || '' });
       clientSessionId = claudeCodeSessionId(req.headers, original);
+      const mediaHistory = normalizeMediaHistory(original.messages, {
+        enabled: config.mediaHistoryNormalizationEnabled,
+        maxPathImages: config.mediaHistoryMaxPathImages,
+        maxDecodedBytes: config.limits.maxDecodedBytes,
+      });
+      const mediaHistoryRewritten = mediaHistory.changed;
+      if (mediaHistoryRewritten) {
+        original = { ...original, messages: mediaHistory.messages };
+        log(config, 'info', 'media_history_normalized', {
+          requestId,
+          total_images: mediaHistory.summary.totalImages,
+          path_backed_images: mediaHistory.summary.pathBackedImages,
+          pathless_images: mediaHistory.summary.pathlessImages,
+          retained_path_images: mediaHistory.summary.retainedPathImages,
+          released_path_images: mediaHistory.summary.releasedPathImages,
+          released_decoded_bytes: mediaHistory.summary.releasedDecodedBytes,
+          max_path_images: config.mediaHistoryMaxPathImages,
+          persistence: 'none',
+        });
+      }
       if (messagesPath === '/v1/messages') {
         const serverCapabilityInventory = inspectAnthropicServerCapabilities(original);
         if (serverCapabilityInventory.tool_search_count > 0 || serverCapabilityInventory.unsupported_count > 0) {
@@ -1538,8 +1571,8 @@ export function createProxyServer(config, dependencies = {}) {
             ]),
         ),
       };
-      let requestRewritten = false;
-      let historyRewritten = false;
+      let requestRewritten = mediaHistoryRewritten;
+      let historyRewritten = mediaHistoryRewritten;
       let cleanedMessages = original.messages;
       if (hasProgressHistory(cleanedMessages)) {
         cleanedMessages = stripProgressHistory(cleanedMessages);
@@ -1618,7 +1651,7 @@ export function createProxyServer(config, dependencies = {}) {
             dedicated_compact_overridden: Boolean(pinnedBaseRoute.alias && config.contextCompact?.enabled),
           });
           runtimeTelemetry.updateRequest(requestId, { phase: 'compact', detail: compactRoute.model || original.model || '' });
-          await baseRouteContext.run({ route: compactRoute, requestId }, async () => {
+          await baseRouteContext.run({ route: compactRoute, requestId, clientModelAlias: pinnedBaseRoute.alias || '' }, async () => {
             if (compactRequest.stream !== true) {
               const payload = await callUpstreamJson(compactRequest, config, req.headers, abortController.signal);
               sendJson(res, 200, payload);

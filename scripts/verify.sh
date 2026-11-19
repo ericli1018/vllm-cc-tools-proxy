@@ -112,8 +112,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.79'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.79'
+test "$(node -p "require('./package.json').version")" = '0.29.81'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.81'
 
 
 test -f src/i18n/response-language.js
@@ -542,7 +542,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.79'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.81'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1440,3 +1440,19 @@ node --test --test-name-pattern='V0.29.78' test/v02969-route-http.test.js test/v
 # v0.29.79 Tool Reference validation and compatibility suite
 test -f src/proxy/tool-reference-compat.js
 node --test test/v02979-tool-reference.test.js test/v02979-router-mode.test.js test/v02979-tool-reference-http.test.js
+
+
+# v0.29.80 routed /v1/messages responses must expose the client alias, never the physical backend model.
+test -f docs/ROUTED_RESPONSE_MODEL_ALIAS_v0.29.80.md
+grep -Fq 'restoreRoutedClientModel' src/services/proxy-server.js
+node --test test/v02980-response-model-alias.test.js
+
+# V0.29.81: stateless vLLM media-history normalization.
+test -f src/proxy/media-provenance.js
+test -f src/proxy/media-history-normalizer.js
+test -f docs/MEDIA_HISTORY_NORMALIZATION_v0.29.81.md
+test -f change_log/V0.29.81-無狀態媒體歷史正規化_實作與驗證.md
+grep -q '^MEDIA_HISTORY_NORMALIZATION_ENABLED=false$' .env.example
+grep -q '^MEDIA_HISTORY_MAX_PATH_IMAGES=4$' .env.example
+! grep -Eq 'node:fs|writeFile|mkdir|MEDIA_HISTORY_(METADATA|CACHE)_(DIR|PATH)' src/proxy/media-history-normalizer.js
+node --test test/v02981-media-history-normalizer.test.js test/v02981-media-history-http.test.js

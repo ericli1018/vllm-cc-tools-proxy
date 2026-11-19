@@ -25,6 +25,15 @@ function intValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGE
   return parsed;
 }
 
+function strictIntValue(value, fallback, name, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
+  if (value === undefined || value === '') return fallback;
+  const text = String(value).trim();
+  if (!/^-?\d+$/.test(text)) throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) throw new Error(`${name} must be an integer between ${min} and ${max}`);
+  return parsed;
+}
+
 function optionalTimeoutValue(value, name, { min = 60000, max = 3600000 } = {}) {
   if (value === undefined || value === '' || String(value).trim() === '0') return 0;
   const parsed = Number.parseInt(value, 10);
@@ -250,6 +259,8 @@ export function loadConfig(env = process.env) {
     proxyAuthEnabled,
     proxyApiKey,
     toolReferenceMode: enumValue(env.TOOL_REFERENCE_MODE, 'compat', 'TOOL_REFERENCE_MODE', ['compat', 'passthrough']),
+    mediaHistoryNormalizationEnabled: booleanValue(env.MEDIA_HISTORY_NORMALIZATION_ENABLED, false, 'MEDIA_HISTORY_NORMALIZATION_ENABLED'),
+    mediaHistoryMaxPathImages: strictIntValue(env.MEDIA_HISTORY_MAX_PATH_IMAGES, 4, 'MEDIA_HISTORY_MAX_PATH_IMAGES', { min: 0, max: 256 }),
     resourceProfile: profileName,
     responseLanguage: resolveResponseLanguage(env.MODEL_RESPONSE_LANGUAGE),
     modelResponseTimezone: progressTimeZone.timeZone,

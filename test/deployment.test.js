@@ -994,3 +994,12 @@ test('V0.29.75 deployment: auth ENV is passed without a public default secret', 
   assert.match(readme, /PROXY_AUTH_ENABLED/);
   assert.match(readme, /CC_TOOL_PROXY_API_KEY/);
 });
+
+test('V0.29.81 deployment exposes stateless media history normalization without a metadata directory', () => {
+  assert.match(envExample, /^MEDIA_HISTORY_NORMALIZATION_ENABLED=false$/m);
+  assert.match(envExample, /^MEDIA_HISTORY_MAX_PATH_IMAGES=4$/m);
+  assert.match(compose, /MEDIA_HISTORY_NORMALIZATION_ENABLED:\s*\$\{MEDIA_HISTORY_NORMALIZATION_ENABLED:-false\}/);
+  assert.match(compose, /MEDIA_HISTORY_MAX_PATH_IMAGES:\s*\$\{MEDIA_HISTORY_MAX_PATH_IMAGES:-4\}/);
+  assert.doesNotMatch(envExample, /^MEDIA_HISTORY_(?:METADATA|CACHE)_(?:DIR|PATH)=/m);
+  assert.doesNotMatch(compose, /MEDIA_HISTORY_(?:METADATA|CACHE)_(?:DIR|PATH):/);
+});

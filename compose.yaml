@@ -74,6 +74,8 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
+      MEDIA_HISTORY_NORMALIZATION_ENABLED: ${MEDIA_HISTORY_NORMALIZATION_ENABLED:-false}
+      MEDIA_HISTORY_MAX_PATH_IMAGES: ${MEDIA_HISTORY_MAX_PATH_IMAGES:-4}
       TOOL_REFERENCE_MODE: "${TOOL_REFERENCE_MODE:-compat}"
       PROXY_AUTH_ENABLED: "${PROXY_AUTH_ENABLED:-}"
       PROXY_API_KEY: "${PROXY_API_KEY:-}"
