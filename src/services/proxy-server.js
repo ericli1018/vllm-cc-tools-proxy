@@ -41,7 +41,7 @@ import { countOpenAIInputTokens, tokenizeOnRoute } from './token-count.js';
 import { isExplicitVllmBusyResponse, waitForRetry } from './base-busy-retry.js';
 import { VERSION } from '../version.js';
 import { RuntimeTelemetry, formatStartupBanner } from '../proxy/runtime-telemetry.js';
-import { injectRuntimeClockReminder } from '../proxy/runtime-clock.js';
+import { RuntimeClockRegistry, injectRuntimeClockReminder } from '../proxy/runtime-clock.js';
 import {
   DirectedVisualStore,
   buildDirectedPlanningRequest,
@@ -141,14 +141,9 @@ async function fetchUpstream(request, config, incomingHeaders, signal, path = '/
   if (config.modelRouting?.enabled && selectedRoute.apiKey) anthropicHeaders['x-api-key'] = selectedRoute.apiKey;
   const retryBusy = path === '/v1/messages';
   const selectedBaseModel = selectBaseModel(request?.model, selectedRoute.model);
-  const clockEligiblePath = path === '/v1/messages' || path === '/v1/messages/count_tokens';
-  const runtimeRequest = clockEligiblePath
-    ? injectRuntimeClockReminder(request, {
-        enabled: Boolean(config.runtimeClockEnabled),
-        timeZone: config.runtimeClockTimezone || 'Asia/Taipei',
-      })
-    : request;
-  const upstreamRequest = rewriteBaseRequest(runtimeRequest, selectedRoute.model);
+  // Runtime context is normalized once at client-request ingress. Never refresh it
+  // here: this function can run multiple times during one managed interaction.
+  const upstreamRequest = rewriteBaseRequest(request, selectedRoute.model);
   log(config, 'info', 'base_model_selected', {
     client_model: String(request?.model || ''),
     upstream_model: selectedBaseModel.model,
@@ -671,6 +666,7 @@ export function createProxyServer(config, dependencies = {}) {
   });
   const admission = dependencies.admission || new AdmissionController(defaultConcurrency(config));
   const runtimeTelemetry = dependencies.runtimeTelemetry || new RuntimeTelemetry();
+  const runtimeClockRegistry = dependencies.runtimeClockRegistry || new RuntimeClockRegistry();
   // Session-local, process-memory only; bounded to avoid unbounded tool-result retention.
   const sessionToolLedgers = new Map();
   const sessionLedgerTtlMs = 30 * 60 * 1000;
@@ -1408,6 +1404,18 @@ export function createProxyServer(config, dependencies = {}) {
           persistence: 'none',
         });
       }
+      const toolResultContinuation = isToolResultContinuation(original.messages);
+      const runtimeClockEligible = messagesPath === '/v1/messages' || messagesPath === '/v1/messages/count_tokens';
+      const runtimeClockRewritten = runtimeClockEligible && Boolean(config.runtimeClockEnabled);
+      if (runtimeClockEligible) {
+        original = injectRuntimeClockReminder(original, {
+          enabled: Boolean(config.runtimeClockEnabled),
+          timeZone: config.runtimeClockTimezone || 'Asia/Taipei',
+          sessionId: clientSessionId,
+          continuation: toolResultContinuation,
+          registry: runtimeClockRegistry,
+        });
+      }
       if (messagesPath === '/v1/messages') {
         const serverCapabilityInventory = inspectAnthropicServerCapabilities(original);
         if (serverCapabilityInventory.tool_search_count > 0 || serverCapabilityInventory.unsupported_count > 0) {
@@ -1467,7 +1475,6 @@ export function createProxyServer(config, dependencies = {}) {
         { headers: req.headers, body: original },
       );
       // clientSessionId resolved before Agent-context binding so child requests can reuse Parent handoff metadata.
-      const toolResultContinuation = messagesPath === '/v1/messages' && isToolResultContinuation(original.messages);
       if (messagesPath === '/v1/messages') {
         releaseRuntimeRequest = runtimeTelemetry.beginRequest({ requestId, sessionId: clientSessionId, agentContext: claudeAgentRequestContext?.context || 'main' });
       }
@@ -1571,8 +1578,8 @@ export function createProxyServer(config, dependencies = {}) {
             ]),
         ),
       };
-      let requestRewritten = mediaHistoryRewritten;
-      let historyRewritten = mediaHistoryRewritten;
+      let requestRewritten = mediaHistoryRewritten || runtimeClockRewritten;
+      let historyRewritten = mediaHistoryRewritten || runtimeClockRewritten;
       let cleanedMessages = original.messages;
       if (hasProgressHistory(cleanedMessages)) {
         cleanedMessages = stripProgressHistory(cleanedMessages);

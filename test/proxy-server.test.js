@@ -30,7 +30,7 @@ test('proxy health endpoint reports diagnostic release, admission and cache stat
   const response = await fetch(`${url}/health`);
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
-    status: 'ok', service: 'proxy', version: '0.29.81', revision: 'test',
+    status: 'ok', service: 'proxy', version: '0.29.82', revision: 'test',
     vision: { active: 0, limit: 1 },
     web_fetch_processor: { active: 0, limit: 3, queued: 0 },
     cache: {
@@ -3190,7 +3190,7 @@ test('V0.2.28.12 shows one runtime startup banner per Claude Code session withou
   const first = await send();
   const second = await send();
   assert.match(first, /CC TOOL PROXY/);
-  assert.match(first, /VERSION\s+0\.29\.81/);
+  assert.match(first, /VERSION\s+0\.29\.82/);
   assert.match(first, /SESSIONS\s+1/);
   assert.match(first, /ACTIVE\s+1/);
   assert.match(first, /WAIT\s+0/);
@@ -3292,10 +3292,10 @@ test('V0.2.28.17 read-only session status endpoint returns semantic telemetry wi
   assert.equal(response.headers.get('cache-control'), 'no-store');
   const payload = await response.json();
   assert.equal(payload.service, 'cc-tool-proxy');
-  assert.equal(payload.version, '0.29.81');
+  assert.equal(payload.version, '0.29.82');
   assert.equal(payload.session_id, 'status-s1');
   assert.equal(payload.phase, 'thinking');
-  assert.match(payload.display, /CCTP 0\.29\.81/);
+  assert.match(payload.display, /CCTP 0\.29\.82/);
   assert.match(payload.display, /思考中/);
   assert.equal(upstreamCalls, 0);
   assert.doesNotMatch(JSON.stringify(payload), /prompt|message|content|tool_input/i);
@@ -4327,7 +4327,7 @@ test('V0.29.55 managed SSE recovers once from malformed Write JSON below max_tok
     && entry.reason === 'malformed_json'));
 });
 
-test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into the Base-bound request', async (t) => {
+test('V0.29.82 injects one-line neutral runtime metadata only into the Base-bound request', async (t) => {
   let observed;
   const upstream = await startJsonServer(async (req, res) => {
     observed = JSON.parse((await read(req)).toString());
@@ -4365,10 +4365,9 @@ test('V0.29.43 injects a second-precision Asia/Taipei runtime clock only into th
   assert.deepEqual(observed.messages[0].content[0], { type: 'text', text: 'what time is it?' });
   const reminder = observed.messages[0].content.at(-1);
   assert.equal(reminder.type, 'text');
-  assert.match(reminder.text, /^<system-reminder>\n\[VCC_PROXY_RUNTIME_CLOCK_V1\]/);
-  assert.match(reminder.text, /Current local datetime: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \+08:00/);
-  assert.match(reminder.text, /Timezone: Asia\/Taipei/);
-  assert.match(reminder.text, /<\/system-reminder>$/);
+  assert.match(reminder.text, /^\[VCC_CONTEXT_META_V1 local_time=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+08:00 timezone=Asia\/Taipei\]$/);
+  assert.equal(reminder.text.includes('\n'), false);
+  assert.doesNotMatch(reminder.text, /system-reminder|authoritative|Current local datetime/);
 });
 
 test('V0.29.47 directed image performs forced tool planning, one Vision pass, then final Main', async (t) => {

@@ -1,0 +1,19 @@
+{
+  "release": "0.29.82",
+  "source_full_suite": {
+    "tests": 1172,
+    "passed": 1172,
+    "failed": 0,
+    "exit_code": 0
+  },
+  "syntax": {
+    "files": 182,
+    "exit_code": 0
+  },
+  "verify_sh": {
+    "exit_code": 0,
+    "v02982_targeted": 11,
+    "v02982_passed": 11
+  },
+  "live_vllm_claude_code_tested": false
+}

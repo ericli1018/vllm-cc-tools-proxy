@@ -1,5 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.82 Cache-Stable Runtime Context
+
+Runtime time metadata is now **interaction-scoped instead of request/round-scoped** so vLLM Prefix Cache can reuse completed conversation history. The Proxy emits one neutral line on each new visible Claude Code user turn:
+
+```text
+[VCC_CONTEXT_META_V1 local_time=2026-11-21T00:40:12+08:00 timezone=Asia/Taipei]
+```
+
+- The timestamp is created once for a new visible user interaction and stays byte-identical through `/v1/messages/count_tokens`, the inference request, client `tool_result` continuations, Managed ToolSearch rounds, recovery and completion work.
+- Claude Code does not echo Proxy-only metadata. A bounded **process-memory-only** registry keyed by Claude Code session and user-turn identity restores previously emitted metadata to the same historical user turns on later requests. No JSON/SQLite/cache file or new Docker volume is created.
+- When the user starts the next visible turn, prior timestamps are restored in place and exactly one new timestamp is appended to the new user turn. Completed historical turns are never refreshed.
+- If a tool-result continuation arrives after Proxy restart or without a stable Claude Code session ID, the Proxy does **not** invent a replacement historical time; losing the process-memory registry may cause one cache divergence after restart, but avoids falsifying the old turn time.
+- The previous `<system-reminder>` wording and `[VCC_PROXY_RUNTIME_CLOCK_V1]` wrapper are retired for new injections. Existing legacy blocks, if present in input history, are preserved rather than rewritten.
+- `PROXY_RUNTIME_TIME_ENABLED` and `PROXY_RUNTIME_TIMEZONE` are unchanged; default remains enabled with `Asia/Taipei`. `MODEL_RESPONSE_TIMEZONE` still affects only the visible progress clock and never enters the model prompt.
+
+This changes prompt stability only; model routing, media-history normalization, Tool Reference compatibility, Vision, Tool execution and response-model alias behavior are unchanged. See [design/behavior details](docs/RUNTIME_CONTEXT_CACHE_STABILITY_v0.29.82.md) and [verification report](change_log/V0.29.82-Runtime_Context_Prefix_Cache_實作與驗證.md).
+
 ## V0.29.81 Stateless Media History Normalization for vLLM
 
 This release adds an **opt-in, request-scoped** media-history normalizer to reduce long Claude Code image history before `/v1/messages` reaches vLLM. It creates no image store, metadata registry, cache directory or volume. Every request is rescanned deterministically.
@@ -489,29 +506,18 @@ VISION_ORCHESTRATION_MODE=legacy or unset       -> existing eager Proxy Vision p
 ```
 
 
-## V0.29.43 Base-Bound Runtime Clock
+## V0.29.43 Base-Bound Runtime Clock — Superseded by V0.29.82
 
-V0.29.43 gives the local Base model an authoritative current clock without changing Claude Code's transcript or the stable system-prefix cache. Immediately before a Base request is serialized, the Proxy clones the request and appends a small text block to the latest user-side message:
+V0.29.43 originally regenerated a Base-bound runtime clock for every real model request/round. That behavior is retained here only as historical release context and is **superseded by V0.29.82**. New requests now use one cache-stable metadata timestamp per visible user interaction and restore previous interaction timestamps at their original user turns.
 
-```text
-<system-reminder>
-[VCC_PROXY_RUNTIME_CLOCK_V1]
-Current local datetime: 2026-09-15 09:01:31 +08:00
-Timezone: Asia/Taipei
-...
-</system-reminder>
-```
-
-The timestamp is regenerated for every real Base model round, including later Managed / Recovery rounds after long tool execution. `/v1/messages/count_tokens` receives the same bounded reminder so usage preflight accounts for its token cost. Claude Code Compact stays on its existing transparent/external bypass and does not receive this reminder. The original request object is not mutated, so the reminder is not persisted into Claude Code transcript/history and cannot accumulate across rounds.
-
-Defaults:
+Configuration names remain:
 
 ```env
 PROXY_RUNTIME_TIME_ENABLED=true
 PROXY_RUNTIME_TIMEZONE=Asia/Taipei
 ```
 
-The runtime clock is appended at the end of the latest Base-bound user turn rather than the leading `system` field, preserving the reusable long-context prefix as much as possible.
+See `docs/RUNTIME_CONTEXT_CACHE_STABILITY_v0.29.82.md` for the current semantics.
 
 
 ## V0.29.42 Canonical Startup Card Ownership
