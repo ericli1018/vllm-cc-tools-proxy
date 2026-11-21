@@ -1,5 +1,22 @@
 # VLLM-CC-TOOLS-PROXY
 
+## V0.29.83 Optional First-Connection Version Banner
+
+The **one-time Claude Code session startup banner** (`CC TOOL PROXY / VERSION / UPTIME / SESSIONS / COMPACT / LANG / VISION`) can now be disabled without changing model responses or progress events. It is **enabled by default** for backward compatibility.
+
+```yaml
+environment:
+  PROXY_STARTUP_BANNER_ENABLED: "false"
+```
+
+- `true` (default): unchanged once-per-session startup banner, including canonical tool-bearing and delayed progress-fallback paths.
+- `false`: never sends the proxy-owned startup banner or reserves its session slot. Streaming model output, SSE keepalive `ping`, ordinary `Processing · ...` progress, managed tools, recovery, and all routing continue normally.
+- `/health`, `/healthz` and the read-only `/cc-tool-proxy/status/<session-id>` continue exposing version and telemetry. This switch **does not disable** the separately configured Claude Code native `statusLine` integration or terminal logs.
+- The banner is a client-facing SSE decoration and is not forwarded in the model prompt. Disabling it does not by itself change vLLM Prefix Cache keys or improve `cached_tokens`.
+- Values must be `true` or `false`. No new dependencies or runtime storage.
+
+See [configuration and verification](docs/STARTUP_BANNER_ENV_v0.29.83.md) and [release report](change_log/V0.29.83-首次版本宣告_ENV_實作與驗證.md).
+
 ## V0.29.82 Cache-Stable Runtime Context
 
 Runtime time metadata is now **interaction-scoped instead of request/round-scoped** so vLLM Prefix Cache can reuse completed conversation history. The Proxy emits one neutral line on each new visible Claude Code user turn:

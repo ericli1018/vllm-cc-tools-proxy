@@ -112,8 +112,8 @@ const source = fs.readFileSync('src/proxy/progress.js', 'utf8');
 const runtime = source.slice(source.indexOf('export class ProgressStream'));
 if (runtime.includes('VLLMCCP:v1:') || runtime.includes('INVISIBLE_SEPARATOR')) process.exit(1);
 NODE
-test "$(node -p "require('./package.json').version")" = '0.29.82'
-test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.82'
+test "$(node -p "require('./package.json').version")" = '0.29.83'
+test "$(node --input-type=module -e "import('./src/version.js').then((m) => process.stdout.write(m.VERSION))")" = '0.29.83'
 
 
 test -f src/i18n/response-language.js
@@ -542,7 +542,7 @@ grep -Fq 'final_language_repair_echo_detected' src/proxy/final-language-gate.js
 grep -Fq 'final_language_repair_retry' src/proxy/final-language-gate.js
 grep -Fq '<TRANSLATE_SOURCE>' src/services/final-language-repair.js
 grep -Fq 'completedModelOutputBytes' src/services/proxy-server.js
-test "$(node -p "require('./package-lock.json').version")" = '0.29.82'
+test "$(node -p "require('./package-lock.json').version")" = '0.29.83'
 
 # V0.2.28.17 semantic model output telemetry
  test -f change_log/V0.2.28.17-更新說明.md
@@ -1465,3 +1465,12 @@ grep -Fq '[VCC_CONTEXT_META_V1 local_time=' src/proxy/runtime-clock.js
 grep -Fq 'RuntimeClockRegistry' src/proxy/runtime-clock.js
 grep -Fq 'RuntimeClockRegistry' src/services/proxy-server.js
 node --test --test-name-pattern='V0.29.82' test/v02982-runtime-context.test.js test/v02982-runtime-context-http.test.js test/proxy-server.test.js
+
+
+# V0.29.83: a dedicated switch controls only the one-time Claude Code banner.
+test -f docs/STARTUP_BANNER_ENV_v0.29.83.md
+test -f change_log/V0.29.83-首次版本宣告_ENV_實作與驗證.md
+grep -q '^PROXY_STARTUP_BANNER_ENABLED=true$' .env.example
+grep -Fq 'PROXY_STARTUP_BANNER_ENABLED: ${PROXY_STARTUP_BANNER_ENABLED:-true}' compose.yaml
+grep -Fq "config.proxyStartupBannerEnabled === false" src/services/proxy-server.js
+node --test test/v02983-startup-banner-env.test.js

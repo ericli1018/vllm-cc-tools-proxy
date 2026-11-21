@@ -258,6 +258,7 @@ export function loadConfig(env = process.env) {
     host: env.HOST || '0.0.0.0',
     proxyAuthEnabled,
     proxyApiKey,
+    proxyStartupBannerEnabled: booleanValue(env.PROXY_STARTUP_BANNER_ENABLED, true, 'PROXY_STARTUP_BANNER_ENABLED'),
     toolReferenceMode: enumValue(env.TOOL_REFERENCE_MODE, 'compat', 'TOOL_REFERENCE_MODE', ['compat', 'passthrough']),
     mediaHistoryNormalizationEnabled: booleanValue(env.MEDIA_HISTORY_NORMALIZATION_ENABLED, false, 'MEDIA_HISTORY_NORMALIZATION_ENABLED'),
     mediaHistoryMaxPathImages: strictIntValue(env.MEDIA_HISTORY_MAX_PATH_IMAGES, 4, 'MEDIA_HISTORY_MAX_PATH_IMAGES', { min: 0, max: 256 }),

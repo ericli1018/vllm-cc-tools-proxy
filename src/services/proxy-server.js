@@ -1807,6 +1807,9 @@ export function createProxyServer(config, dependencies = {}) {
           return false;
         };
 
+        // Disable only the first-connection version/status banner; leave model
+        // responses, progress/heartbeat transport, and status endpoints intact.
+        if (config.proxyStartupBannerEnabled === false) return skip('disabled_by_config');
         if (!stream) return skip('no_progress_stream');
         if (messagesPath !== '/v1/messages') return skip('not_messages_endpoint');
         if (startupBannerRequest?.stream !== true) return skip('non_stream_request');
